@@ -1,6 +1,6 @@
 import { and, desc, eq, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { challenges, participants } from "@qtp/db";
+import { challengeNews, challenges, participants, users } from "@qtp/db";
 import {
   defaultScoringFor,
   zChallengeStatus,
@@ -8,13 +8,15 @@ import {
   zUpdateChallengeInput,
 } from "@qtp/shared";
 import {
+  getNewsFeed,
   listActiveChallenges,
   markChallengeActive,
   markChallengeInactive,
+  setNewsFeed,
   setPrice,
 } from "@qtp/bus";
 import { z } from "zod";
-import { serializeChallenge } from "../serialize.js";
+import { serializeChallenge, serializeNewsItem } from "../serialize.js";
 import { slugify, validate } from "../util.js";
 
 export async function challengeRoutes(app: FastifyInstance): Promise<void> {
@@ -57,6 +59,56 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(participants.challengeId, row.id));
     return serializeChallenge(row, countRows[0]?.count ?? 0);
   });
+
+  // Recent news feed for a challenge (REST bootstrap before WS connects).
+  app.get(
+    "/:id/news",
+    { preHandler: [app.optionalAuth] },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const query = validate(
+        z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) }),
+        req.query,
+        reply,
+      );
+      if (!query) return;
+
+      const challenge = await app.db.query.challenges.findFirst({
+        where: eq(challenges.id, id),
+      });
+      if (!challenge) return reply.code(404).send({ error: "not_found" });
+      if (
+        challenge.status === "draft" &&
+        req.user?.role !== "admin"
+      ) {
+        return reply.code(404).send({ error: "not_found" });
+      }
+
+      let items = await getNewsFeed(app.redis, id, query.limit);
+      if (items.length === 0) {
+        const rows = await app.db
+          .select({
+            id: challengeNews.id,
+            challengeId: challengeNews.challengeId,
+            message: challengeNews.message,
+            level: challengeNews.level,
+            createdAt: challengeNews.createdAt,
+            authorDisplayName: users.displayName,
+          })
+          .from(challengeNews)
+          .leftJoin(users, eq(challengeNews.createdBy, users.id))
+          .where(eq(challengeNews.challengeId, id))
+          .orderBy(desc(challengeNews.createdAt))
+          .limit(query.limit);
+        items = rows.map((r) => serializeNewsItem(r));
+        if (items.length > 0) {
+          await setNewsFeed(app.redis, id, items);
+        }
+      }
+
+      return { items };
+    },
+  );
 
   // Create (admin).
   app.post(

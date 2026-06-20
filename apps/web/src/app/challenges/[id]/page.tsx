@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, Wifi, WifiOff } from "lucide-react";
-import type { Challenge, LeaderboardEntry, Portfolio } from "@qtp/shared";
+import type { Challenge, LeaderboardEntry, NewsItem, Portfolio } from "@qtp/shared";
 import { get } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useRealtime } from "@/hooks/useRealtime";
@@ -19,6 +19,7 @@ import { TradeTicket } from "@/components/trade/TradeTicket";
 import { PortfolioPanel } from "@/components/trade/PortfolioPanel";
 import { OpenOrders } from "@/components/trade/OpenOrders";
 import { Leaderboard } from "@/components/trade/Leaderboard";
+import { NewsTicker } from "@/components/trade/NewsTicker";
 import { money, signed, dirClass } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -33,6 +34,7 @@ export default function TradePage() {
   const [limitPrice, setLimitPrice] = useState("");
   const [restPortfolio, setRestPortfolio] = useState<Portfolio | null>(null);
   const [restLeaderboard, setRestLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [restNews, setRestNews] = useState<NewsItem[]>([]);
   const [orderRefresh, setOrderRefresh] = useState(0);
 
   const rt = useRealtime(challengeId);
@@ -65,6 +67,15 @@ export default function TradePage() {
       .then(setRestLeaderboard)
       .catch(() => {});
   }, [challengeId]);
+
+  // Bootstrap news until WS news_feed snapshot arrives.
+  useEffect(() => {
+    get<{ items: NewsItem[] }>(`/api/challenges/${challengeId}/news`)
+      .then((r) => setRestNews(r.items))
+      .catch(() => {});
+  }, [challengeId]);
+
+  const news = rt.news.length ? rt.news : restNews;
 
   // Seed the limit price input when switching symbols.
   useEffect(() => {
@@ -121,6 +132,8 @@ export default function TradePage() {
           )
         }
       />
+
+      {news.length > 0 && <NewsTicker items={news} />}
 
       <main id="main" className="mx-auto max-w-[1600px] space-y-3 p-3">
         <div className="flex items-center justify-between">

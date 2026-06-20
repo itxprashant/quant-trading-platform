@@ -48,10 +48,12 @@ fi
 ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" "${ADMIN_USER}@${PUBLIC_IP}" bash <<REMOTE
 set -euo pipefail
 cd ${DEPLOY_DIR}
-export REGISTRY=${REGISTRY}
-export IMAGE_TAG=${IMAGE_TAG}
-sudo docker compose -f docker-compose.prod.yml -f docker-compose.registry.yml pull
-sudo docker compose -f docker-compose.prod.yml -f docker-compose.registry.yml --env-file .env up -d
+# sudo strips exported env — pass registry vars inline
+compose() {
+  sudo REGISTRY=${REGISTRY} IMAGE_TAG=${IMAGE_TAG} docker compose "\$@"
+}
+compose -f docker-compose.prod.yml -f docker-compose.registry.yml pull
+compose -f docker-compose.prod.yml -f docker-compose.registry.yml --env-file .env up -d
 sleep 6
 sudo docker compose -f docker-compose.prod.yml restart nginx 2>/dev/null || true
 sudo docker compose -f docker-compose.prod.yml ps

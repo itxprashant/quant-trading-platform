@@ -28,6 +28,8 @@ export const redisKeys = {
   activeChallenges: "qtp:active-challenges",
   /** Latest leaderboard JSON per challenge. */
   leaderboard: (challengeId: string) => `qtp:lb:${challengeId}`,
+  /** Recent news items JSON array per challenge. */
+  newsFeed: (challengeId: string) => `qtp:news:${challengeId}`,
   /** Hash of per-trader metrics (field = userId, value = JSON) per challenge. */
   metrics: (challengeId: string) => `qtp:metrics:${challengeId}`,
   /** Token-bucket rate limit key per user. */
@@ -36,3 +38,4 @@ export const redisKeys = {
 } as const;
 
 export const PRICE_HISTORY_MAX = 1000;
+export const NEWS_FEED_MAX = 50;

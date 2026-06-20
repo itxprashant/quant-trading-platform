@@ -38,6 +38,7 @@ export const orderStatusEnum = pgEnum("order_status", [
   "cancelled",
   "rejected",
 ]);
+export const newsLevelEnum = pgEnum("news_level", ["info", "warning", "urgent"]);
 
 export const users = pgTable(
   "users",
@@ -197,6 +198,30 @@ export const scoreSnapshots = pgTable(
   ],
 );
 
+export const challengeNews = pgTable(
+  "challenge_news",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    challengeId: uuid("challenge_id")
+      .notNull()
+      .references(() => challenges.id, { onDelete: "cascade" }),
+    message: text("message").notNull(),
+    level: newsLevelEnum("level").notNull().default("info"),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("challenge_news_challenge_created_idx").on(
+      t.challengeId,
+      t.createdAt,
+    ),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Challenge = typeof challenges.$inferSelect;
@@ -204,6 +229,8 @@ export type NewChallenge = typeof challenges.$inferInsert;
 export type Order = typeof orders.$inferSelect;
 export type Trade = typeof trades.$inferSelect;
 export type Position = typeof positions.$inferSelect;
+export type ChallengeNews = typeof challengeNews.$inferSelect;
+export type NewChallengeNews = typeof challengeNews.$inferInsert;
 
 // silence unused import in some build modes
 export type _ConfigTypes = { config: ChallengeConfig; scoring: ScoringConfig };

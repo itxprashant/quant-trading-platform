@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { eq } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer } from "ws";
-import { createRedis, getBookSnapshot, getPrice } from "@qtp/bus";
+import { createRedis, getBookSnapshot, getNewsFeed, getPrice } from "@qtp/bus";
 import { challenges, getDb } from "@qtp/db";
 import type {
   BroadcastEnvelope,
@@ -82,6 +82,10 @@ async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
     }
     const book = await getBookSnapshot(redis, challengeId, symbol);
     if (book) send(conn, { type: "book", challengeId, data: book });
+  }
+  const news = await getNewsFeed(redis, challengeId);
+  if (news.length > 0) {
+    send(conn, { type: "news_feed", challengeId, data: news });
   }
 }
 

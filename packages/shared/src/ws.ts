@@ -1,5 +1,6 @@
 import type {
   LeaderboardEntry,
+  NewsItem,
   OrderBookSnapshot,
   Portfolio,
   PricePoint,
@@ -55,7 +56,9 @@ export type ServerMessage =
       };
     }
   | { type: "portfolio"; challengeId: string; data: Portfolio }
-  | { type: "leaderboard"; challengeId: string; data: LeaderboardEntry[] };
+  | { type: "leaderboard"; challengeId: string; data: LeaderboardEntry[] }
+  | { type: "news"; challengeId: string; data: NewsItem }
+  | { type: "news_feed"; challengeId: string; data: NewsItem[] };
 
 export type ServerMessageType = ServerMessage["type"];
 

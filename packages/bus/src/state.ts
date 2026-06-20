@@ -1,7 +1,9 @@
 import {
+  NEWS_FEED_MAX,
   PRICE_HISTORY_MAX,
   redisKeys,
   type LeaderboardEntry,
+  type NewsItem,
   type OrderBookSnapshot,
   type PricePoint,
   type TraderMetrics,
@@ -87,6 +89,48 @@ export async function getLeaderboard(
 ): Promise<LeaderboardEntry[]> {
   const v = await redis.get(redisKeys.leaderboard(challengeId));
   return v ? (JSON.parse(v) as LeaderboardEntry[]) : [];
+}
+
+/* ---- News feed ---- */
+export async function pushNews(
+  redis: Redis,
+  challengeId: string,
+  item: NewsItem,
+): Promise<void> {
+  const key = redisKeys.newsFeed(challengeId);
+  const existing = await redis.get(key);
+  const items: NewsItem[] = existing ? (JSON.parse(existing) as NewsItem[]) : [];
+  items.unshift(item);
+  if (items.length > NEWS_FEED_MAX) items.length = NEWS_FEED_MAX;
+  await redis.set(key, JSON.stringify(items));
+}
+
+export async function getNewsFeed(
+  redis: Redis,
+  challengeId: string,
+  limit = 20,
+): Promise<NewsItem[]> {
+  const v = await redis.get(redisKeys.newsFeed(challengeId));
+  const items = v ? (JSON.parse(v) as NewsItem[]) : [];
+  return items.slice(0, limit);
+}
+
+export async function setNewsFeed(
+  redis: Redis,
+  challengeId: string,
+  items: NewsItem[],
+): Promise<void> {
+  await redis.set(
+    redisKeys.newsFeed(challengeId),
+    JSON.stringify(items.slice(0, NEWS_FEED_MAX)),
+  );
+}
+
+export async function clearNewsFeed(
+  redis: Redis,
+  challengeId: string,
+): Promise<void> {
+  await redis.del(redisKeys.newsFeed(challengeId));
 }
 
 /* ---- Per-trader metrics ---- */

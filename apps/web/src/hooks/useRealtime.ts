@@ -3,6 +3,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import type {
   LeaderboardEntry,
+  NewsItem,
   OrderBookSnapshot,
   Portfolio,
   PricePoint,
@@ -27,6 +28,8 @@ export interface OrderEvent {
   ts: number;
 }
 
+const NEWS_MAX = 50;
+
 export interface RealtimeState {
   status: "connecting" | "open" | "closed";
   prices: Map<string, PricePoint>;
@@ -34,6 +37,7 @@ export interface RealtimeState {
   trades: TradePrint[];
   portfolio: Portfolio | null;
   leaderboard: LeaderboardEntry[];
+  news: NewsItem[];
   lastOrder: OrderEvent | null;
 }
 
@@ -63,6 +67,16 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, portfolio: msg.data };
     case "leaderboard":
       return { ...state, leaderboard: msg.data };
+    case "news":
+      return {
+        ...state,
+        news: [msg.data, ...state.news.filter((n) => n.id !== msg.data.id)].slice(
+          0,
+          NEWS_MAX,
+        ),
+      };
+    case "news_feed":
+      return { ...state, news: msg.data.slice(0, NEWS_MAX) };
     case "order":
       return { ...state, lastOrder: msg.data };
     default:
@@ -77,6 +91,7 @@ const initial: RealtimeState = {
   trades: [],
   portfolio: null,
   leaderboard: [],
+  news: [],
   lastOrder: null,
 };
 

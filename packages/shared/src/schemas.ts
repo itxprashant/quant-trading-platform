@@ -225,3 +225,25 @@ export const zLeaderboardEntry = z.object({
   metrics: zTraderMetrics.optional(),
 });
 export type LeaderboardEntry = z.infer<typeof zLeaderboardEntry>;
+
+/* ------------------------------------------------------------------ *
+ * Live news (per-challenge admin announcements)
+ * ------------------------------------------------------------------ */
+export const zNewsLevel = z.enum(["info", "warning", "urgent"]);
+export type NewsLevel = z.infer<typeof zNewsLevel>;
+
+export const zNewsItem = z.object({
+  id: z.string().uuid(),
+  challengeId: z.string().uuid(),
+  message: z.string().min(1).max(500),
+  level: zNewsLevel,
+  createdAt: z.string(),
+  authorDisplayName: z.string().optional(),
+});
+export type NewsItem = z.infer<typeof zNewsItem>;
+
+export const zPostNewsInput = z.object({
+  message: z.string().min(1).max(500),
+  level: zNewsLevel.default("info"),
+});
+export type PostNewsInput = z.infer<typeof zPostNewsInput>;
