@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: qtp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: qtp
+      POSTGRES_PASSWORD: qtp
+      POSTGRES_DB: qtp
+    ports:
+      - "5432:5432"
+    volumes:
+      - qtp-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qtp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: qtp-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - qtp-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  qtp-pgdata:
+  qtp-redisdata:

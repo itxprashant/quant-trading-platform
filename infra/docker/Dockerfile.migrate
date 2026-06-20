@@ -1,0 +1,26 @@
+# One-shot schema + seed (runs as compose service "migrate").
+ARG NODE_VERSION=22-alpine
+
+FROM node:${NODE_VERSION}
+RUN corepack enable
+WORKDIR /app
+
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
+COPY packages/config/package.json packages/config/
+COPY packages/shared/package.json packages/shared/
+COPY packages/db/package.json packages/db/
+COPY apps/api/package.json apps/api/
+COPY apps/gateway/package.json apps/gateway/
+COPY apps/engine/package.json apps/engine/
+COPY apps/scoring/package.json apps/scoring/
+COPY apps/web/package.json apps/web/
+RUN pnpm install --frozen-lockfile
+
+COPY packages/config packages/config
+COPY packages/shared packages/shared
+COPY packages/db packages/db
+
+RUN pnpm --filter @qtp/shared build && pnpm --filter @qtp/db build
+
+ENV DATABASE_URL=postgresql://placeholder
+CMD ["sh", "-c", "pnpm db:push && pnpm db:seed"]

@@ -1,0 +1,21 @@
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - rsync
+
+write_files:
+  - path: /etc/sysctl.d/99-swap.conf
+    content: |
+      vm.swappiness=10
+
+runcmd:
+  - fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker azureuser

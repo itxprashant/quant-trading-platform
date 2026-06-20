@@ -1,0 +1,29 @@
+{
+  "name": "@qtp/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo \"(lint placeholder)\""
+  },
+  "dependencies": {
+    "@qtp/bus": "workspace:*",
+    "@qtp/db": "workspace:*",
+    "@qtp/shared": "workspace:*",
+    "drizzle-orm": "^0.38.3",
+    "jsonwebtoken": "^9.0.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@qtp/config": "workspace:*",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

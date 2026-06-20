@@ -1,0 +1,8 @@
+# Local-dev override: use host networking to bypass the Docker userland proxy,
+# which resets Postgres protocol connections on some Linux kernels.
+# Safe to delete on environments where the default bridge proxy works.
+services:
+  postgres:
+    network_mode: host
+  redis:
+    network_mode: host

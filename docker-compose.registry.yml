@@ -1,0 +1,26 @@
+# Pull pre-built images from a registry (ACR / GHCR). Use with docker-compose.prod.yml.
+#
+#   export REGISTRY=quantadevclub.azurecr.io IMAGE_TAG=sha-abc1234
+#   docker compose -f docker-compose.prod.yml -f docker-compose.registry.yml pull
+#   docker compose -f docker-compose.prod.yml -f docker-compose.registry.yml up -d
+#
+# Do not pass --build when using registry images. See infra/azure/CI-REGISTRY.md
+
+services:
+  migrate:
+    image: ${REGISTRY}/quanta-migrate:${IMAGE_TAG:-latest}
+
+  api:
+    image: ${REGISTRY}/quanta-api:${IMAGE_TAG:-latest}
+
+  gateway:
+    image: ${REGISTRY}/quanta-gateway:${IMAGE_TAG:-latest}
+
+  engine:
+    image: ${REGISTRY}/quanta-engine:${IMAGE_TAG:-latest}
+
+  scoring:
+    image: ${REGISTRY}/quanta-scoring:${IMAGE_TAG:-latest}
+
+  web:
+    image: ${REGISTRY}/quanta-web:${IMAGE_TAG:-latest}

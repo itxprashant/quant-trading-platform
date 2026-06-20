@@ -1,0 +1,48 @@
+# Multi-stage build for a Node service (api | gateway | engine | scoring).
+# Build with: docker build -f infra/docker/Dockerfile.service --build-arg SERVICE=api -t quanta-api .
+ARG NODE_VERSION=22-alpine
+
+FROM node:${NODE_VERSION} AS base
+RUN corepack enable
+WORKDIR /app
+
+# --- deps: lockfiles → install → packages (split layers for cache) ---
+FROM base AS deps
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
+# Workspace manifests only (pnpm install without app/package source).
+COPY packages/config/package.json packages/config/
+COPY packages/shared/package.json packages/shared/
+COPY packages/bus/package.json packages/bus/
+COPY packages/core/package.json packages/core/
+COPY packages/db/package.json packages/db/
+COPY apps/api/package.json apps/api/
+COPY apps/gateway/package.json apps/gateway/
+COPY apps/engine/package.json apps/engine/
+COPY apps/scoring/package.json apps/scoring/
+COPY apps/web/package.json apps/web/
+RUN pnpm install --frozen-lockfile
+
+COPY packages/config packages/config
+COPY packages/shared packages/shared
+COPY packages/bus packages/bus
+COPY packages/core packages/core
+COPY packages/db packages/db
+
+FROM deps AS build
+ARG SERVICE
+COPY turbo.json tsconfig.base.json ./
+# Only the target app invalidates when that service's code changes.
+COPY apps/${SERVICE} apps/${SERVICE}
+RUN pnpm --filter "@qtp/${SERVICE}..." build
+RUN pnpm --filter "@qtp/${SERVICE}" deploy --prod --legacy /out
+# pnpm deploy copies source but omits the app-level dist/ output.
+RUN cp -r apps/${SERVICE}/dist /out/dist
+
+FROM node:${NODE_VERSION} AS runner
+ARG SERVICE
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=build /out ./
+EXPOSE 8000 8080
+CMD ["node", "dist/server.js"]
+# Note: engine/scoring/gateway entrypoints are dist/index.js; override CMD in compose.
