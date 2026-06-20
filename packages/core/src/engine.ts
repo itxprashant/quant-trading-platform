@@ -59,6 +59,8 @@ export interface PlaceOrderCommand {
 export interface CancelOrderCommand {
   orderId: string;
   userId: string;
+  symbol: string;
+  side: OrderSide;
   ts: number;
 }
 
@@ -78,6 +80,8 @@ export class ChallengeEngine {
   private readonly accounts = new Map<string, Account>();
   private seq = 0;
   private bookSequence = 0;
+  /** Orders cancelled before placeOrder rested them on the book. */
+  private readonly cancelledIds = new Set<string>();
 
   constructor(cfg: EngineConfig) {
     this.cfg = cfg;
@@ -197,7 +201,7 @@ export class ChallengeEngine {
       if (makerCap <= 0) {
         // Maker can no longer trade within limits; pull their order.
         book.remove(best.id);
-        events.push(this.orderUpdate(best, "cancelled"));
+        events.push(this.orderUpdate(best, symbol, "cancelled", cmd.ts));
         touched.add(symbol);
         continue;
       }
@@ -237,36 +241,29 @@ export class ChallengeEngine {
 
       // Maker order update.
       book.reduceBest(oppSide, fill);
-      events.push({
-        type: "order_update",
-        challengeId: this.challengeId,
-        orderId: best.id,
-        userId: best.userId,
-        symbol,
-        side: best.side,
-        status: best.remaining <= 0 ? "filled" : "partially_filled",
-        quantity: 0,
-        remainingQuantity: Math.max(0, best.remaining),
-        price: best.price,
-        ts: cmd.ts,
-      });
+        events.push(this.orderUpdate(best, symbol, best.remaining <= 0 ? "filled" : "partially_filled", cmd.ts));
       touched.add(symbol);
     }
 
     // Rest remainder for limit orders.
     let status: OrderStatus;
     if (remaining > 0 && cmd.orderType === "limit" && cmd.price != null) {
-      const resting: RestingOrder = {
-        id: cmd.orderId,
-        userId: cmd.userId,
-        side: cmd.side,
-        price: cmd.price,
-        remaining,
-        seq: ++this.seq,
-      };
-      book.add(resting);
-      status = remaining === cmd.quantity ? "open" : "partially_filled";
-      touched.add(symbol);
+      if (this.cancelledIds.delete(cmd.orderId)) {
+        status = "cancelled";
+        remaining = 0;
+      } else {
+        const resting: RestingOrder = {
+          id: cmd.orderId,
+          userId: cmd.userId,
+          side: cmd.side,
+          price: cmd.price,
+          remaining,
+          seq: ++this.seq,
+        };
+        book.add(resting);
+        status = remaining === cmd.quantity ? "open" : "partially_filled";
+        touched.add(symbol);
+      }
     } else if (remaining > 0) {
       // Market remainder (or limit at-limit) is cancelled.
       status = remaining === cmd.quantity ? "cancelled" : "partially_filled";
@@ -305,13 +302,16 @@ export class ChallengeEngine {
         }
         const removed = book.remove(cmd.orderId);
         if (!removed) return [];
+        this.cancelledIds.delete(cmd.orderId);
         return [
-          this.orderUpdate(removed, "cancelled"),
+          this.orderUpdate(removed, symbol, "cancelled", cmd.ts),
           this.bookUpdate(symbol, cmd.ts),
         ];
       }
     }
-    return [];
+    if (this.cancelledIds.has(cmd.orderId)) return [];
+    this.cancelledIds.add(cmd.orderId);
+    return [this.offBookCancelUpdate(cmd)];
   }
 
   /** Autonomous random-walk price movement for one symbol. */
@@ -457,19 +457,40 @@ export class ChallengeEngine {
     };
   }
 
-  private orderUpdate(o: RestingOrder, status: OrderStatus): EngineEvent {
+  private orderUpdate(
+    o: RestingOrder,
+    symbol: string,
+    status: OrderStatus,
+    ts: number,
+  ): EngineEvent {
     return {
       type: "order_update",
       challengeId: this.challengeId,
       orderId: o.id,
       userId: o.userId,
-      symbol: "",
+      symbol,
       side: o.side,
       status,
       quantity: 0,
-      remainingQuantity: status === "cancelled" ? 0 : o.remaining,
+      remainingQuantity: status === "cancelled" ? 0 : Math.max(0, o.remaining),
       price: o.price,
-      ts: Date.now(),
+      ts,
+    };
+  }
+
+  private offBookCancelUpdate(cmd: CancelOrderCommand): EngineEvent {
+    return {
+      type: "order_update",
+      challengeId: this.challengeId,
+      orderId: cmd.orderId,
+      userId: cmd.userId,
+      symbol: cmd.symbol,
+      side: cmd.side,
+      status: "cancelled",
+      quantity: 0,
+      remainingQuantity: 0,
+      price: null,
+      ts: cmd.ts,
     };
   }
 

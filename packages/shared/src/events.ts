@@ -21,6 +21,8 @@ export type EngineCommand =
       orderId: string;
       challengeId: string;
       userId: string;
+      symbol: string;
+      side: OrderSide;
       ts: number;
     }
   | {

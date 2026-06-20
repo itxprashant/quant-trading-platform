@@ -97,7 +97,13 @@ describe("ChallengeEngine matching", () => {
   it("cancels a resting order and removes it from the book", () => {
     const e = makeEngine();
     e.placeOrder({ orderId: "o1", userId: "alice", symbol: "X1", side: "buy", orderType: "limit", quantity: 10, price: 99, ts: 1 });
-    const evts = e.cancelOrder({ orderId: "o1", userId: "alice", ts: 2 });
+    const evts = e.cancelOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      ts: 2,
+    });
     expect(evts.some((x) => x.type === "order_update" && x.status === "cancelled")).toBe(true);
     expect(e.snapshot("X1").bids).toHaveLength(0);
   });
@@ -105,9 +111,61 @@ describe("ChallengeEngine matching", () => {
   it("ignores cancel from a non-owner", () => {
     const e = makeEngine();
     e.placeOrder({ orderId: "o1", userId: "alice", symbol: "X1", side: "buy", orderType: "limit", quantity: 10, price: 99, ts: 1 });
-    const evts = e.cancelOrder({ orderId: "o1", userId: "mallory", ts: 2 });
+    const evts = e.cancelOrder({
+      orderId: "o1",
+      userId: "mallory",
+      symbol: "X1",
+      side: "buy",
+      ts: 2,
+    });
     expect(evts).toHaveLength(0);
     expect(e.snapshot("X1").bids[0]).toMatchObject({ quantity: 10 });
+  });
+
+  it("cancel before rest prevents the order from landing on the book", () => {
+    const e = makeEngine();
+    const cancelEvts = e.cancelOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      ts: 1,
+    });
+    expect(cancelEvts).toHaveLength(1);
+    expect(cancelEvts[0]).toMatchObject({
+      type: "order_update",
+      status: "cancelled",
+      symbol: "X1",
+    });
+
+    const placeEvts = e.placeOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 10,
+      price: 99,
+      ts: 2,
+    });
+    expect(trades(placeEvts)).toHaveLength(0);
+    expect(e.snapshot("X1").bids).toHaveLength(0);
+    expect(placeEvts.some((x) => x.type === "order_update" && x.status === "cancelled")).toBe(
+      true,
+    );
+  });
+
+  it("second off-book cancel is a no-op", () => {
+    const e = makeEngine();
+    const cmd = {
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy" as const,
+      ts: 1,
+    };
+    expect(e.cancelOrder(cmd)).toHaveLength(1);
+    expect(e.cancelOrder(cmd)).toHaveLength(0);
   });
 
   it("PnL is conserved between counterparties before price moves", () => {

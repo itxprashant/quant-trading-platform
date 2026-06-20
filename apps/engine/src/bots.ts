@@ -62,9 +62,21 @@ export class BotEngine {
         const key = `${botId}:${symbol}`;
         const prev = this.mmQuotes.get(key);
         if (prev?.bidId)
-          cancels.push({ orderId: prev.bidId, userId: botId, ts: now });
+          cancels.push({
+            orderId: prev.bidId,
+            userId: botId,
+            symbol,
+            side: "buy",
+            ts: now,
+          });
         if (prev?.askId)
-          cancels.push({ orderId: prev.askId, userId: botId, ts: now });
+          cancels.push({
+            orderId: prev.askId,
+            userId: botId,
+            symbol,
+            side: "sell",
+            ts: now,
+          });
 
         const bidId = `bot:mm:${i}:${symbol}:b:${++this.seq}`;
         const askId = `bot:mm:${i}:${symbol}:a:${++this.seq}`;

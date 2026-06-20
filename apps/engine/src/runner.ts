@@ -162,6 +162,8 @@ export class ChallengeRunner {
         return this.engine.cancelOrder({
           orderId: cmd.orderId,
           userId: cmd.userId,
+          symbol: cmd.symbol,
+          side: cmd.side,
           ts: cmd.ts,
         });
       default:

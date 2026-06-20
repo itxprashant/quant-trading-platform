@@ -127,7 +127,12 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
   // Cancel an order.
   app.delete(
     "/:id",
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [
+        app.authenticate,
+        rateLimit({ bucket: "orders", limit: 25, windowMs: 1000, by: "user" }),
+      ],
+    },
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const order = await app.db.query.orders.findFirst({
@@ -137,15 +142,34 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       if (order.userId !== req.user.sub) {
         return reply.code(403).send({ error: "forbidden" });
       }
+      if (!["open", "partially_filled"].includes(order.status)) {
+        return reply.code(409).send({ error: "order_not_cancellable" });
+      }
+
+      const challenge = await app.db.query.challenges.findFirst({
+        where: eq(challenges.id, order.challengeId),
+      });
+      if (!challenge) return reply.code(404).send({ error: "not_found" });
+      if (challenge.status === "draft" || challenge.status === "ended") {
+        return reply.code(409).send({ error: "challenge_not_cancellable" });
+      }
+
+      await app.db
+        .update(orders)
+        .set({ status: "cancelled", remainingQuantity: 0 })
+        .where(eq(orders.id, id));
+
       const cmd: EngineCommand = {
         type: "cancel_order",
         orderId: id,
         challengeId: order.challengeId,
         userId: req.user.sub,
+        symbol: order.symbol,
+        side: order.side,
         ts: Date.now(),
       };
       await publishCommand(app.redis, order.challengeId, cmd);
-      return reply.code(202).send({ status: "cancel_requested" });
+      return reply.code(202).send({ status: "cancelled" });
     },
   );
 }
