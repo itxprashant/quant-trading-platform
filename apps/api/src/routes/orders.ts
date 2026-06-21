@@ -3,7 +3,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { challenges, orders, participants } from "@qtp/db";
 import { zPlaceOrderInput, type EngineCommand } from "@qtp/shared";
-import { publishCommand } from "@qtp/bus";
+import { checkRateLimit, checkVolumeLimit, publishCommand } from "@qtp/bus";
 import { validate } from "../util.js";
 import { rateLimit } from "../ratelimit.js";
 
@@ -11,12 +11,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
   // Place an order: persist intent, forward to the engine.
   app.post(
     "/",
-    {
-      preHandler: [
-        app.authenticate,
-        rateLimit({ bucket: "orders", limit: 25, windowMs: 1000, by: "user" }),
-      ],
-    },
+    { preHandler: [app.authenticate] },
     async (req, reply) => {
       const input = validate(zPlaceOrderInput, req.body, reply);
       if (!input) return;
@@ -36,6 +31,43 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       }
       if (input.quantity > challenge.config.maxOrderQuantity) {
         return reply.code(400).send({ error: "quantity_exceeds_limit" });
+      }
+
+      const maxOrdersPerSecond = challenge.config.maxOrdersPerSecond ?? 5;
+      const orderRate = await checkRateLimit(
+        app.redis,
+        req.user.sub,
+        `orders:${input.challengeId}`,
+        maxOrdersPerSecond,
+        1000,
+      );
+      reply.header("x-ratelimit-limit", String(maxOrdersPerSecond));
+      reply.header("x-ratelimit-remaining", String(orderRate.remaining));
+      if (!orderRate.allowed) {
+        reply.header("retry-after", String(Math.ceil(orderRate.resetMs / 1000)));
+        return reply.code(429).send({
+          error: "rate_limited",
+          retryAfterMs: orderRate.resetMs,
+        });
+      }
+
+      const maxVolumePerMinute = challenge.config.maxVolumePerMinute ?? 500;
+      const volume = await checkVolumeLimit(
+        app.redis,
+        req.user.sub,
+        input.challengeId,
+        input.quantity,
+        maxVolumePerMinute,
+        60_000,
+      );
+      reply.header("x-volume-limit", String(maxVolumePerMinute));
+      reply.header("x-volume-remaining", String(volume.remaining));
+      if (!volume.allowed) {
+        reply.header("retry-after", String(Math.ceil(volume.resetMs / 1000)));
+        return reply.code(429).send({
+          error: "volume_limited",
+          retryAfterMs: volume.resetMs,
+        });
       }
 
       // Auto-enroll the trader if they aren't a participant yet.

@@ -32,6 +32,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         id: users.id,
         username: users.username,
         displayName: users.displayName,
+        email: users.email,
         role: users.role,
         createdAt: users.createdAt,
         lastLoginAt: users.lastLoginAt,

@@ -11,7 +11,7 @@ interface AuthState {
   loading: boolean;
   hydrate: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, displayName?: string) => Promise<void>;
+  register: (username: string, password: string, email: string, displayName?: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -41,10 +41,11 @@ export const useAuth = create<AuthState>((set, getState) => ({
     window.localStorage.setItem(TOKEN_KEY, res.token);
     set({ user: res.user, token: res.token });
   },
-  register: async (username, password, displayName) => {
+  register: async (username, password, email, displayName) => {
     const res = await post<AuthResponse>("/api/auth/register", {
       username,
       password,
+      email,
       displayName,
     });
     window.localStorage.setItem(TOKEN_KEY, res.token);

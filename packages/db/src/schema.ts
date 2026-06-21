@@ -46,6 +46,7 @@ export const users = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     username: text("username").notNull(),
     displayName: text("display_name").notNull(),
+    email: text("email").notNull().default(""),
     passwordHash: text("password_hash").notNull(),
     role: roleEnum("role").notNull().default("trader"),
     createdAt: timestamp("created_at", { withTimezone: true })

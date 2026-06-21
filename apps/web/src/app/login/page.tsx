@@ -18,6 +18,7 @@ function LoginInner() {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -28,7 +29,7 @@ function LoginInner() {
     setLoading(true);
     try {
       if (mode === "login") await login(username, password);
-      else await register(username, password, displayName || undefined);
+      else await register(username, password, email, displayName || undefined);
       router.push(next);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -38,7 +39,9 @@ function LoginInner() {
             ? "Incorrect username or password."
             : code === "username_taken"
               ? "That username is taken."
-              : "Something went wrong. Try again.",
+              : code === "validation_error"
+                ? "Check your details (username, email, password)."
+                : "Something went wrong. Try again.",
         );
       } else {
         setError("Couldn't reach the server.");
@@ -75,12 +78,23 @@ function LoginInner() {
               />
             </Field>
             {mode === "register" && (
-              <Field label="Display name" hint="Shown on the leaderboard (optional).">
-                <Input
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                />
-              </Field>
+              <>
+                <Field label="Email">
+                  <Input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    autoComplete="email"
+                    required
+                  />
+                </Field>
+                <Field label="Display name" hint="Shown on the leaderboard (optional).">
+                  <Input
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                  />
+                </Field>
+              </>
             )}
             <Field label="Password">
               <Input

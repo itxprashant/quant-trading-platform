@@ -61,9 +61,13 @@ export function TradeTicket({
             ? "Challenge is not live."
             : code === "quantity_exceeds_limit"
               ? `Max order size is ${maxQuantity}.`
-              : code === "validation_error"
-                ? "Check your order details."
-                : "Order rejected.",
+              : code === "rate_limited"
+                ? "Too many orders — slow down and retry."
+                : code === "volume_limited"
+                  ? "Volume limit reached for this minute — wait and retry."
+                  : code === "validation_error"
+                    ? "Check your order details."
+                    : "Order rejected.",
       });
     } finally {
       setSubmitting(false);

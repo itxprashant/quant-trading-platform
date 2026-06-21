@@ -242,6 +242,45 @@ export async function checkRateLimit(
   };
 }
 
+export interface VolumeLimitResult {
+  allowed: boolean;
+  remaining: number;
+  resetMs: number;
+}
+
+/**
+ * Fixed-window volume limiter: sums order quantities per user per challenge.
+ */
+export async function checkVolumeLimit(
+  redis: Redis,
+  userId: string,
+  challengeId: string,
+  quantity: number,
+  limit: number,
+  windowMs: number,
+): Promise<VolumeLimitResult> {
+  const key = redisKeys.volumeLimit(userId, challengeId);
+  const script = `
+    local current = redis.call('INCRBY', KEYS[1], ARGV[2])
+    if tonumber(current) == tonumber(ARGV[2]) then
+      redis.call('PEXPIRE', KEYS[1], ARGV[1])
+    end
+    local ttl = redis.call('PTTL', KEYS[1])
+    return {current, ttl}`;
+  const [current, ttl] = (await redis.eval(
+    script,
+    1,
+    key,
+    String(windowMs),
+    String(quantity),
+  )) as [number, number];
+  return {
+    allowed: current <= limit,
+    remaining: Math.max(0, limit - current),
+    resetMs: ttl < 0 ? windowMs : ttl,
+  };
+}
+
 /* ---- Engine leader election ---- */
 export async function acquireEngineLock(
   redis: Redis,

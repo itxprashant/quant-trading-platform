@@ -51,6 +51,8 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
     minPosition: existing?.config.minPosition ?? -50,
     maxPosition: existing?.config.maxPosition ?? 50,
     maxOrderQuantity: existing?.config.maxOrderQuantity ?? 50,
+    maxOrdersPerSecond: existing?.config.maxOrdersPerSecond ?? 5,
+    maxVolumePerMinute: existing?.config.maxVolumePerMinute ?? 500,
     allowMargin: existing?.config.allowMargin ?? true,
     autonomousPrice: existing?.config.autonomousPrice ?? true,
   });
@@ -216,6 +218,8 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
           <Field label="Min position">{numField(cfg.minPosition, (n) => setCfg({ ...cfg, minPosition: n }))}</Field>
           <Field label="Max position">{numField(cfg.maxPosition, (n) => setCfg({ ...cfg, maxPosition: n }))}</Field>
           <Field label="Max order qty">{numField(cfg.maxOrderQuantity, (n) => setCfg({ ...cfg, maxOrderQuantity: n }))}</Field>
+          <Field label="Max orders / sec">{numField(cfg.maxOrdersPerSecond, (n) => setCfg({ ...cfg, maxOrdersPerSecond: Math.max(1, Math.round(n)) }))}</Field>
+          <Field label="Max volume / min">{numField(cfg.maxVolumePerMinute, (n) => setCfg({ ...cfg, maxVolumePerMinute: Math.max(1, Math.round(n)) }))}</Field>
           <Field label="Allow margin">
             <Select value={String(cfg.allowMargin)} onChange={(e) => setCfg({ ...cfg, allowMargin: e.target.value === "true" })}>
               <option value="true">Yes</option>

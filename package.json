@@ -23,6 +23,7 @@
     "deploy:changed": "./scripts/deploy-changed.sh",
     "deploy:all": "BUILD_ALL=1 SKIP_PROVISION=1 ./scripts/azure-deploy.sh",
     "deploy:registry": "./scripts/registry-vm-deploy.sh",
+    "deploy:head": "./scripts/deploy-head.sh",
     "setup:acr": "./scripts/setup-ci-registry.sh",
     "setup:github-secrets": "./scripts/setup-github-secrets.sh",
     "deploy:services": "./scripts/changed-services.sh --git"

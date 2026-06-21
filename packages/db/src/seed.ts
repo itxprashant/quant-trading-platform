@@ -21,6 +21,7 @@ async function main() {
     .values({
       username: "admin",
       displayName: "Administrator",
+      email: "admin@quanta.local",
       passwordHash: hash("admin1234"),
       role: "admin",
     })
@@ -30,6 +31,7 @@ async function main() {
   const traderRows = Array.from({ length: 8 }, (_, i) => ({
     username: `trader${i + 1}`,
     displayName: `Trader ${i + 1}`,
+    email: `trader${i + 1}@quanta.local`,
     passwordHash: hash("trader1234"),
     role: "trader" as const,
   }));
@@ -49,6 +51,8 @@ async function main() {
     minPosition: -50,
     maxPosition: 50,
     maxOrderQuantity: 50,
+    maxOrdersPerSecond: 5,
+    maxVolumePerMinute: 500,
     allowMargin: true,
     autonomousPrice: true,
   };
@@ -62,6 +66,8 @@ async function main() {
     minPosition: -100,
     maxPosition: 100,
     maxOrderQuantity: 100,
+    maxOrdersPerSecond: 5,
+    maxVolumePerMinute: 500,
     allowMargin: true,
     autonomousPrice: true,
   };

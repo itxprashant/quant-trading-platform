@@ -19,6 +19,7 @@ export const zRegisterInput = z.object({
     .max(32)
     .regex(/^[a-zA-Z0-9_.-]+$/, "alphanumeric, dot, dash, underscore only"),
   displayName: z.string().min(1).max(64).optional(),
+  email: z.string().email().max(254),
   password: z.string().min(8).max(128),
 });
 export type RegisterInput = z.infer<typeof zRegisterInput>;
@@ -33,6 +34,7 @@ export const zUserPublic = z.object({
   id: z.string().uuid(),
   username: z.string(),
   displayName: z.string(),
+  email: z.string(),
   role: zRole,
   createdAt: z.string(),
 });
@@ -83,6 +85,10 @@ export const zChallengeConfig = z.object({
   minPosition: z.number().int().default(-50),
   maxPosition: z.number().int().default(50),
   maxOrderQuantity: z.number().int().positive().default(50),
+  /** Max order requests per user per second (per challenge). */
+  maxOrdersPerSecond: z.number().int().positive().default(5),
+  /** Max sum of order quantities per user per minute (per challenge). */
+  maxVolumePerMinute: z.number().int().positive().default(500),
   /** Allow cash balance to go negative (enables shorting/leverage). */
   allowMargin: z.boolean().default(true),
   /** Autonomous price engine enabled. */

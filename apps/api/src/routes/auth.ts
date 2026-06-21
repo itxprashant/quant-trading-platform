@@ -18,6 +18,7 @@ function toPublic(u: typeof users.$inferSelect): UserPublic {
     id: u.id,
     username: u.username,
     displayName: u.displayName,
+    email: u.email,
     role: u.role,
     createdAt: u.createdAt.toISOString(),
   };
@@ -41,6 +42,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       .values({
         username: input.username,
         displayName: input.displayName ?? input.username,
+        email: input.email,
         passwordHash,
         role: "trader",
       })

@@ -35,6 +35,9 @@ export const redisKeys = {
   /** Token-bucket rate limit key per user. */
   rateLimit: (userId: string, bucket: string) =>
     `qtp:rl:${bucket}:${userId}`,
+  /** Rolling order-quantity sum per user per challenge. */
+  volumeLimit: (userId: string, challengeId: string) =>
+    `qtp:rl:${userId}:vol:${challengeId}`,
 } as const;
 
 export const PRICE_HISTORY_MAX = 1000;
