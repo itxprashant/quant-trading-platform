@@ -19,10 +19,11 @@ export async function api<T = unknown>(
   opts: RequestInit = {},
 ): Promise<T> {
   const t = token();
+  const hasBody = opts.body != null && opts.body !== "";
   const res = await fetch(API_URL + path, {
     ...opts,
     headers: {
-      "content-type": "application/json",
+      ...(hasBody ? { "content-type": "application/json" } : {}),
       ...(t ? { authorization: `Bearer ${t}` } : {}),
       ...(opts.headers ?? {}),
     },
