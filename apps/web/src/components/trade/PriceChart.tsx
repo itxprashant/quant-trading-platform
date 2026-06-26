@@ -76,6 +76,7 @@ export function PriceChart({
   live?: PricePoint;
 }) {
   const [mode, setMode] = useState<ChartMode>("candle");
+  const [hasData, setHasData] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<
@@ -89,6 +90,7 @@ export function PriceChart({
 
   const applyHistory = useCallback((points: PricePoint[], chartMode: ChartMode) => {
     historyRef.current = points;
+    if (points.length > 0) setHasData(true);
     const series = seriesRef.current;
     if (!series) return;
 
@@ -189,6 +191,7 @@ export function PriceChart({
   useEffect(() => {
     historyRef.current = [];
     currentCandleRef.current = null;
+    setHasData(false);
     let cancelled = false;
     get<PricePoint[]>(`/api/market/${challengeId}/${symbol}/history?limit=500`)
       .then((points) => {
@@ -204,6 +207,7 @@ export function PriceChart({
   // Append live ticks.
   useEffect(() => {
     if (!live || !seriesRef.current) return;
+    setHasData(true);
 
     if (modeRef.current === "candle") {
       const bucket =
@@ -273,6 +277,14 @@ export function PriceChart({
         </button>
       </div>
       <div ref={containerRef} className="h-full w-full" />
+      {!hasData && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center">
+          <div className="flex items-center gap-2 text-xs text-faint">
+            <span className="size-3 animate-spin rounded-full border-2 border-current border-t-transparent motion-reduce:animate-none" />
+            Waiting for market data…
+          </div>
+        </div>
+      )}
     </div>
   );
 }

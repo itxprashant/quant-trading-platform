@@ -5,6 +5,29 @@ import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { money, signed, dirClass } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
+/**
+ * Rank cell. Top three get a quiet monochrome "podium" chip (weight + surface
+ * lift, no medals, no color) so the leader reads as a moment without breaking
+ * the restrained palette. Everyone else is a plain faint number.
+ */
+function Rank({ rank }: { rank: number }) {
+  const podium = rank <= 3;
+  return (
+    <span
+      aria-label={`Rank ${rank}`}
+      className={cn(
+        "mono inline-flex h-5 w-6 items-center justify-center justify-self-center rounded-sm tabular-nums",
+        rank === 1 && "bg-surface-3 font-semibold text-text",
+        rank === 2 && "bg-surface-2 font-medium text-text",
+        rank === 3 && "bg-surface-2 text-muted",
+        !podium && "text-faint",
+      )}
+    >
+      {rank}
+    </span>
+  );
+}
+
 export function Leaderboard({
   entries,
   meId,
@@ -18,7 +41,6 @@ export function Leaderboard({
 }) {
   const me = entries.find((e) => e.userId === meId);
   const top = entries.slice(0, 12);
-  const medal = ["🥇", "🥈", "🥉"];
   const cols = mm
     ? "grid-cols-[auto_1fr_auto_auto]"
     : "grid-cols-[auto_1fr_auto]";
@@ -31,9 +53,7 @@ export function Leaderboard({
         highlight ? "bg-accent-subtle/40" : "hover:bg-surface-2",
       )}
     >
-      <span className="w-6 text-center mono text-muted">
-        {e.rank <= 3 ? medal[e.rank - 1] : e.rank}
-      </span>
+      <Rank rank={e.rank} />
       <span className={cn("truncate", highlight ? "font-semibold text-accent" : "")}>
         {e.displayName}
         {highlight && <span className="ml-1 text-faint">(you)</span>}

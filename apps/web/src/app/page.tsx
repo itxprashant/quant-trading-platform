@@ -8,6 +8,32 @@ import { ChallengeCard } from "@/components/ChallengeCard";
 import { Panel } from "@/components/ui/Panel";
 import { Skeleton } from "@/components/ui/Skeleton";
 
+function Stat({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: number;
+  accent?: boolean;
+}) {
+  return (
+    <div className="flex flex-col items-start sm:items-end">
+      <dd className="flex items-center gap-1.5">
+        {accent && (
+          <span className="size-1.5 rounded-full bg-up motion-safe:animate-pulse" />
+        )}
+        <span className="mono text-xl font-semibold tabular-nums">
+          {value.toLocaleString("en-US")}
+        </span>
+      </dd>
+      <dt className="text-[10px] font-medium uppercase tracking-wide text-faint">
+        {label}
+      </dt>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [challenges, setChallenges] = useState<Challenge[] | null>(null);
   const [error, setError] = useState(false);
@@ -20,17 +46,28 @@ export default function HomePage() {
 
   const live = challenges?.filter((c) => c.status === "live") ?? [];
   const others = challenges?.filter((c) => c.status !== "live") ?? [];
+  const traderCount =
+    challenges?.reduce((sum, c) => sum + (c.participantCount ?? 0), 0) ?? 0;
 
   return (
     <div className="min-h-dvh">
       <TopBar />
       <main id="main" className="mx-auto max-w-6xl px-4 py-10">
-        <section className="mb-10">
-          <h1 className="text-2xl font-semibold tracking-tight">Trading challenges</h1>
-          <p className="mt-1 max-w-2xl text-muted">
-            Compete in real-time quant trading events. Provide liquidity, trade
-            direction, and climb the live leaderboard.
-          </p>
+        <section className="mb-10 flex flex-col gap-6 border-b border-border pb-7 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Trading challenges</h1>
+            <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-muted">
+              Real-time market-making and directional contests. Provide
+              liquidity, trade the move, and climb the live leaderboard.
+            </p>
+          </div>
+          {challenges && challenges.length > 0 && (
+            <dl className="flex shrink-0 items-end gap-6 sm:gap-8">
+              <Stat label="Live" value={live.length} accent={live.length > 0} />
+              <Stat label="Events" value={challenges.length} />
+              <Stat label="Traders" value={traderCount} />
+            </dl>
+          )}
         </section>
 
         {error && (

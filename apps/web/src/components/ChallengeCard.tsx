@@ -36,7 +36,8 @@ export function ChallengeCard({ challenge }: { challenge: Challenge }) {
         <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-sm">
           <span className="flex items-center gap-1.5 text-muted">
             <Users className="size-3.5" />
-            {challenge.participantCount ?? 0} traders
+            {challenge.participantCount ?? 0}{" "}
+            {(challenge.participantCount ?? 0) === 1 ? "trader" : "traders"}
           </span>
           <span className="flex items-center gap-1 font-medium text-accent opacity-0 transition-opacity group-hover:opacity-100">
             Enter <ArrowRight className="size-3.5" />
