@@ -66,6 +66,18 @@
     background: var(--color-accent-subtle);
   }
 
+  /* Native <select> popups inherit a light background from the translucent
+     control; force a solid dark list so it matches the glass theme. */
+  select option {
+    background-color: #0e0e0e;
+    color: var(--color-text);
+  }
+  select option:checked,
+  select option:hover {
+    background-color: #14333a;
+    color: var(--color-accent);
+  }
+
   /* Consistent, visible keyboard focus across all interactive elements. */
   :focus-visible {
     outline: 2px solid var(--color-accent);
