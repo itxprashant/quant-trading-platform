@@ -19,6 +19,9 @@ export const redisKeys = {
   /** Sorted set of recent price points (score = ts). */
   priceHistory: (challengeId: string, symbol: string) =>
     `qtp:phist:${challengeId}:${symbol}`,
+  /** Sorted set of recent mid-price points (score = ts). */
+  priceHistoryMid: (challengeId: string, symbol: string) =>
+    `qtp:phist-mid:${challengeId}:${symbol}`,
   /** Latest order book snapshot JSON per symbol. */
   bookSnapshot: (challengeId: string, symbol: string) =>
     `qtp:book:${challengeId}:${symbol}`,

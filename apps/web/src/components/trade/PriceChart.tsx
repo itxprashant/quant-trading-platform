@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
   LineSeries,
@@ -11,7 +11,8 @@ import {
   type LineData,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { PricePoint } from "@qtp/shared";
+import type { ChartPriceSeries, OrderBookSnapshot, PricePoint } from "@qtp/shared";
+import { midFromBook } from "@qtp/shared";
 import { get } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
@@ -99,13 +100,18 @@ function ticksToLine(points: PricePoint[]): LineData<UTCTimestamp>[] {
 export function PriceChart({
   challengeId,
   symbol,
-  live,
+  lastPrice,
+  book,
 }: {
   challengeId: string;
   symbol: string;
-  live?: PricePoint;
+  /** Last trade / mark price from the engine. */
+  lastPrice?: PricePoint;
+  /** Order book for live mid-price updates. */
+  book?: OrderBookSnapshot;
 }) {
   const [mode, setMode] = useState<ChartMode>("candle");
+  const [priceSeries, setPriceSeries] = useState<ChartPriceSeries>("mid");
   const [hasData, setHasData] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -115,8 +121,22 @@ export function PriceChart({
   const historyRef = useRef<PricePoint[]>([]);
   const currentCandleRef = useRef<Ohlc | null>(null);
   const modeRef = useRef<ChartMode>("candle");
+  const priceSeriesRef = useRef<ChartPriceSeries>("mid");
 
   modeRef.current = mode;
+  priceSeriesRef.current = priceSeries;
+
+  const live = useMemo((): PricePoint | undefined => {
+    if (priceSeries === "last") return lastPrice;
+    const mid = book ? midFromBook(book.bids, book.asks) : null;
+    if (mid == null) return lastPrice;
+    return {
+      symbol,
+      price: mid,
+      change: lastPrice?.change ?? 0,
+      timestamp: lastPrice?.timestamp ?? Date.now(),
+    };
+  }, [priceSeries, lastPrice, book, symbol]);
 
   const applyHistory = useCallback((points: PricePoint[], chartMode: ChartMode) => {
     const session = latestSession(points);
@@ -234,7 +254,9 @@ export function PriceChart({
     currentCandleRef.current = null;
     setHasData(false);
     let cancelled = false;
-    get<PricePoint[]>(`/api/market/${challengeId}/${symbol}/history?limit=500`)
+    get<PricePoint[]>(
+      `/api/market/${challengeId}/${symbol}/history?limit=500&series=${priceSeries}`,
+    )
       .then((points) => {
         if (cancelled) return;
         applyHistory(points, modeRef.current);
@@ -243,7 +265,7 @@ export function PriceChart({
     return () => {
       cancelled = true;
     };
-  }, [challengeId, symbol, applyHistory]);
+  }, [challengeId, symbol, priceSeries, applyHistory]);
 
   // Append live ticks.
   useEffect(() => {
@@ -292,15 +314,46 @@ export function PriceChart({
         value: live.price,
       });
     }
-  }, [live]);
+  }, [live, applyHistory]);
 
   return (
     <div className="relative h-full w-full">
-      <div
-        className="absolute right-2 top-2 z-10 flex rounded-md border border-border bg-surface/90 p-0.5 backdrop-blur-sm"
-        role="group"
-        aria-label="Chart type"
-      >
+      <div className="absolute right-2 top-2 z-10 flex gap-1.5">
+        <div
+          className="flex rounded-md border border-border bg-surface/90 p-0.5 backdrop-blur-sm"
+          role="group"
+          aria-label="Price series"
+        >
+          <button
+            type="button"
+            onClick={() => setPriceSeries("mid")}
+            className={cn(
+              "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
+              priceSeries === "mid"
+                ? "bg-accent-subtle text-text"
+                : "text-muted hover:text-text",
+            )}
+          >
+            Mid
+          </button>
+          <button
+            type="button"
+            onClick={() => setPriceSeries("last")}
+            className={cn(
+              "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
+              priceSeries === "last"
+                ? "bg-accent-subtle text-text"
+                : "text-muted hover:text-text",
+            )}
+          >
+            Last
+          </button>
+        </div>
+        <div
+          className="flex rounded-md border border-border bg-surface/90 p-0.5 backdrop-blur-sm"
+          role="group"
+          aria-label="Chart type"
+        >
         <button
           type="button"
           onClick={() => setMode("candle")}
@@ -325,6 +378,7 @@ export function PriceChart({
         >
           Line
         </button>
+        </div>
       </div>
       <div ref={containerRef} className="h-full w-full" />
       {!hasData && (

@@ -53,6 +53,38 @@ export async function getPriceHistory(
   });
 }
 
+export async function setMidPrice(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+  mid: number,
+  ts: number,
+): Promise<void> {
+  const histKey = redisKeys.priceHistoryMid(challengeId, symbol);
+  await redis
+    .pipeline()
+    .zadd(histKey, ts, JSON.stringify({ price: mid, ts }))
+    .zremrangebyrank(histKey, 0, -(PRICE_HISTORY_MAX + 1))
+    .exec();
+}
+
+export async function getMidPriceHistory(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+  limit = 200,
+): Promise<PricePoint[]> {
+  const raw = await redis.zrange(
+    redisKeys.priceHistoryMid(challengeId, symbol),
+    -limit,
+    -1,
+  );
+  return raw.map((s) => {
+    const { price, ts } = JSON.parse(s) as { price: number; ts: number };
+    return { symbol, price, change: 0, timestamp: ts };
+  });
+}
+
 /* ---- Order book snapshots ---- */
 export async function setBookSnapshot(
   redis: Redis,

@@ -200,7 +200,12 @@ export default function TradePage() {
           </div>
           <div className="h-[300px] p-1 sm:h-[340px] lg:h-[380px]">
             {activeSymbol && (
-              <PriceChart challengeId={challengeId} symbol={activeSymbol} live={livePrice} />
+              <PriceChart
+                challengeId={challengeId}
+                symbol={activeSymbol}
+                lastPrice={livePrice}
+                book={book}
+              />
             )}
           </div>
         </Panel>

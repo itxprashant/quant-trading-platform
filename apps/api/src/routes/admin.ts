@@ -147,6 +147,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       await setPrice(app.redis, challengeId, s.symbol, s.initialPrice, Date.now());
       await app.redis.del(redisKeys.bookSnapshot(challengeId, s.symbol));
       await app.redis.del(redisKeys.priceHistory(challengeId, s.symbol));
+      await app.redis.del(redisKeys.priceHistoryMid(challengeId, s.symbol));
     }
     await app.redis.del(redisKeys.leaderboard(challengeId));
     await clearNewsFeed(app.redis, challengeId);

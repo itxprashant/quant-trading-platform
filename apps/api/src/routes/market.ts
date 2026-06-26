@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { challenges } from "@qtp/db";
-import { getBookSnapshot, getPrice, getPriceHistory } from "@qtp/bus";
-import type { PricePoint } from "@qtp/shared";
+import { getBookSnapshot, getMidPriceHistory, getPrice, getPriceHistory } from "@qtp/bus";
+import type { ChartPriceSeries, PricePoint } from "@qtp/shared";
 
 export async function marketRoutes(app: FastifyInstance): Promise<void> {
   // All symbols + current prices for a challenge.
@@ -45,13 +45,18 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
       challengeId: string;
       symbol: string;
     };
-    const { limit } = req.query as { limit?: string };
-    const history: PricePoint[] = await getPriceHistory(
-      app.redis,
-      challengeId,
-      symbol,
-      limit ? Number(limit) : 200,
-    );
+    const { limit, series } = req.query as {
+      limit?: string;
+      series?: ChartPriceSeries;
+    };
+    const useMid = series !== "last";
+    const cap = limit ? Number(limit) : 200;
+    let history: PricePoint[] = useMid
+      ? await getMidPriceHistory(app.redis, challengeId, symbol, cap)
+      : await getPriceHistory(app.redis, challengeId, symbol, cap);
+    if (useMid && history.length === 0) {
+      history = await getPriceHistory(app.redis, challengeId, symbol, cap);
+    }
     return history;
   });
 

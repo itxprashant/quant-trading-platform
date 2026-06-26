@@ -6,16 +6,18 @@ import {
   publishBroadcast,
   readCommands,
   setBookSnapshot,
+  setMidPrice,
   setPrice,
   setTraderMetrics,
   type Redis,
 } from "@qtp/bus";
 import type { Challenge, Database } from "@qtp/db";
-import type {
-  BroadcastEnvelope,
-  EngineCommand,
-  EngineEvent,
-  TraderMetrics,
+import {
+  midFromBook,
+  type BroadcastEnvelope,
+  type EngineCommand,
+  type EngineEvent,
+  type TraderMetrics,
 } from "@qtp/shared";
 import { env } from "./env.js";
 import { BotEngine } from "./bots.js";
@@ -81,6 +83,8 @@ export class ChallengeRunner {
       const price = this.engine.getPrice(s.symbol) ?? s.initialPrice;
       await setPrice(this.redis, this.challenge.id, s.symbol, price, now);
       const snap = this.engine.snapshot(s.symbol);
+      const mid = midFromBook(snap.bids, snap.asks) ?? price;
+      await setMidPrice(this.redis, this.challenge.id, s.symbol, mid, now);
       await setBookSnapshot(this.redis, this.challenge.id, {
         symbol: s.symbol,
         bids: snap.bids,
@@ -239,6 +243,11 @@ export class ChallengeRunner {
       switch (e.type) {
         case "price_update":
           await setPrice(this.redis, this.challenge.id, e.symbol, e.price, now);
+          {
+            const snap = this.engine.snapshot(e.symbol);
+            const mid = midFromBook(snap.bids, snap.asks) ?? e.price;
+            await setMidPrice(this.redis, this.challenge.id, e.symbol, mid, now);
+          }
           envelopes.push({
             target: "all",
             msg: {
@@ -260,6 +269,12 @@ export class ChallengeRunner {
             asks: e.asks,
             sequence: e.sequence,
           });
+          {
+            const mid = midFromBook(e.bids, e.asks);
+            if (mid != null) {
+              await setMidPrice(this.redis, this.challenge.id, e.symbol, mid, now);
+            }
+          }
           envelopes.push({
             target: "all",
             msg: {
