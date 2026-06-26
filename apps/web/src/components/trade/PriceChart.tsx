@@ -16,14 +16,14 @@ import { midFromBook } from "@qtp/shared";
 import { get } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
-// sRGB equivalents of the OKLCH design tokens (lightweight-charts cannot parse oklch()).
+// Concrete colors mirroring the design tokens (lightweight-charts cannot parse css vars / rgba tokens).
 const CHART = {
-  muted: "#a7a5b0", // --color-muted  oklch(0.73 0.012 280)
-  grid: "#2b2a33", // --color-surface-2  oklch(0.23 0.014 280)
-  border: "#3a3942", // --color-border  oklch(0.3 0.014 280)
-  up: "#34d39e", // --color-up  oklch(0.76 0.14 168)
-  down: "#e86868", // --color-down  oklch(0.67 0.165 22)
-  line: "#9b86e8", // --color-accent  oklch(0.64 0.185 285)
+  muted: "#a1a1aa", // --color-muted (zinc-400)
+  grid: "rgba(255, 255, 255, 0.06)", // --color-surface-2
+  border: "rgba(255, 255, 255, 0.12)", // --color-border
+  up: "#34d399", // --color-up (emerald-400)
+  down: "#f87171", // --color-down (red-400)
+  line: "#22d3ee", // --color-accent (cyan-400)
 } as const;
 
 /** Bucket width for OHLC candles (engine ticks ~1s apart). */
@@ -201,7 +201,7 @@ export function PriceChart({
       layout: {
         background: { color: "transparent" },
         textColor: CHART.muted,
-        fontFamily: "var(--font-mono-geist), monospace",
+        fontFamily: "var(--font-geist-mono), monospace",
         attributionLogo: false,
       },
       grid: {
@@ -320,7 +320,7 @@ export function PriceChart({
     <div className="relative h-full w-full">
       <div className="absolute right-2 top-2 z-10 flex gap-1.5">
         <div
-          className="flex rounded-md border border-border bg-surface/90 p-0.5 backdrop-blur-sm"
+          className="flex rounded-lg border border-border bg-bg/70 p-0.5 backdrop-blur-md"
           role="group"
           aria-label="Price series"
         >
@@ -350,7 +350,7 @@ export function PriceChart({
           </button>
         </div>
         <div
-          className="flex rounded-md border border-border bg-surface/90 p-0.5 backdrop-blur-sm"
+          className="flex rounded-lg border border-border bg-bg/70 p-0.5 backdrop-blur-md"
           role="group"
           aria-label="Chart type"
         >

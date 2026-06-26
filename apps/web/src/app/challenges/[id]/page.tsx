@@ -170,7 +170,7 @@ export default function TradePage() {
                   "flex min-w-[140px] flex-col items-start rounded-lg border px-3 py-2 transition-colors",
                   activeSymbol === s.symbol
                     ? "border-accent bg-accent-subtle/30"
-                    : "border-border bg-surface hover:border-border-strong",
+                    : "border-border bg-surface backdrop-blur-xl hover:border-accent/40",
                 )}
               >
                 <span className="text-xs font-medium">{s.symbol}</span>

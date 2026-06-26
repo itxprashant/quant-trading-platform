@@ -9,7 +9,7 @@ export function Panel({
   return (
     <div
       className={cn(
-        "rounded-lg border border-border bg-surface",
+        "rounded-xl border border-border bg-surface backdrop-blur-xl",
         className,
       )}
       {...props}
@@ -31,7 +31,7 @@ export function PanelHeader({
   return (
     <div
       className={cn(
-        "flex h-10 items-center justify-between border-b border-border px-3",
+        "flex h-10 items-center justify-between border-b border-border px-3.5",
         className,
       )}
     >

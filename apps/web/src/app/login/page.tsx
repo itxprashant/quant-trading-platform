@@ -118,7 +118,7 @@ function LoginInner() {
           </form>
 
           <button
-            className="mt-4 w-full text-center text-sm text-muted hover:text-text"
+            className="mt-4 w-full text-center text-sm text-muted hover:text-accent"
             onClick={() => {
               setMode(mode === "login" ? "register" : "login");
               setError(null);

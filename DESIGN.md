@@ -2,6 +2,11 @@
 
 > Concrete design tokens and rules. The web app mirrors these as CSS variables
 > and a Tailwind v4 `@theme`. Register: product. Theme: dark-first.
+>
+> Current system: **cyan-glass on near-black** (ported from `dashboard-ref`).
+> A near-black `#050505` canvas under a fixed cyan/sky radial-glow gradient,
+> translucent white "glass" surfaces (blur + hairline white borders), a single
+> **cyan** accent, and Geist Sans/Mono.
 
 ## Theme decision
 
@@ -10,67 +15,67 @@ the order book and PnL and making fast decisions over a multi-hour session,
 sometimes in a dim hall." This forces a **dark** terminal-grade theme, lower
 ambient glare, numbers that pop without vibrating.
 
-Color strategy: **Restrained** base (tinted neutrals + one accent) with a few
-**Committed** moments (the active selection rail, the primary CTA, the focused
-chart). Up/down is a separate semantic vocabulary, intentionally not neon.
+Color strategy: a deep near-black canvas with a cyan/sky glow backdrop;
+surfaces are translucent glass (frosted via `backdrop-blur`). A single cyan
+accent marks primary actions, selection, focus, and active nav. Up/down is a
+separate semantic vocabulary (emerald / red).
 
-## Color (OKLCH)
+## Color
 
-Neutrals are tinted toward the brand hue (iris, ~280deg) so the UI never reads as
-flat gray-black. Never `#000`/`#fff`.
+Canvas is near-black; surfaces are translucent white so panels read as frosted
+glass over the glow backdrop. Borders are low-opacity white hairlines.
 
 ### Dark (default)
 
 ```
---bg:            oklch(0.155 0.012 280);  /* app background */
---surface:       oklch(0.190 0.013 280);  /* panels, cards */
---surface-2:     oklch(0.230 0.014 280);  /* raised / hover */
---surface-3:     oklch(0.270 0.015 280);  /* popovers, inputs */
---border:        oklch(0.300 0.014 280);  /* hairlines */
---border-strong: oklch(0.380 0.016 280);  /* emphasized dividers */
---text:          oklch(0.960 0.005 280);  /* primary text */
---text-muted:    oklch(0.730 0.012 280);  /* secondary */
---text-faint:    oklch(0.560 0.012 280);  /* tertiary, axis labels */
+--bg:            #050505;                      /* app background (near-black) */
+--surface:       rgba(255,255,255,0.04);       /* panels, cards (glass) */
+--surface-2:     rgba(255,255,255,0.06);       /* raised / hover */
+--surface-3:     rgba(255,255,255,0.09);       /* popovers, inputs */
+--border:        rgba(255,255,255,0.10);       /* hairlines */
+--border-strong: rgba(255,255,255,0.18);       /* emphasized dividers */
+--text:          #ededed;                      /* primary text */
+--text-muted:    #a1a1aa;                       /* secondary (zinc-400) */
+--text-faint:    #71717a;                       /* tertiary, axis labels (zinc-500) */
 
---accent:        oklch(0.640 0.185 285);  /* iris — primary action/selection */
---accent-hover:  oklch(0.690 0.185 285);
---accent-fg:     oklch(0.985 0.010 285);  /* text on accent */
---accent-subtle: oklch(0.300 0.070 285);  /* accent-tinted background */
+--accent:        #22d3ee;   /* cyan-400 — primary action/selection/focus */
+--accent-hover:  #67e8f9;   /* cyan-300 */
+--accent-fg:     #050505;   /* text on solid accent */
+--accent-subtle: rgba(34,211,238,0.12);  /* accent-tinted glass */
 
---up:            oklch(0.760 0.140 168);  /* gains — refined teal-green */
---up-subtle:     oklch(0.300 0.060 168);
---down:          oklch(0.670 0.165 22);   /* losses — warm rose, not neon */
---down-subtle:   oklch(0.300 0.080 22);
---warning:       oklch(0.800 0.130 75);   /* amber */
---info:          oklch(0.700 0.120 235);  /* blue */
+--up:            #34d399;                 /* gains — emerald-400 */
+--up-subtle:     rgba(52,211,153,0.12);
+--down:          #f87171;                 /* losses — red-400 */
+--down-subtle:   rgba(248,113,113,0.12);
+--warning:       #fbbf24;                 /* amber-400 */
+--info:          #38bdf8;                 /* sky-400 */
 ```
 
-### Light (secondary, for admin/marketing on bright screens)
+### Backdrop
+
+The body sits on `--bg` with a fixed cyan/sky radial-glow:
 
 ```
---bg:            oklch(0.985 0.004 285);
---surface:       oklch(1.000 0 0);
---surface-2:     oklch(0.970 0.005 285);
---border:        oklch(0.910 0.006 285);
---text:          oklch(0.230 0.020 285);
---text-muted:    oklch(0.480 0.018 285);
---accent:        oklch(0.560 0.190 285);
---up:            oklch(0.560 0.130 168);
---down:          oklch(0.560 0.180 22);
+background-image:
+  radial-gradient(circle at 50% 0%,  rgba(6,182,212,0.15) 0%, transparent 60%),
+  radial-gradient(circle at 50% -20%, rgba(56,189,248,0.2) 0%, transparent 70%);
+background-attachment: fixed;
 ```
+
+Scrollbars are thin with a cyan hover thumb (`rgba(34,211,238,0.3)`).
 
 Usage rules:
-- Accent only for primary actions, current selection, focus rings, active nav.
-  Never as decoration or on inactive states.
+- Accent (cyan) only for primary actions, current selection, focus rings, active
+  nav, and hover affordances. Never as bulk decoration.
 - Up/down used for signed numbers, the buy/sell sides of the book, deltas. Always
   pair color with a sign (+/-) or side label so it survives color-blindness.
-- Inactive/disabled states drop chroma toward neutral; never full-saturation.
+- Inactive/disabled states drop toward neutral glass; never full-saturation.
 
 ## Typography
 
-- **UI sans:** Inter (variable), via `next/font`. Fallback: system-ui stack.
-- **Numeric/mono:** Geist Mono (or JetBrains Mono) for all prices, sizes, PnL,
-  order book, leaderboard figures. Always `font-variant-numeric: tabular-nums`.
+- **UI sans:** Geist (variable), via `next/font`. Fallback: system-ui stack.
+- **Numeric/mono:** Geist Mono for all prices, sizes, PnL, order book,
+  leaderboard figures. Always `font-variant-numeric: tabular-nums`.
 - Base size **14px**; scale ratio ~1.2.
 
 ```
@@ -94,17 +99,18 @@ uniform padding. Panels: 16px internal; dense rows (book/ladder): 4-6px vertical
 ## Radius
 
 ```
---radius-sm: 4px;   /* inputs, chips */
---radius-md: 6px;   /* buttons, small cards */
---radius-lg: 10px;  /* panels */
---radius-xl: 14px;  /* modals, feature cards */
+--radius-sm: 6px;   /* chips */
+--radius-md: 8px;   /* small controls */
+--radius-lg: 12px;  /* buttons, inputs */
+--radius-xl: 16px;  /* panels, cards, modals */
 ```
 
-Do not pill everything. Pills only for status badges.
+Glass panels and cards are generously rounded (`rounded-xl`). Do not pill
+everything. Pills only for status badges.
 
 ## Elevation
 
-Dark UI leans on border + a one-step background lift over heavy shadows.
+Glass UI leans on `backdrop-blur` + a hairline white border over heavy shadows.
 
 ```
 --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.30);
@@ -122,11 +128,11 @@ Dark UI leans on border + a one-step background lift over heavy shadows.
 
 ## Components (vocabulary)
 
-- **Button:** solid accent (primary), subtle surface-2 (secondary), ghost
-  (tertiary). Buy = `--up` tinted, Sell = `--down` tinted, with full borders, not
-  side-stripes.
-- **Panel:** `--surface`, 1px `--border`, `--radius-lg`, 16px padding, a compact
-  header row (label + optional control).
+- **Button:** cyan-glass accent (primary: `--accent-subtle` fill, `--accent`
+  text, cyan border), subtle surface-2 (secondary), ghost (tertiary). Buy =
+  `--up` tinted, Sell = `--down` tinted, with full borders, not side-stripes.
+- **Panel:** frosted glass — `--surface`, `backdrop-blur`, 1px `--border`,
+  `--radius-xl`, 16px padding, a compact header row (label + optional control).
 - **Order book row:** two-column ladder, depth bar as a low-opacity background
   fill behind the row (up/down subtle), price in mono.
 - **Stat readout:** small uppercase `--text-faint` label + large mono value;

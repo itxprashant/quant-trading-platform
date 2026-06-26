@@ -8,7 +8,7 @@ export function ChallengeCard({ challenge }: { challenge: Challenge }) {
   const isMM = challenge.type === "market_making";
   return (
     <Link href={`/challenges/${challenge.id}`} className="group block">
-      <Panel className="h-full p-4 transition-colors hover:border-border-strong">
+      <Panel className="h-full p-4 transition-colors hover:border-accent/40">
         <div className="flex items-start justify-between gap-2">
           <Badge tone={isMM ? "info" : "accent"}>
             {isMM ? <Layers className="size-3" /> : <TrendingUp className="size-3" />}
@@ -26,7 +26,7 @@ export function ChallengeCard({ challenge }: { challenge: Challenge }) {
           {challenge.config.symbols.slice(0, 6).map((s) => (
             <span
               key={s.symbol}
-              className="mono rounded-sm border border-border bg-surface-2 px-1.5 py-0.5 text-xs text-muted"
+              className="mono rounded-md border border-border bg-surface-2 px-1.5 py-0.5 text-xs text-muted"
             >
               {s.symbol}
             </span>

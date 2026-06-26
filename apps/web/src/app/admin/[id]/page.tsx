@@ -111,7 +111,7 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
             rows={3}
             maxLength={500}
             placeholder="Market announcement for traders…"
-            className="w-full resize-y rounded-md border border-border bg-surface-3 px-3 py-2 text-sm text-text placeholder:text-faint outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="w-full resize-y rounded-lg border border-border bg-surface-3 px-3 py-2 text-sm text-text placeholder:text-faint outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
           />
         </Field>
         <div className="flex flex-wrap items-end gap-3">
