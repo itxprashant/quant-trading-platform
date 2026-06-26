@@ -185,47 +185,46 @@ export default function TradePage() {
           </div>
         )}
 
-        {/* Top row: chart + portfolio */}
-        <div className="grid gap-3 xl:grid-cols-12">
-          <Panel className="flex flex-col xl:col-span-8">
-            <div className="flex items-center justify-between border-b border-border px-3 py-2">
-              <div className="flex items-baseline gap-2">
-                <span className="text-sm font-semibold">{activeSymbol}</span>
-                {activeCfg?.name && (
-                  <span className="text-xs text-muted">{activeCfg.name}</span>
-                )}
-              </div>
-              {livePrice && (
-                <span className="mono text-sm font-semibold">{money(livePrice.price)}</span>
+        {/* Chart — full width, fixed height (do not stretch to match sidebar) */}
+        <Panel>
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="flex items-baseline gap-2">
+              <span className="text-sm font-semibold">{activeSymbol || "—"}</span>
+              {activeCfg?.name && (
+                <span className="text-xs text-muted">{activeCfg.name}</span>
               )}
             </div>
-            <div className="min-h-[280px] flex-1 p-1 sm:min-h-[320px]">
-              {activeSymbol && (
-                <PriceChart challengeId={challengeId} symbol={activeSymbol} live={livePrice} />
-              )}
-            </div>
-          </Panel>
-
-          <div className="space-y-3 xl:col-span-4">
-            <PortfolioPanel
-              portfolio={portfolio}
-              prices={rt.prices}
-              mm={challenge?.type === "market_making"}
-            />
-            {activeCfg && (
-              <TradeTicket
-                challengeId={challengeId}
-                symbol={activeSymbol}
-                maxQuantity={challenge?.config.maxOrderQuantity ?? 50}
-                price={limitPrice}
-                onPriceChange={setLimitPrice}
-                refPrice={livePrice?.price}
-              />
+            {livePrice && (
+              <span className="mono text-sm font-semibold">{money(livePrice.price)}</span>
             )}
           </div>
+          <div className="h-[300px] p-1 sm:h-[340px] lg:h-[380px]">
+            {activeSymbol && (
+              <PriceChart challengeId={challengeId} symbol={activeSymbol} live={livePrice} />
+            )}
+          </div>
+        </Panel>
+
+        {/* Portfolio + trade ticket */}
+        <div className="grid gap-3 lg:grid-cols-2">
+          <PortfolioPanel
+            portfolio={portfolio}
+            prices={rt.prices}
+            mm={challenge?.type === "market_making"}
+          />
+          {activeCfg && (
+            <TradeTicket
+              challengeId={challengeId}
+              symbol={activeSymbol}
+              maxQuantity={challenge?.config.maxOrderQuantity ?? 50}
+              price={limitPrice}
+              onPriceChange={setLimitPrice}
+              refPrice={livePrice?.price}
+            />
+          )}
         </div>
 
-        {/* Bottom row: book + open orders + leaderboard */}
+        {/* Order book, open orders, leaderboard */}
         <div className="grid gap-3 xl:grid-cols-12">
           <div className="xl:col-span-4">
             <OrderBook
