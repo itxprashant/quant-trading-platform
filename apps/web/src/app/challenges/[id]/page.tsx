@@ -199,7 +199,7 @@ export default function TradePage() {
                 <span className="mono text-sm font-semibold">{money(livePrice.price)}</span>
               )}
             </div>
-            <div className="h-[320px] p-1 sm:h-[380px]">
+            <div className="min-h-[280px] flex-1 p-1 sm:min-h-[320px]">
               {activeSymbol && (
                 <PriceChart challengeId={challengeId} symbol={activeSymbol} live={livePrice} />
               )}

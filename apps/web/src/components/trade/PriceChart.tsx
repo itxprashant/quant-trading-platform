@@ -28,8 +28,38 @@ const CHART = {
 /** Bucket width for OHLC candles (engine ticks ~1s apart). */
 const CANDLE_SEC = 5;
 
+/** Gaps longer than this start a new session (e.g. challenge paused overnight). */
+const SESSION_GAP_MS = 5 * 60 * 1000;
+
+/** Default number of bars visible on load; avoids fitContent squashing. */
+const VISIBLE_BARS = 120;
+
 type ChartMode = "candle" | "line";
 type Ohlc = CandlestickData<UTCTimestamp>;
+
+/** Keep only the latest contiguous run so stale Redis history does not stretch the axis. */
+function latestSession(points: PricePoint[]): PricePoint[] {
+  if (points.length <= 1) return points;
+
+  let start = 0;
+  for (let i = 1; i < points.length; i++) {
+    const cur = points[i];
+    const prev = points[i - 1];
+    if (cur && prev && cur.timestamp - prev.timestamp > SESSION_GAP_MS) {
+      start = i;
+    }
+  }
+  return points.slice(start);
+}
+
+function focusRecentBars(chart: IChartApi, barCount: number) {
+  if (barCount <= 0) return;
+  const visible = Math.min(VISIBLE_BARS, barCount);
+  chart.timeScale().setVisibleLogicalRange({
+    from: barCount - visible,
+    to: barCount - 1,
+  });
+}
 
 function ticksToCandles(points: PricePoint[], intervalSec: number): Ohlc[] {
   const buckets = new Map<number, Ohlc>();
@@ -89,21 +119,25 @@ export function PriceChart({
   modeRef.current = mode;
 
   const applyHistory = useCallback((points: PricePoint[], chartMode: ChartMode) => {
-    historyRef.current = points;
-    if (points.length > 0) setHasData(true);
+    const session = latestSession(points);
+    historyRef.current = session;
+    if (session.length > 0) setHasData(true);
     const series = seriesRef.current;
-    if (!series) return;
+    const chart = chartRef.current;
+    if (!series || !chart) return;
 
     if (chartMode === "candle") {
-      const candles = ticksToCandles(points, CANDLE_SEC);
+      const candles = ticksToCandles(session, CANDLE_SEC);
       (series as ISeriesApi<"Candlestick">).setData(candles);
       const last = candles.at(-1);
       currentCandleRef.current = last ? { ...last } : null;
+      focusRecentBars(chart, candles.length);
     } else {
-      (series as ISeriesApi<"Line">).setData(ticksToLine(points));
+      const line = ticksToLine(session);
+      (series as ISeriesApi<"Line">).setData(line);
       currentCandleRef.current = null;
+      focusRecentBars(chart, line.length);
     }
-    chartRef.current?.timeScale().fitContent();
   }, []);
 
   const mountSeries = useCallback(
@@ -159,6 +193,9 @@ export function PriceChart({
         borderColor: CHART.border,
         timeVisible: true,
         secondsVisible: true,
+        rightOffset: 8,
+        barSpacing: 8,
+        minBarSpacing: 4,
       },
       crosshair: { mode: 0 },
       width: el.clientWidth,
@@ -167,10 +204,14 @@ export function PriceChart({
 
     chartRef.current = chart;
 
-    const ro = new ResizeObserver(() => {
+    const syncSize = () => {
       chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-    });
+    };
+
+    const ro = new ResizeObserver(syncSize);
     ro.observe(el);
+    // Flex layout may settle after first paint; ensure the chart fills the panel.
+    requestAnimationFrame(syncSize);
 
     return () => {
       ro.disconnect();
@@ -208,6 +249,15 @@ export function PriceChart({
   useEffect(() => {
     if (!live || !seriesRef.current) return;
     setHasData(true);
+
+    const prev = historyRef.current.at(-1);
+    if (prev && live.timestamp - prev.timestamp > SESSION_GAP_MS) {
+      historyRef.current = [live];
+      applyHistory([live], modeRef.current);
+      return;
+    }
+
+    historyRef.current = [...historyRef.current, live].slice(-500);
 
     if (modeRef.current === "candle") {
       const bucket =
