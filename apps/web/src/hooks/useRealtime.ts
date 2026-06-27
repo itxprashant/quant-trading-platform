@@ -28,7 +28,15 @@ export interface OrderEvent {
   ts: number;
 }
 
+export interface AlertMsg {
+  id: string;
+  level: "info" | "warning" | "urgent";
+  message: string;
+  ts: number;
+}
+
 const NEWS_MAX = 50;
+const ALERT_MAX = 8;
 
 export interface RealtimeState {
   status: "connecting" | "open" | "closed";
@@ -39,6 +47,10 @@ export interface RealtimeState {
   leaderboard: LeaderboardEntry[];
   news: NewsItem[];
   lastOrder: OrderEvent | null;
+  /** Targeted trader alerts (margin warnings, liquidations, deal pushes). */
+  alerts: AlertMsg[];
+  /** New Eden: published fair value per symbol. */
+  fairValues: Map<string, number>;
 }
 
 type Action =
@@ -79,6 +91,31 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, news: msg.data.slice(0, NEWS_MAX) };
     case "order":
       return { ...state, lastOrder: msg.data };
+    case "fair_value": {
+      const fairValues = new Map(state.fairValues);
+      fairValues.set(msg.data.symbol, msg.data.fairValue);
+      return { ...state, fairValues };
+    }
+    case "alert": {
+      const alert: AlertMsg = {
+        id: `${msg.data.ts}:${msg.data.message}`,
+        level: msg.data.level,
+        message: msg.data.message,
+        ts: msg.data.ts,
+      };
+      return { ...state, alerts: [alert, ...state.alerts].slice(0, ALERT_MAX) };
+    }
+    case "margin_call": {
+      const alert: AlertMsg = {
+        id: `mc:${msg.data.ts}`,
+        level: "urgent",
+        message: msg.data.liquidated
+          ? `Margin call — positions liquidated (free cash $${msg.data.freeCash.toFixed(0)}).`
+          : `Margin warning — free cash $${msg.data.freeCash.toFixed(0)}.`,
+        ts: msg.data.ts,
+      };
+      return { ...state, alerts: [alert, ...state.alerts].slice(0, ALERT_MAX) };
+    }
     default:
       return state;
   }
@@ -93,6 +130,8 @@ const initial: RealtimeState = {
   leaderboard: [],
   news: [],
   lastOrder: null,
+  alerts: [],
+  fairValues: new Map(),
 };
 
 export function useRealtime(challengeId: string | null): RealtimeState {

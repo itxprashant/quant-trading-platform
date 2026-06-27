@@ -36,10 +36,12 @@ async function scoreChallenge(challengeId: string): Promise<void> {
     priceMap.set(s.symbol, p ?? s.initialPrice);
   }
 
+  const isEden = challenge.type === "new_eden";
   const parts = await db
     .select({
       userId: participants.userId,
       cash: participants.cash,
+      loanDebt: participants.loanDebt,
       username: users.username,
       displayName: users.displayName,
       role: users.role,
@@ -73,7 +75,8 @@ async function scoreChallenge(challengeId: string): Promise<void> {
       marketValue += p.quantity * (priceMap.get(p.symbol) ?? 0);
       absInventory += Math.abs(p.quantity);
     }
-    const pnl = part.cash + marketValue;
+    // New Eden nets borrowed money out of wealth (comp_desc Section 1).
+    const pnl = part.cash + marketValue - (isEden ? part.loanDebt : 0);
     const metrics = metricsMap.get(part.userId);
     const score = computeScore(
       {

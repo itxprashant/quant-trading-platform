@@ -20,6 +20,8 @@ import { PortfolioPanel } from "@/components/trade/PortfolioPanel";
 import { OpenOrders } from "@/components/trade/OpenOrders";
 import { Leaderboard } from "@/components/trade/Leaderboard";
 import { NewsTicker } from "@/components/trade/NewsTicker";
+import { BankPanel } from "@/components/trade/BankPanel";
+import { AlertStack } from "@/components/trade/AlertStack";
 import { money, signed, dirClass } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -90,6 +92,7 @@ export default function TradePage() {
   const livePrice = rt.prices.get(activeSymbol);
 
   const metric = challenge?.type === "market_making" ? "score" : "pnl";
+  const isEden = challenge?.type === "new_eden";
 
   const symbolStrip = useMemo(
     () =>
@@ -134,6 +137,8 @@ export default function TradePage() {
       />
 
       {news.length > 0 && <NewsTicker items={news} />}
+
+      <AlertStack alerts={rt.alerts} />
 
       <main id="main" className="mx-auto max-w-[1600px] space-y-3 p-3">
         <div className="flex items-center justify-between">
@@ -194,9 +199,17 @@ export default function TradePage() {
                 <span className="text-xs text-muted">{activeCfg.name}</span>
               )}
             </div>
-            {livePrice && (
-              <span className="mono text-sm font-semibold">{money(livePrice.price)}</span>
-            )}
+            <div className="flex items-baseline gap-3">
+              {isEden && rt.fairValues.get(activeSymbol) != null && (
+                <span className="flex items-baseline gap-1 text-xs text-muted">
+                  <span className="text-[10px] uppercase tracking-wide text-faint">FV</span>
+                  <span className="mono">{money(rt.fairValues.get(activeSymbol)!)}</span>
+                </span>
+              )}
+              {livePrice && (
+                <span className="mono text-sm font-semibold">{money(livePrice.price)}</span>
+              )}
+            </div>
           </div>
           <div className="h-[300px] p-1 sm:h-[340px] lg:h-[380px]">
             {activeSymbol && (
@@ -210,8 +223,8 @@ export default function TradePage() {
           </div>
         </Panel>
 
-        {/* Portfolio + trade ticket */}
-        <div className="grid gap-3 lg:grid-cols-2">
+        {/* Portfolio + trade ticket (+ bank for New Eden) */}
+        <div className={cn("grid gap-3", isEden ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
           <PortfolioPanel
             portfolio={portfolio}
             prices={rt.prices}
@@ -225,6 +238,14 @@ export default function TradePage() {
               price={limitPrice}
               onPriceChange={setLimitPrice}
               refPrice={livePrice?.price}
+            />
+          )}
+          {isEden && (
+            <BankPanel
+              challengeId={challengeId}
+              portfolio={portfolio}
+              multiplier={challenge?.config.eden?.rules.loanRepayMultiplier ?? 2}
+              onChange={() => setOrderRefresh((n) => n + 1)}
             />
           )}
         </div>

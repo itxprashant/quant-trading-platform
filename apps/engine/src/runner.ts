@@ -1,20 +1,24 @@
-import { ChallengeEngine, computeScore } from "@qtp/core";
+import { ChallengeEngine, computeScore, loanBleed } from "@qtp/core";
 import {
   appendEvents,
   createRedis,
+  getFairValue,
   getPrice,
   publishBroadcast,
   readCommands,
   setBookSnapshot,
+  setFairValue,
   setMidPrice,
   setPrice,
   setTraderMetrics,
   type Redis,
 } from "@qtp/bus";
-import type { Challenge, Database } from "@qtp/db";
+import { eq } from "drizzle-orm";
+import { participants, type Challenge, type Database } from "@qtp/db";
 import {
   midFromBook,
   type BroadcastEnvelope,
+  type EdenConfig,
   type EngineCommand,
   type EngineEvent,
   type TraderMetrics,
@@ -38,12 +42,18 @@ export class ChallengeRunner {
   private flushTimer?: NodeJS.Timeout;
   private botTimer?: NodeJS.Timeout;
   private metricsTimer?: NodeJS.Timeout;
+  private minuteTimer?: NodeJS.Timeout;
+  private readonly eden?: EdenConfig;
+  private readonly edenEnabled: boolean;
 
   constructor(
     private readonly redis: Redis,
     private readonly db: Database,
     private readonly challenge: Challenge,
   ) {
+    this.eden =
+      challenge.type === "new_eden" ? challenge.config.eden : undefined;
+    this.edenEnabled = !!this.eden?.rules.enabled;
     this.engine = new ChallengeEngine({
       challengeId: challenge.id,
       symbols: challenge.config.symbols,
@@ -82,6 +92,12 @@ export class ChallengeRunner {
       if (persisted != null) this.engine.restorePrice(s.symbol, persisted);
       const price = this.engine.getPrice(s.symbol) ?? s.initialPrice;
       await setPrice(this.redis, this.challenge.id, s.symbol, price, now);
+      // New Eden: seed/restore fair value (defaults to the initial price).
+      if (this.edenEnabled) {
+        const persistedFv = await getFairValue(this.redis, this.challenge.id, s.symbol);
+        const fv = this.engine.setFairValue(s.symbol, persistedFv ?? s.initialPrice);
+        await setFairValue(this.redis, this.challenge.id, s.symbol, fv);
+      }
       const snap = this.engine.snapshot(s.symbol);
       const mid = midFromBook(snap.bids, snap.asks) ?? price;
       await setMidPrice(this.redis, this.challenge.id, s.symbol, mid, now);
@@ -93,9 +109,26 @@ export class ChallengeRunner {
       });
     }
 
+    // New Eden: restore aggregate loan debt so free cash is correct on restart.
+    if (this.edenEnabled) {
+      const rows = await this.db
+        .select({ userId: participants.userId, loanDebt: participants.loanDebt })
+        .from(participants)
+        .where(eq(participants.challengeId, this.challenge.id));
+      for (const r of rows) {
+        if (r.loanDebt > 0) this.engine.setLoanDebt(r.userId, r.loanDebt);
+      }
+    }
+
     void this.commandLoop();
     if (this.challenge.config.autonomousPrice) {
       this.tickTimer = setInterval(() => void this.tick(), env.tickMs);
+    }
+    if (this.edenEnabled) {
+      this.minuteTimer = setInterval(
+        () => void this.minuteTick(),
+        env.minuteMs,
+      );
     }
     if (this.bots.enabled) {
       this.botTimer = setInterval(() => void this.botTick(), env.botMs);
@@ -119,6 +152,7 @@ export class ChallengeRunner {
     if (this.botTimer) clearInterval(this.botTimer);
     if (this.flushTimer) clearInterval(this.flushTimer);
     if (this.metricsTimer) clearInterval(this.metricsTimer);
+    if (this.minuteTimer) clearInterval(this.minuteTimer);
     await this.persistence.flush().catch(() => {});
     await this.cmdRedis.quit().catch(() => {});
     console.log(`[engine] stopped challenge ${this.challenge.slug}`);
@@ -170,9 +204,90 @@ export class ChallengeRunner {
           side: cmd.side,
           ts: cmd.ts,
         });
+      case "issue_loan":
+        return this.handleIssueLoan(cmd.userId, cmd.loanId, cmd.principal, cmd.ts);
+      case "force_liquidate":
+        return this.liquidate(cmd.userId, cmd.reason, cmd.ts);
+      case "set_fair_value": {
+        const fv = this.engine.setFairValue(cmd.symbol, cmd.fairValue);
+        return [
+          {
+            type: "fair_value",
+            challengeId: this.challenge.id,
+            symbol: cmd.symbol,
+            fairValue: fv,
+            ts: cmd.ts,
+          },
+        ];
+      }
+      case "apply_fv_delta":
+        return cmd.effects.map((e) => ({
+          type: "fair_value" as const,
+          challengeId: this.challenge.id,
+          symbol: e.symbol,
+          fairValue: this.engine.applyFairValueDelta(e.symbol, e.delta),
+          ts: cmd.ts,
+        }));
       default:
         return [];
     }
+  }
+
+  /** Disburse a loan: credit cash, record 2× repayment, notify the trader. */
+  private handleIssueLoan(
+    userId: string,
+    loanId: string,
+    principal: number,
+    ts: number,
+  ): EngineEvent[] {
+    const mult = this.eden?.rules.loanRepayMultiplier ?? 2;
+    const totalRepay = principal * mult;
+    this.engine.issueLoan(userId, principal, totalRepay);
+    return [
+      {
+        type: "loan_update",
+        challengeId: this.challenge.id,
+        userId,
+        loanId,
+        principal,
+        remaining: this.engine.loanDebtOf(userId),
+        status: "active",
+        ts,
+      },
+      {
+        type: "alert",
+        challengeId: this.challenge.id,
+        userId,
+        level: "warning",
+        message: `Loan funded: +$${principal.toFixed(0)} now, $${totalRepay.toFixed(0)} due to the bank.`,
+        ts,
+      },
+    ];
+  }
+
+  /** Flatten a trader's positions at market and emit a margin-call notice. */
+  private liquidate(userId: string, reason: string, ts: number): EngineEvent[] {
+    const freeBefore = this.engine.freeCashOf(userId);
+    const cmds = this.engine.liquidationCommands(userId, ts);
+    const events: EngineEvent[] = [];
+    for (const c of cmds) events.push(...this.engine.placeOrder(c));
+    events.push({
+      type: "margin_call",
+      challengeId: this.challenge.id,
+      userId,
+      freeCash: freeBefore,
+      liquidated: cmds.length > 0,
+      ts,
+    });
+    events.push({
+      type: "alert",
+      challengeId: this.challenge.id,
+      userId,
+      level: "urgent",
+      message: `Margin call — ${reason}. Positions liquidated at market.`,
+      ts,
+    });
+    return events;
   }
 
   /** Drive autonomous bots: apply their commands and broadcast results. */
@@ -229,6 +344,89 @@ export class ChallengeRunner {
         if (ev) events.push(ev);
       }
     }
+    await this.emit(events);
+  }
+
+  /**
+   * New Eden game-minute accrual: cost of carry, predatory loan bleed, and
+   * margin-call enforcement with forced liquidation. Runs once per game-minute.
+   */
+  private async minuteTick(): Promise<void> {
+    if (!this.running || !this.edenEnabled || !this.eden) return;
+    const now = Date.now();
+    const rules = this.eden.rules;
+    const events: EngineEvent[] = [];
+
+    const endsAt = this.challenge.endsAt
+      ? new Date(this.challenge.endsAt).getTime()
+      : null;
+    const minutesLeft = endsAt
+      ? Math.max(1, Math.ceil((endsAt - now) / 60_000))
+      : 30;
+
+    for (const userId of this.engine.accountIds()) {
+      if (!UUID_RE.test(userId)) continue; // skip bots
+
+      // 1. Cost of carry on absolute inventory.
+      const carried = this.engine.applyCarry(
+        userId,
+        rules.costOfCarryPerUnitPerMinute,
+      );
+      if (carried > 0) {
+        events.push({
+          type: "carry_charge",
+          challengeId: this.challenge.id,
+          userId,
+          amount: carried,
+          ts: now,
+        });
+      }
+
+      // 2. Predatory loan bleed — amortise remaining debt over minutes left.
+      const debt = this.engine.loanDebtOf(userId);
+      if (debt > 0) {
+        const due = loanBleed(debt, minutesLeft);
+        const paid = this.engine.repayLoan(userId, due);
+        if (paid > 0) {
+          events.push({
+            type: "loan_update",
+            challengeId: this.challenge.id,
+            userId,
+            loanId: "",
+            principal: 0,
+            remaining: this.engine.loanDebtOf(userId),
+            status: this.engine.loanDebtOf(userId) <= 0 ? "repaid" : "active",
+            ts: now,
+          });
+        }
+      }
+
+      // 3. Margin call when free cash breaches the threshold.
+      const free = this.engine.freeCashOf(userId);
+      if (free <= rules.marginCallThreshold) {
+        if (rules.forcedLiquidation && this.engine.absInventoryOf(userId) > 0) {
+          events.push(...this.liquidate(userId, "free cash exhausted", now));
+        } else {
+          events.push({
+            type: "margin_call",
+            challengeId: this.challenge.id,
+            userId,
+            freeCash: free,
+            liquidated: false,
+            ts: now,
+          });
+          events.push({
+            type: "alert",
+            challengeId: this.challenge.id,
+            userId,
+            level: "urgent",
+            message: `Margin warning — free cash $${free.toFixed(0)}. Reduce risk or borrow.`,
+            ts: now,
+          });
+        }
+      }
+    }
+
     await this.emit(events);
   }
 
@@ -325,6 +523,43 @@ export class ChallengeRunner {
             },
           });
           break;
+        case "carry_charge":
+        case "loan_update":
+          // Cash/debt changed — refresh the trader's portfolio.
+          affectedUsers.add(e.userId);
+          break;
+        case "margin_call":
+          affectedUsers.add(e.userId);
+          envelopes.push({
+            target: e.userId,
+            msg: {
+              type: "margin_call",
+              challengeId: this.challenge.id,
+              data: { freeCash: e.freeCash, liquidated: e.liquidated, ts: e.ts },
+            },
+          });
+          break;
+        case "alert":
+          envelopes.push({
+            target: e.userId,
+            msg: {
+              type: "alert",
+              challengeId: this.challenge.id,
+              data: { level: e.level, message: e.message, ts: e.ts },
+            },
+          });
+          break;
+        case "fair_value":
+          await setFairValue(this.redis, this.challenge.id, e.symbol, e.fairValue);
+          envelopes.push({
+            target: "all",
+            msg: {
+              type: "fair_value",
+              challengeId: this.challenge.id,
+              data: { symbol: e.symbol, fairValue: e.fairValue, ts: e.ts },
+            },
+          });
+          break;
       }
     }
 
@@ -373,6 +608,9 @@ export class ChallengeRunner {
       pnl: pf.pnl,
       score,
       metrics,
+      ...(this.edenEnabled
+        ? { loanDebt: pf.loanDebt, freeCash: pf.freeCash }
+        : {}),
     };
   }
 

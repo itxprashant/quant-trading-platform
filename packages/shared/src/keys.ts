@@ -41,6 +41,20 @@ export const redisKeys = {
   /** Rolling order-quantity sum per user per challenge. */
   volumeLimit: (userId: string, challengeId: string) =>
     `qtp:rl:${userId}:vol:${challengeId}`,
+
+  /* ---- New Eden ---- */
+  /** Hot fair value per symbol. */
+  fairValue: (challengeId: string, symbol: string) =>
+    `qtp:fv:${challengeId}:${symbol}`,
+  /** Set of all symbols that currently have a fair value (for scans). */
+  fairValueSet: (challengeId: string) => `qtp:fvset:${challengeId}`,
+  /** Premium news access flag per user (TTL-bounded). */
+  premiumAccess: (challengeId: string, userId: string) =>
+    `qtp:premium:${challengeId}:${userId}`,
+  /** Set of symbols disabled for trading (dynamic asset lock). */
+  lockedSymbols: (challengeId: string) => `qtp:locked:${challengeId}`,
+  /** Latest fair-value snapshot JSON (all symbols) for quick reads. */
+  fairValueSnapshot: (challengeId: string) => `qtp:fvsnap:${challengeId}`,
 } as const;
 
 export const PRICE_HISTORY_MAX = 1000;

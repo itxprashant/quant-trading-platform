@@ -4,18 +4,22 @@ import {
   challengeNews,
   challenges,
   orders,
+  participants,
   positions,
   trades,
   users,
 } from "@qtp/db";
-import { zPostNewsInput } from "@qtp/shared";
+import { zPostNewsInput, type EngineCommand } from "@qtp/shared";
 import { redisKeys } from "@qtp/shared";
 import {
   clearNewsFeed,
   clearTraderMetrics,
+  getFairValues,
   publishBroadcast,
+  publishCommand,
   pushNews,
   setPrice,
+  setSymbolTradeable,
 } from "@qtp/bus";
 import { z } from "zod";
 import { rateLimit } from "../ratelimit.js";
@@ -103,12 +107,20 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         columns: { displayName: true },
       });
 
+      const embargoUntil =
+        body.embargoSec && body.embargoSec > 0
+          ? new Date(Date.now() + body.embargoSec * 1000)
+          : null;
+
       const [row] = await app.db
         .insert(challengeNews)
         .values({
           challengeId,
           message: body.message,
           level: body.level,
+          kind: body.kind,
+          fvEffects: body.fvEffects ?? null,
+          embargoUntil,
           createdBy: req.user.sub,
         })
         .returning();
@@ -123,9 +135,77 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         { target: "all", msg: { type: "news", challengeId, data: item } },
       ]);
 
+      // Signal news moves fair value via the engine command stream.
+      if (
+        body.kind === "signal" &&
+        body.fvEffects &&
+        body.fvEffects.length > 0
+      ) {
+        const cmd: EngineCommand = {
+          type: "apply_fv_delta",
+          challengeId,
+          effects: body.fvEffects,
+          ts: Date.now(),
+        };
+        await publishCommand(app.redis, challengeId, cmd);
+      }
+
       return { item };
     },
   );
+
+  // Set a symbol's fair value directly (host control).
+  app.post("/:challengeId/fair-value", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      z.object({ symbol: z.string(), fairValue: z.number().positive() }),
+      req.body,
+      reply,
+    );
+    if (!body) return;
+    const cmd: EngineCommand = {
+      type: "set_fair_value",
+      challengeId,
+      symbol: body.symbol,
+      fairValue: body.fairValue,
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challengeId, cmd);
+    return { ok: true };
+  });
+
+  // Read current fair values for the host console.
+  app.get("/:challengeId/fair-value", async (req) => {
+    const { challengeId } = req.params as { challengeId: string };
+    return getFairValues(app.redis, challengeId);
+  });
+
+  // Lock / unlock a symbol for trading (dynamic asset introduction).
+  app.post("/:challengeId/tradeable", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      z.object({ symbol: z.string(), tradeable: z.boolean() }),
+      req.body,
+      reply,
+    );
+    if (!body) return;
+    await setSymbolTradeable(app.redis, challengeId, body.symbol, body.tradeable);
+    await publishBroadcast(app.redis, challengeId, [
+      {
+        target: "all",
+        msg: {
+          type: "alert",
+          challengeId,
+          data: {
+            level: "info",
+            message: `${body.symbol} is now ${body.tradeable ? "tradeable" : "locked"}.`,
+            ts: Date.now(),
+          },
+        },
+      },
+    ]);
+    return { ok: true };
+  });
 
   // Reset trading state for a single challenge (orders, trades, positions, prices).
   app.post("/:challengeId/reset", async (req, reply) => {
@@ -148,10 +228,18 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       await app.redis.del(redisKeys.bookSnapshot(challengeId, s.symbol));
       await app.redis.del(redisKeys.priceHistory(challengeId, s.symbol));
       await app.redis.del(redisKeys.priceHistoryMid(challengeId, s.symbol));
+      await app.redis.del(redisKeys.fairValue(challengeId, s.symbol));
     }
     await app.redis.del(redisKeys.leaderboard(challengeId));
+    await app.redis.del(redisKeys.fairValueSet(challengeId));
+    await app.redis.del(redisKeys.lockedSymbols(challengeId));
     await clearNewsFeed(app.redis, challengeId);
     await clearTraderMetrics(app.redis, challengeId);
+    // New Eden: clear outstanding loan debt on the participant ledger.
+    await app.db
+      .update(participants)
+      .set({ loanDebt: 0 })
+      .where(eq(participants.challengeId, challengeId));
     // Signal engines to reload this challenge from scratch.
     await app.redis.publish(`qtp:control:${challengeId}`, "reset");
 

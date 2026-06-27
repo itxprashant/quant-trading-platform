@@ -78,6 +78,26 @@ export function PortfolioPanel({
                 className={cn("text-sm font-semibold", dirClass(portfolio.pnl))}
               />
             </div>
+            {portfolio.freeCash !== undefined && (
+              <div className="flex items-center justify-between px-3 py-2">
+                <span className="text-sm text-muted">Free cash</span>
+                <FlashValue
+                  value={portfolio.freeCash}
+                  format={(n) => money(n)}
+                  className={cn(
+                    "text-sm font-semibold",
+                    portfolio.freeCash <= 0 ? "text-down" : "text-text",
+                  )}
+                />
+              </div>
+            )}
+            {portfolio.loanDebt !== undefined && portfolio.loanDebt > 0 && (
+              <Stat
+                label="Loan debt"
+                value={money(portfolio.loanDebt)}
+                tone="text-down"
+              />
+            )}
             <div className="flex items-center justify-between px-3 py-2">
               <span className="text-sm text-muted">Score</span>
               <FlashValue
@@ -87,6 +107,26 @@ export function PortfolioPanel({
               />
             </div>
           </div>
+
+          {portfolio.bonds && portfolio.bonds.length > 0 && (
+            <div className="border-t border-border">
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-faint">
+                Bonds
+              </div>
+              {portfolio.bonds.map((b) => (
+                <div
+                  key={b.bondId}
+                  className="grid grid-cols-[1fr_auto_auto] gap-2 px-3 py-1.5 text-xs"
+                >
+                  <span>{b.name}</span>
+                  <span className="mono text-right text-muted">×{b.quantity}</span>
+                  <span className="mono text-right text-up">
+                    {money(b.couponsPaid)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {metrics && (
             <div className="grid grid-cols-2 gap-px border-t border-border bg-border">

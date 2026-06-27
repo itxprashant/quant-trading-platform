@@ -85,6 +85,75 @@ export async function getMidPriceHistory(
   });
 }
 
+/* ---- New Eden: fair value ---- */
+export async function setFairValue(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+  fairValue: number,
+): Promise<void> {
+  await redis
+    .pipeline()
+    .set(redisKeys.fairValue(challengeId, symbol), String(fairValue))
+    .sadd(redisKeys.fairValueSet(challengeId), symbol)
+    .exec();
+}
+
+export async function getFairValue(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+): Promise<number | null> {
+  const v = await redis.get(redisKeys.fairValue(challengeId, symbol));
+  return v == null ? null : Number(v);
+}
+
+export async function getFairValues(
+  redis: Redis,
+  challengeId: string,
+): Promise<Record<string, number>> {
+  const symbols = await redis.smembers(redisKeys.fairValueSet(challengeId));
+  if (symbols.length === 0) return {};
+  const vals = await redis.mget(
+    ...symbols.map((s) => redisKeys.fairValue(challengeId, s)),
+  );
+  const out: Record<string, number> = {};
+  symbols.forEach((s, i) => {
+    const v = vals[i];
+    if (v != null) out[s] = Number(v);
+  });
+  return out;
+}
+
+/* ---- New Eden: locked (untradeable) symbols ---- */
+export async function setSymbolTradeable(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+  tradeable: boolean,
+): Promise<void> {
+  const key = redisKeys.lockedSymbols(challengeId);
+  if (tradeable) await redis.srem(key, symbol);
+  else await redis.sadd(key, symbol);
+}
+
+export async function getLockedSymbols(
+  redis: Redis,
+  challengeId: string,
+): Promise<string[]> {
+  return redis.smembers(redisKeys.lockedSymbols(challengeId));
+}
+
+export async function isSymbolLocked(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+): Promise<boolean> {
+  return (
+    (await redis.sismember(redisKeys.lockedSymbols(challengeId), symbol)) === 1
+  );
+}
+
 /* ---- Order book snapshots ---- */
 export async function setBookSnapshot(
   redis: Redis,

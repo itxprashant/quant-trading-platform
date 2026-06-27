@@ -2,7 +2,13 @@ import { createServer } from "node:http";
 import { eq } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer } from "ws";
-import { createRedis, getBookSnapshot, getNewsFeed, getPrice } from "@qtp/bus";
+import {
+  createRedis,
+  getBookSnapshot,
+  getFairValues,
+  getNewsFeed,
+  getPrice,
+} from "@qtp/bus";
 import { challenges, getDb } from "@qtp/db";
 import type {
   BroadcastEnvelope,
@@ -86,6 +92,15 @@ async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
   const news = await getNewsFeed(redis, challengeId);
   if (news.length > 0) {
     send(conn, { type: "news_feed", challengeId, data: news });
+  }
+  // New Eden: deliver current fair values so late joiners see them.
+  const fvs = await getFairValues(redis, challengeId);
+  for (const [symbol, fairValue] of Object.entries(fvs)) {
+    send(conn, {
+      type: "fair_value",
+      challengeId,
+      data: { symbol, fairValue, ts: Date.now() },
+    });
   }
 }
 

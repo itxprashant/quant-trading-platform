@@ -8,6 +8,7 @@ import type {
   Challenge,
   ChallengeType,
   CreateChallengeInput,
+  EdenConfig,
   ScoringConfig,
   SymbolConfig,
 } from "@qtp/shared";
@@ -36,6 +37,34 @@ function defaultScoring(type: ChallengeType): ScoringConfig {
         pnlWeight: 0.25,
       }
     : { kind: "directional", pnlWeight: 1 };
+}
+
+/** Sensible New Eden defaults matching comp_desc.txt rules. */
+function defaultEden(): EdenConfig {
+  return {
+    rules: {
+      enabled: true,
+      costOfCarryPerUnitPerMinute: 1,
+      loanRepayMultiplier: 2,
+      marginCallThreshold: 0,
+      forcedLiquidation: true,
+      positionCap: 100,
+    },
+    bots: {
+      hftMarketMakers: 2,
+      momentumTraders: 4,
+      vegaSnipers: 0,
+      parityArbers: 0,
+      spread: 1,
+      quoteSize: 10,
+      intensity: 0.5,
+    },
+    options: { enabled: false, underlyings: [], cycleMinutes: 5, exerciseWindowSec: 15 },
+    auctionDurationSec: 30,
+    auctionWinnerFraction: 0.3,
+    premiumLeadSec: 10,
+    premiumAccessMinutes: 15,
+  };
 }
 
 export function ChallengeForm({ existing }: { existing?: Challenge }) {
@@ -68,6 +97,9 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
       intensity: 0.5,
     },
   );
+  const [eden, setEden] = useState<EdenConfig>(
+    existing?.config.eden ?? defaultEden(),
+  );
   const [startsAt, setStartsAt] = useState(
     existing?.startsAt ? existing.startsAt.slice(0, 16) : "",
   );
@@ -80,6 +112,11 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
   function changeType(t: ChallengeType) {
     setType(t);
     setScoring(defaultScoring(t));
+    if (t === "new_eden") {
+      // New Eden defaults: ±100 inventory cap, margin enabled (the bank).
+      setCfg((c) => ({ ...c, minPosition: -100, maxPosition: 100, allowMargin: true }));
+      setEden((e) => e ?? defaultEden());
+    }
   }
 
   function updateSymbol(i: number, patch: Partial<SymbolConfig>) {
@@ -104,6 +141,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
           ...(bots.marketMakers > 0 || bots.noiseTraders > 0
             ? { bots }
             : {}),
+          ...(type === "new_eden" ? { eden } : {}),
         },
         scoring,
         startsAt: startsAt ? new Date(startsAt).toISOString() : null,
@@ -153,6 +191,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
             <Select value={type} onChange={(e) => changeType(e.target.value as ChallengeType)}>
               <option value="directional">Directional (PnL race)</option>
               <option value="market_making">Market making</option>
+              <option value="new_eden">New Eden Exchange</option>
             </Select>
           </Field>
         </div>
@@ -259,6 +298,98 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
           </Field>
         </div>
       </Panel>
+
+      {type === "new_eden" && (
+        <Panel className="p-4">
+          <h3 className="mb-1 text-sm font-semibold">New Eden economy</h3>
+          <p className="mb-3 text-xs text-muted">
+            The central bank charges a holding fee per unit of inventory, lends at a
+            punitive multiple, and force-liquidates traders whose free cash goes
+            negative. Options, bonds, ETFs, OTC deals, auctions, votes and grants
+            are driven live from the host console.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Carry / unit / min" hint="Holding fee per |unit| each game-minute.">
+              {numField(
+                eden.rules.costOfCarryPerUnitPerMinute,
+                (n) => setEden({ ...eden, rules: { ...eden.rules, costOfCarryPerUnitPerMinute: Math.max(0, n) } }),
+                0.5,
+              )}
+            </Field>
+            <Field label="Loan repay ×" hint="Borrow X, repay this × X.">
+              {numField(
+                eden.rules.loanRepayMultiplier,
+                (n) => setEden({ ...eden, rules: { ...eden.rules, loanRepayMultiplier: Math.max(1, n) } }),
+                0.5,
+              )}
+            </Field>
+            <Field label="Position cap" hint="Absolute inventory breach threshold.">
+              {numField(
+                eden.rules.positionCap,
+                (n) => setEden({ ...eden, rules: { ...eden.rules, positionCap: Math.max(1, Math.round(n)) } }),
+              )}
+            </Field>
+            <Field label="Margin call at free cash ≤">
+              {numField(
+                eden.rules.marginCallThreshold,
+                (n) => setEden({ ...eden, rules: { ...eden.rules, marginCallThreshold: n } }),
+              )}
+            </Field>
+            <Field label="Force liquidate">
+              <Select
+                value={String(eden.rules.forcedLiquidation)}
+                onChange={(e) => setEden({ ...eden, rules: { ...eden.rules, forcedLiquidation: e.target.value === "true" } })}
+              >
+                <option value="true">Yes</option>
+                <option value="false">No</option>
+              </Select>
+            </Field>
+          </div>
+          <h4 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-faint">
+            Bot ecosystem
+          </h4>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="HFT market makers">
+              {numField(
+                eden.bots?.hftMarketMakers ?? 0,
+                (n) => setEden({ ...eden, bots: { ...defaultEden().bots!, ...eden.bots, hftMarketMakers: Math.max(0, Math.min(10, Math.round(n))) } }),
+              )}
+            </Field>
+            <Field label="Momentum traders">
+              {numField(
+                eden.bots?.momentumTraders ?? 0,
+                (n) => setEden({ ...eden, bots: { ...defaultEden().bots!, ...eden.bots, momentumTraders: Math.max(0, Math.min(30, Math.round(n))) } }),
+              )}
+            </Field>
+            <Field label="Vega snipers">
+              {numField(
+                eden.bots?.vegaSnipers ?? 0,
+                (n) => setEden({ ...eden, bots: { ...defaultEden().bots!, ...eden.bots, vegaSnipers: Math.max(0, Math.min(10, Math.round(n))) } }),
+              )}
+            </Field>
+            <Field label="Parity arbers">
+              {numField(
+                eden.bots?.parityArbers ?? 0,
+                (n) => setEden({ ...eden, bots: { ...defaultEden().bots!, ...eden.bots, parityArbers: Math.max(0, Math.min(10, Math.round(n))) } }),
+              )}
+            </Field>
+            <Field label="MM half-spread">
+              {numField(
+                eden.bots?.spread ?? 1,
+                (n) => setEden({ ...eden, bots: { ...defaultEden().bots!, ...eden.bots, spread: Math.max(0, n) } }),
+                0.1,
+              )}
+            </Field>
+            <Field label="Intensity (0-1)">
+              {numField(
+                eden.bots?.intensity ?? 0.5,
+                (n) => setEden({ ...eden, bots: { ...defaultEden().bots!, ...eden.bots, intensity: Math.max(0, Math.min(1, n)) } }),
+                0.1,
+              )}
+            </Field>
+          </div>
+        </Panel>
+      )}
 
       <Panel className="p-4">
         <h3 className="mb-3 text-sm font-semibold">Scoring</h3>

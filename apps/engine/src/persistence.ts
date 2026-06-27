@@ -94,6 +94,7 @@ export class Persistence {
         for (const userId of users) {
           if (!isUuid(userId)) continue; // skip bot/synthetic ids
           const cash = this.engine.cashOf(userId);
+          const loanDebt = this.engine.loanDebtOf(userId);
           await tx
             .insert(participants)
             .values({
@@ -101,10 +102,11 @@ export class Persistence {
               userId,
               startingCash: 0,
               cash,
+              loanDebt,
             })
             .onConflictDoUpdate({
               target: [participants.challengeId, participants.userId],
-              set: { cash },
+              set: { cash, loanDebt },
             });
 
           for (const pos of this.engine.allPositions(userId)) {

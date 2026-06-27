@@ -72,6 +72,68 @@ async function main() {
     autonomousPrice: true,
   };
 
+  const edenConfig: ChallengeConfig = {
+    symbols: [
+      { symbol: "AERIUM", name: "Aerium Dynamics", initialPrice: 1000, volatility: 4, tickSize: 0.5 },
+      { symbol: "HELION", name: "Helion Power", initialPrice: 250, volatility: 1.5, tickSize: 0.1 },
+      { symbol: "VESTA", name: "Vesta Logistics", initialPrice: 80, volatility: 0.8, tickSize: 0.05 },
+    ],
+    startingCash: 10000,
+    minPosition: -100,
+    maxPosition: 100,
+    maxOrderQuantity: 50,
+    maxOrdersPerSecond: 8,
+    maxVolumePerMinute: 1000,
+    allowMargin: true,
+    autonomousPrice: true,
+    eden: {
+      rules: {
+        enabled: true,
+        costOfCarryPerUnitPerMinute: 1,
+        loanRepayMultiplier: 2,
+        marginCallThreshold: 0,
+        forcedLiquidation: true,
+        positionCap: 100,
+      },
+      bots: {
+        hftMarketMakers: 2,
+        momentumTraders: 4,
+        vegaSnipers: 0,
+        parityArbers: 0,
+        spread: 1,
+        quoteSize: 10,
+        intensity: 0.5,
+      },
+      options: { enabled: true, underlyings: ["AERIUM"], cycleMinutes: 5, exerciseWindowSec: 15 },
+      bonds: [
+        { id: "standard", name: "Treasury 5Y", price: 950, faceValue: 1000, couponPer5Min: 10, maxPerUser: 5 },
+        {
+          id: "aerium_pegged",
+          name: "Aerium-Pegged Note",
+          price: 1000,
+          faceValue: 1000,
+          peggedYield: { symbol: "AERIUM", base: 2000, divisor: 10 },
+          maxPerUser: 3,
+        },
+      ],
+      etfs: [
+        {
+          symbol: "ORBITAL",
+          name: "Orbital Index ETF",
+          basket: [
+            { symbol: "AERIUM", weight: 1 },
+            { symbol: "HELION", weight: 2 },
+            { symbol: "VESTA", weight: 4 },
+          ],
+        },
+      ],
+      auctionDurationSec: 30,
+      auctionWinnerFraction: 0.3,
+      premiumLeadSec: 10,
+      premiumAccessMinutes: 15,
+    },
+  };
+
   const inserted = await db
     .insert(challenges)
     .values([
@@ -93,6 +155,17 @@ async function main() {
         status: "scheduled",
         config: mmConfig,
         scoring: defaultScoringFor("market_making"),
+        createdBy: admin?.id ?? null,
+      },
+      {
+        slug: slugify("New Eden Exchange"),
+        name: "New Eden Exchange",
+        description:
+          "Full-economy tournament: margin & predatory loans, cost of carry, fair value, signal/noise news, options, bonds, ETFs, OTC deals, blind auctions, votes, and grants — all driven live from the host console.",
+        type: "new_eden",
+        status: "scheduled",
+        config: edenConfig,
+        scoring: defaultScoringFor("new_eden"),
         createdBy: admin?.id ?? null,
       },
     ])

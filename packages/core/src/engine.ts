@@ -6,6 +6,7 @@ import {
   type SymbolConfig,
 } from "@qtp/shared";
 import { OrderBook, type RestingOrder } from "./order-book.js";
+import { carryCharge, freeCash, liquidationLegs } from "./margin.js";
 
 export interface EngineConfig {
   challengeId: string;
@@ -34,6 +35,8 @@ interface Account {
   cash: number;
   positions: Map<string, PositionState>;
   metrics: AccountMetrics;
+  /** New Eden: outstanding loan debt owed to the bank. */
+  loanDebt: number;
 }
 
 export interface TraderMetricsOut {
@@ -54,6 +57,8 @@ export interface PlaceOrderCommand {
   quantity: number;
   price: number | null;
   ts: number;
+  /** Bypass the per-order quantity cap (forced liquidation, assignment). */
+  force?: boolean;
 }
 
 export interface CancelOrderCommand {
@@ -76,6 +81,7 @@ export class ChallengeEngine {
   private readonly cfg: EngineConfig;
   private readonly books = new Map<string, OrderBook>();
   private readonly prices = new Map<string, number>();
+  private readonly fairValues = new Map<string, number>();
   private readonly symbolCfg = new Map<string, SymbolConfig>();
   private readonly accounts = new Map<string, Account>();
   private seq = 0;
@@ -126,6 +132,8 @@ export class ChallengeEngine {
     positions: Array<{ symbol: string; quantity: number; avgPrice: number }>;
     marketValue: number;
     pnl: number;
+    loanDebt: number;
+    freeCash: number;
   } {
     const acct = this.ensureAccount(userId);
     let marketValue = 0;
@@ -140,7 +148,16 @@ export class ChallengeEngine {
       if (p.qty !== 0)
         positions.push({ symbol, quantity: p.qty, avgPrice: p.avgCost });
     }
-    return { cash: acct.cash, positions, marketValue, pnl: acct.cash + marketValue };
+    // PnL nets out loan debt — borrowed cash is not wealth (comp_desc S1).
+    const pnl = acct.cash + marketValue - acct.loanDebt;
+    return {
+      cash: acct.cash,
+      positions,
+      marketValue,
+      pnl,
+      loanDebt: acct.loanDebt,
+      freeCash: freeCash({ cash: acct.cash, marketValue, loanDebt: acct.loanDebt }),
+    };
   }
 
   /** Iterate every account that has traded (for leaderboard building). */
@@ -165,6 +182,86 @@ export class ChallengeEngine {
   }
 
   /* ----------------------------------------------------------------- *
+   * New Eden — bank, carry, margin, liquidation
+   * ----------------------------------------------------------------- */
+  loanDebtOf(userId: string): number {
+    return this.ensureAccount(userId).loanDebt;
+  }
+
+  /** Restore loan debt from persistence (engine restart). */
+  setLoanDebt(userId: string, amount: number): void {
+    this.ensureAccount(userId).loanDebt = Math.max(0, amount);
+  }
+
+  /** Disburse a loan: credit cash, record total to repay (principal×mult). */
+  issueLoan(userId: string, principal: number, totalRepay: number): void {
+    const acct = this.ensureAccount(userId);
+    acct.cash += principal;
+    acct.loanDebt += totalRepay;
+  }
+
+  /**
+   * Apply a loan repayment from cash, capped at the outstanding balance and at
+   * available cash. Returns the amount actually paid.
+   */
+  repayLoan(userId: string, amount: number): number {
+    const acct = this.ensureAccount(userId);
+    const pay = Math.max(0, Math.min(amount, acct.loanDebt));
+    acct.cash -= pay;
+    acct.loanDebt = Math.max(0, acct.loanDebt - pay);
+    return pay;
+  }
+
+  freeCashOf(userId: string): number {
+    return this.portfolioOf(userId).freeCash;
+  }
+
+  /** Total absolute inventory across symbols for a user. */
+  absInventoryOf(userId: string): number {
+    let inv = 0;
+    for (const p of this.ensureAccount(userId).positions.values())
+      inv += Math.abs(p.qty);
+    return inv;
+  }
+
+  /**
+   * Charge the per-minute holding fee against a user's cash. Returns the
+   * amount charged (0 if flat). Does not emit events — the caller decides.
+   */
+  applyCarry(userId: string, ratePerUnitPerMinute: number): number {
+    const charge = carryCharge(
+      this.absInventoryOf(userId),
+      ratePerUnitPerMinute,
+    );
+    if (charge > 0) this.ensureAccount(userId).cash -= charge;
+    return charge;
+  }
+
+  /** Market orders that flatten a user's book, for forced liquidation. */
+  liquidationCommands(userId: string, ts: number): PlaceOrderCommand[] {
+    const acct = this.ensureAccount(userId);
+    const legs = liquidationLegs(
+      [...acct.positions.entries()].map(([symbol, p]) => ({
+        symbol,
+        quantity: p.qty,
+      })),
+    );
+    let n = 0;
+    return legs.map((leg) => ({
+      orderId: `liq:${userId}:${ts}:${++n}`,
+      userId,
+      symbol: leg.symbol,
+      side: leg.side,
+      orderType: "market" as OrderType,
+      quantity: leg.quantity,
+      price: null,
+      ts,
+      // Liquidation must bypass the per-order quantity cap.
+      force: true,
+    }));
+  }
+
+  /* ----------------------------------------------------------------- *
    * Commands
    * ----------------------------------------------------------------- */
   placeOrder(cmd: PlaceOrderCommand): EngineEvent[] {
@@ -173,7 +270,10 @@ export class ChallengeEngine {
     if (!book) {
       return [this.rejected(cmd, "unknown symbol")];
     }
-    if (cmd.quantity <= 0 || cmd.quantity > this.cfg.maxOrderQuantity) {
+    if (cmd.quantity <= 0) {
+      return [this.rejected(cmd, "invalid quantity")];
+    }
+    if (!cmd.force && cmd.quantity > this.cfg.maxOrderQuantity) {
       return [this.rejected(cmd, "invalid quantity")];
     }
     if (cmd.orderType === "limit" && (cmd.price == null || cmd.price <= 0)) {
@@ -370,6 +470,32 @@ export class ChallengeEngine {
   }
 
   /* ----------------------------------------------------------------- *
+   * New Eden — fair value (separate from last-trade price)
+   * ----------------------------------------------------------------- */
+  getFairValue(symbol: string): number | undefined {
+    return this.fairValues.get(symbol);
+  }
+
+  getFairValues(): Record<string, number> {
+    return Object.fromEntries(this.fairValues);
+  }
+
+  /** Set a symbol's fair value absolutely. Returns the new FV. */
+  setFairValue(symbol: string, fairValue: number): number {
+    const fv = Math.max(0, fairValue);
+    this.fairValues.set(symbol, fv);
+    return fv;
+  }
+
+  /** Apply an additive delta to a symbol's fair value (signal news). */
+  applyFairValueDelta(symbol: string, delta: number): number {
+    const cur = this.fairValues.get(symbol) ?? this.prices.get(symbol) ?? 0;
+    const fv = Math.max(0, cur + delta);
+    this.fairValues.set(symbol, fv);
+    return fv;
+  }
+
+  /* ----------------------------------------------------------------- *
    * Internals
    * ----------------------------------------------------------------- */
   private capacity(userId: string, symbol: string, side: OrderSide): number {
@@ -523,6 +649,7 @@ export class ChallengeEngine {
           spreadCapture: 0,
           quoteUptimeMs: 0,
         },
+        loanDebt: 0,
       };
       this.accounts.set(userId, acct);
     }

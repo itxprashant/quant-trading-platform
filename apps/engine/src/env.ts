@@ -14,4 +14,6 @@ export const env = {
   botMs: Number(process.env.ENGINE_BOT_MS ?? 1200),
   /** Trader-metrics publish interval (ms). */
   metricsMs: Number(process.env.ENGINE_METRICS_MS ?? 1000),
+  /** New Eden game-minute interval (ms) for carry/loan/margin accrual. */
+  minuteMs: Number(process.env.ENGINE_MINUTE_MS ?? 60_000),
 };

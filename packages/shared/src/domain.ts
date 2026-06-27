@@ -33,6 +33,11 @@ export const ChallengeType = {
   Directional: "directional",
   /** Score rewards spread capture, quote uptime, penalizes inventory. */
   MarketMaking: "market_making",
+  /**
+   * "New Eden Exchange" tournament: margin/loans, cost of carry, fair value,
+   * signal/noise news, options/bonds/ETF, OTC, auctions, votes, grants.
+   */
+  NewEden: "new_eden",
 } as const;
 export type ChallengeType = (typeof ChallengeType)[keyof typeof ChallengeType];
 
@@ -59,6 +64,7 @@ export const zOrderStatus = z.enum([
 export const zChallengeType = z.enum([
   ChallengeType.Directional,
   ChallengeType.MarketMaking,
+  ChallengeType.NewEden,
 ]);
 export const zChallengeStatus = z.enum([
   ChallengeStatus.Draft,

@@ -3,7 +3,12 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { challenges, orders, participants } from "@qtp/db";
 import { zPlaceOrderInput, type EngineCommand } from "@qtp/shared";
-import { checkRateLimit, checkVolumeLimit, publishCommand } from "@qtp/bus";
+import {
+  checkRateLimit,
+  checkVolumeLimit,
+  isSymbolLocked,
+  publishCommand,
+} from "@qtp/bus";
 import { validate } from "../util.js";
 import { rateLimit } from "../ratelimit.js";
 
@@ -25,6 +30,9 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       }
       if (!challenge.config.symbols.some((s) => s.symbol === input.symbol)) {
         return reply.code(400).send({ error: "unknown_symbol" });
+      }
+      if (await isSymbolLocked(app.redis, input.challengeId, input.symbol)) {
+        return reply.code(409).send({ error: "symbol_locked" });
       }
       if (input.type === "limit" && input.price == null) {
         return reply.code(400).send({ error: "limit_requires_price" });
