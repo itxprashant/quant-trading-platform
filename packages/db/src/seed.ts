@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { inArray } from "drizzle-orm";
 import { defaultScoringFor, type ChallengeConfig } from "@qtp/shared";
 import { createDb } from "./client.js";
 import { challenges, participants, users } from "./schema.js";
@@ -35,11 +36,18 @@ async function main() {
     passwordHash: hash("trader1234"),
     role: "trader" as const,
   }));
+  await db.insert(users).values(traderRows).onConflictDoNothing();
+  // Re-read by username so re-seeding a populated DB still resolves trader ids
+  // (onConflictDoNothing().returning() yields nothing for rows that already exist).
   const traders = await db
-    .insert(users)
-    .values(traderRows)
-    .onConflictDoNothing()
-    .returning();
+    .select()
+    .from(users)
+    .where(
+      inArray(
+        users.username,
+        traderRows.map((t) => t.username),
+      ),
+    );
 
   const directionalConfig: ChallengeConfig = {
     symbols: [
@@ -172,8 +180,12 @@ async function main() {
     .onConflictDoNothing()
     .returning();
 
-  const liveChallenge = inserted.find((c) => c.status === "live") ?? inserted[0];
-  if (liveChallenge) {
+  const allChallenges = inserted.length
+    ? inserted
+    : await db.select().from(challenges);
+  const liveChallenge =
+    allChallenges.find((c) => c.status === "live") ?? allChallenges[0];
+  if (liveChallenge && traders.length) {
     await db
       .insert(participants)
       .values(
