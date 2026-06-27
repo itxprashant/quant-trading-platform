@@ -33,7 +33,7 @@ export function TopBar({ center, className }: { center?: ReactNode; className?: 
       <div className="flex items-center gap-6">
         <Brand />
         <nav className="hidden items-center gap-1 text-sm text-muted md:flex">
-          <Link href="/" className="rounded-lg px-2.5 py-1.5 hover:bg-surface-2 hover:text-accent">
+          <Link href="/challenges" className="rounded-lg px-2.5 py-1.5 hover:bg-surface-2 hover:text-accent">
             Challenges
           </Link>
           {user?.role === "admin" && (

@@ -12,7 +12,7 @@ import { ApiError } from "@/lib/api";
 function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get("next") ?? "/";
+  const next = params.get("next") ?? "/challenges";
   const { login, register } = useAuth();
 
   const [mode, setMode] = useState<"login" | "register">("login");

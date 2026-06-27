@@ -107,7 +107,7 @@ export default function TradePage() {
         <TopBar />
         <div className="mx-auto max-w-md px-4 py-24 text-center">
           <h1 className="text-lg font-semibold">Challenge not found</h1>
-          <Link href="/" className="mt-2 inline-block text-sm text-accent hover:underline">
+          <Link href="/challenges" className="mt-2 inline-block text-sm text-accent hover:underline">
             Back to challenges
           </Link>
         </div>
@@ -138,7 +138,7 @@ export default function TradePage() {
       <main id="main" className="mx-auto max-w-[1600px] space-y-3 p-3">
         <div className="flex items-center justify-between">
           <Link
-            href="/"
+            href="/challenges"
             className="flex items-center gap-1 text-sm text-muted hover:text-text"
           >
             <ChevronLeft className="size-4" /> Challenges

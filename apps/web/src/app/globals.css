@@ -172,9 +172,60 @@
   animation: flash-down 0.5s var(--ease-out-quart);
 }
 
+/* Landing: horizontal ticker tape. */
+@keyframes lp-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.lp-ticker {
+  overflow: hidden;
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 8%,
+    #000 92%,
+    transparent
+  );
+}
+.lp-ticker-track {
+  display: inline-flex;
+  width: max-content;
+  animation: lp-marquee 42s linear infinite;
+}
+.lp-ticker:hover .lp-ticker-track {
+  animation-play-state: paused;
+}
+
+/* Landing: gentle on-load reveal. */
+@keyframes lp-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.lp-reveal {
+  opacity: 0;
+  animation: lp-reveal 0.7s var(--ease-out-quart) forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .flash-up,
   .flash-down {
+    animation: none;
+  }
+  .lp-ticker-track {
+    animation: none;
+  }
+  .lp-reveal {
+    opacity: 1;
     animation: none;
   }
   * {
