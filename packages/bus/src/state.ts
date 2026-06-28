@@ -4,6 +4,7 @@ import {
   redisKeys,
   type LeaderboardEntry,
   type NewsItem,
+  type OptionContract,
   type OrderBookSnapshot,
   type PricePoint,
   type TraderMetrics,
@@ -152,6 +153,89 @@ export async function isSymbolLocked(
   return (
     (await redis.sismember(redisKeys.lockedSymbols(challengeId), symbol)) === 1
   );
+}
+
+/* ---- New Eden: dynamically-listed instruments (options, ETFs) ---- */
+export async function addListedSymbol(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+): Promise<void> {
+  await redis.sadd(redisKeys.listedSymbols(challengeId), symbol);
+}
+
+export async function removeListedSymbol(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+): Promise<void> {
+  await redis.srem(redisKeys.listedSymbols(challengeId), symbol);
+}
+
+export async function getListedSymbols(
+  redis: Redis,
+  challengeId: string,
+): Promise<string[]> {
+  return redis.smembers(redisKeys.listedSymbols(challengeId));
+}
+
+export async function isListedSymbol(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+): Promise<boolean> {
+  return (
+    (await redis.sismember(redisKeys.listedSymbols(challengeId), symbol)) === 1
+  );
+}
+
+/* ---- New Eden: option contracts snapshot (for trader/host UI) ---- */
+export async function setOptionContracts(
+  redis: Redis,
+  challengeId: string,
+  contracts: OptionContract[],
+): Promise<void> {
+  await redis.set(
+    redisKeys.optionContracts(challengeId),
+    JSON.stringify(contracts),
+  );
+}
+
+export async function getOptionContracts(
+  redis: Redis,
+  challengeId: string,
+): Promise<OptionContract[]> {
+  const v = await redis.get(redisKeys.optionContracts(challengeId));
+  return v ? (JSON.parse(v) as OptionContract[]) : [];
+}
+
+/* ---- New Eden: ETF create/redeem windows ---- */
+export async function setEtfWindow(
+  redis: Redis,
+  challengeId: string,
+  etfSymbol: string,
+  open: boolean,
+): Promise<void> {
+  const key = redisKeys.etfWindows(challengeId);
+  if (open) await redis.sadd(key, etfSymbol);
+  else await redis.srem(key, etfSymbol);
+}
+
+export async function isEtfWindowOpen(
+  redis: Redis,
+  challengeId: string,
+  etfSymbol: string,
+): Promise<boolean> {
+  return (
+    (await redis.sismember(redisKeys.etfWindows(challengeId), etfSymbol)) === 1
+  );
+}
+
+export async function getEtfWindows(
+  redis: Redis,
+  challengeId: string,
+): Promise<string[]> {
+  return redis.smembers(redisKeys.etfWindows(challengeId));
 }
 
 /* ---- Order book snapshots ---- */

@@ -44,8 +44,24 @@ export class Persistence {
           });
         }
         this.affectedUsers.add(e.userId);
+      } else if (
+        // Off-book settlements that move cash/positions without a book trade.
+        e.type === "carry_charge" ||
+        e.type === "loan_update" ||
+        e.type === "otc_settled" ||
+        e.type === "option_exercised" ||
+        e.type === "option_assigned" ||
+        e.type === "grant_awarded" ||
+        e.type === "wealth_tax"
+      ) {
+        if ("userId" in e && e.userId) this.affectedUsers.add(e.userId);
       }
     }
+  }
+
+  /** Mark users so their cash + positions are re-synced on the next flush. */
+  markUsers(userIds: string[]): void {
+    for (const u of userIds) this.affectedUsers.add(u);
   }
 
   async flush(): Promise<void> {

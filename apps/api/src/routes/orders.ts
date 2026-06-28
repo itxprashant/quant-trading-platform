@@ -6,6 +6,7 @@ import { zPlaceOrderInput, type EngineCommand } from "@qtp/shared";
 import {
   checkRateLimit,
   checkVolumeLimit,
+  isListedSymbol,
   isSymbolLocked,
   publishCommand,
 } from "@qtp/bus";
@@ -28,7 +29,10 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       if (challenge.status !== "live") {
         return reply.code(409).send({ error: "challenge_not_live" });
       }
-      if (!challenge.config.symbols.some((s) => s.symbol === input.symbol)) {
+      const knownSymbol =
+        challenge.config.symbols.some((s) => s.symbol === input.symbol) ||
+        (await isListedSymbol(app.redis, input.challengeId, input.symbol));
+      if (!knownSymbol) {
         return reply.code(400).send({ error: "unknown_symbol" });
       }
       if (await isSymbolLocked(app.redis, input.challengeId, input.symbol)) {

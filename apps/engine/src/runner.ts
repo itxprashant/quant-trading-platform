@@ -21,10 +21,14 @@ import {
   type EdenConfig,
   type EngineCommand,
   type EngineEvent,
+  type OtcLeg,
   type TraderMetrics,
 } from "@qtp/shared";
 import { env } from "./env.js";
 import { BotEngine } from "./bots.js";
+import { EdenBotEngine } from "./eden-bots.js";
+import { OptionsManager } from "./options-manager.js";
+import { MarketsManager } from "./markets-manager.js";
 import { Persistence } from "./persistence.js";
 
 /**
@@ -35,6 +39,10 @@ export class ChallengeRunner {
   private readonly engine: ChallengeEngine;
   private readonly persistence: Persistence;
   private readonly bots: BotEngine;
+  private readonly edenBots?: EdenBotEngine;
+  private options?: OptionsManager;
+  private markets?: MarketsManager;
+  private minuteCount = 0;
   private readonly cmdRedis: Redis;
   private running = false;
   private lastId = "$";
@@ -75,6 +83,43 @@ export class ChallengeRunner {
       },
       challenge.config.symbols,
     );
+    // New Eden challenges run the four-archetype bot ecosystem instead.
+    if (this.edenEnabled && this.eden?.bots) {
+      this.edenBots = new EdenBotEngine(
+        this.engine,
+        this.eden.bots,
+        challenge.config.symbols,
+      );
+    }
+    if (this.edenEnabled && this.eden?.options?.enabled) {
+      this.options = new OptionsManager(
+        this.engine,
+        this.redis,
+        this.db,
+        challenge,
+        this.eden.options,
+        this.eden.rules,
+        env.minuteMs,
+        (events) => this.emit(events),
+        (userIds, ts) => this.refreshPortfolios(userIds, ts),
+      );
+    }
+    if (
+      this.edenEnabled &&
+      this.eden &&
+      ((this.eden.bonds?.length ?? 0) > 0 || (this.eden.etfs?.length ?? 0) > 0)
+    ) {
+      this.markets = new MarketsManager(
+        this.engine,
+        this.redis,
+        this.db,
+        challenge,
+        this.eden,
+        env.minuteMs,
+        (events) => this.emit(events),
+        (userIds, ts) => this.refreshPortfolios(userIds, ts),
+      );
+    }
     this.cmdRedis = createRedis(env.redisUrl);
   }
 
@@ -120,6 +165,9 @@ export class ChallengeRunner {
       }
     }
 
+    if (this.options) await this.options.start();
+    if (this.markets) await this.markets.start();
+
     void this.commandLoop();
     if (this.challenge.config.autonomousPrice) {
       this.tickTimer = setInterval(() => void this.tick(), env.tickMs);
@@ -130,7 +178,7 @@ export class ChallengeRunner {
         env.minuteMs,
       );
     }
-    if (this.bots.enabled) {
+    if (this.edenBots?.enabled || this.bots.enabled) {
       this.botTimer = setInterval(() => void this.botTick(), env.botMs);
     }
     this.flushTimer = setInterval(() => {
@@ -148,6 +196,8 @@ export class ChallengeRunner {
 
   async stop(): Promise<void> {
     this.running = false;
+    this.options?.stop();
+    this.markets?.stop();
     if (this.tickTimer) clearInterval(this.tickTimer);
     if (this.botTimer) clearInterval(this.botTimer);
     if (this.flushTimer) clearInterval(this.flushTimer);
@@ -228,6 +278,34 @@ export class ChallengeRunner {
           fairValue: this.engine.applyFairValueDelta(e.symbol, e.delta),
           ts: cmd.ts,
         }));
+      case "news_pulse":
+        this.edenBots?.onNewsPulse(cmd.effects, cmd.volEvent);
+        return [];
+      case "exercise_option":
+        return this.options?.exercise(cmd.userId, cmd.symbol, cmd.quantity, cmd.ts) ?? [];
+      case "open_option_cycle":
+        void this.options?.openAll();
+        return [];
+      case "close_option_cycle":
+        void this.options?.close(cmd.cycleId);
+        return [];
+      case "purchase_bond":
+        void this.markets?.purchaseBond(cmd.userId, cmd.bondId, cmd.quantity, cmd.ts);
+        return [];
+      case "etf_trade":
+        void this.markets?.etfTrade(
+          cmd.userId,
+          cmd.etfSymbol,
+          cmd.action,
+          cmd.quantity,
+          cmd.ts,
+        );
+        return [];
+      case "etf_window":
+        void this.markets?.setWindow(cmd.etfSymbol, cmd.open, cmd.ts);
+        return [];
+      case "execute_otc":
+        return this.settleOtc(cmd.offerId, cmd.userId, cmd.legs, cmd.cashToTrader, cmd.ts);
       default:
         return [];
     }
@@ -290,11 +368,53 @@ export class ChallengeRunner {
     return events;
   }
 
+  /**
+   * Settle a binding OTC deal atomically: each leg transfers signed units at
+   * its price, then the net cash term is applied. A binding deal cannot be
+   * declined once accepted (comp_desc Deal Desk "Obligation").
+   */
+  private settleOtc(
+    offerId: string,
+    userId: string,
+    legs: OtcLeg[],
+    cashToTrader: number,
+    ts: number,
+  ): EngineEvent[] {
+    for (const leg of legs) {
+      if (leg.quantity !== 0) {
+        this.engine.settleFill(userId, leg.symbol, leg.quantity, leg.price);
+      }
+    }
+    if (cashToTrader !== 0) this.engine.adjustCash(userId, cashToTrader);
+    const summary = legs
+      .map((l) => `${l.quantity > 0 ? "+" : ""}${l.quantity} ${l.symbol}@${l.price}`)
+      .join(", ");
+    return [
+      {
+        type: "otc_settled",
+        challengeId: this.challenge.id,
+        offerId,
+        userId,
+        ts,
+      },
+      {
+        type: "alert",
+        challengeId: this.challenge.id,
+        userId,
+        level: "info",
+        message: `Deal settled: ${summary}${cashToTrader ? `, net cash ${cashToTrader > 0 ? "+" : ""}$${cashToTrader.toFixed(0)}` : ""}.`,
+        ts,
+      },
+    ];
+  }
+
   /** Drive autonomous bots: apply their commands and broadcast results. */
   private async botTick(): Promise<void> {
     if (!this.running) return;
     const now = Date.now();
-    const { places, cancels } = this.bots.act(now);
+    const { places, cancels } = this.edenBots
+      ? this.edenBots.act(now)
+      : this.bots.act(now);
     const events: EngineEvent[] = [];
     for (const c of cancels) {
       events.push(...this.engine.cancelOrder(c));
@@ -317,7 +437,7 @@ export class ChallengeRunner {
         this.challenge.scoring.minQuoteSize,
       );
     }
-    for (const symbol of this.engine.symbols()) {
+    for (const symbol of this.engine.autonomousSymbols()) {
       const driftKey = `qtp:drift_target:${this.challenge.id}:${symbol}`;
       const target = await this.redis.get(driftKey);
       if (target != null) {
@@ -345,6 +465,8 @@ export class ChallengeRunner {
       }
     }
     await this.emit(events);
+    // Re-mark ETF NAVs against the fresh basket prices.
+    await this.markets?.updateNavs(now);
   }
 
   /**
@@ -356,6 +478,12 @@ export class ChallengeRunner {
     const now = Date.now();
     const rules = this.eden.rules;
     const events: EngineEvent[] = [];
+
+    // Bond coupons accrue every 5th game-minute (comp_desc Session 1).
+    this.minuteCount += 1;
+    if (this.markets && this.minuteCount % 5 === 0) {
+      await this.markets.payCoupons(now);
+    }
 
     const endsAt = this.challenge.endsAt
       ? new Date(this.challenge.endsAt).getTime()
@@ -525,8 +653,14 @@ export class ChallengeRunner {
           break;
         case "carry_charge":
         case "loan_update":
-          // Cash/debt changed — refresh the trader's portfolio.
+        case "option_exercised":
+        case "option_assigned":
+        case "otc_settled":
+          // Cash/positions changed — refresh the trader's portfolio.
           affectedUsers.add(e.userId);
+          break;
+        case "grant_awarded":
+          if (e.userId) affectedUsers.add(e.userId);
           break;
         case "margin_call":
           affectedUsers.add(e.userId);
@@ -579,13 +713,35 @@ export class ChallengeRunner {
     await publishBroadcast(this.redis, this.challenge.id, envelopes);
   }
 
+  /** Re-sync + push fresh portfolios for users touched by off-book settlement. */
+  private async refreshPortfolios(
+    userIds: string[],
+    _ts: number,
+  ): Promise<void> {
+    if (userIds.length === 0) return;
+    this.persistence.markUsers(userIds);
+    const envelopes: BroadcastEnvelope[] = userIds.map((userId) => ({
+      target: userId,
+      msg: {
+        type: "portfolio",
+        challengeId: this.challenge.id,
+        data: this.portfolio(userId),
+      },
+    }));
+    await publishBroadcast(this.redis, this.challenge.id, envelopes);
+  }
+
   private portfolio(userId: string) {
     const pf = this.engine.portfolioOf(userId);
     const m = this.engine.metricsOf(userId);
+    // Bond face value is an illiquid asset: it lifts net worth (PnL) but not
+    // free cash, so locking cash into bonds still shrinks margin headroom.
+    const bondValue = this.markets?.bondValueOf(userId) ?? 0;
+    const pnl = pf.pnl + bondValue;
     const score = computeScore(
       {
         userId,
-        pnl: pf.pnl,
+        pnl,
         absInventory: m.inventory,
         spreadCapture: m.spreadCapture,
         quoteUptime: m.quoteUptime,
@@ -605,7 +761,7 @@ export class ChallengeRunner {
       cash: pf.cash,
       positions: pf.positions,
       marketValue: pf.marketValue,
-      pnl: pf.pnl,
+      pnl,
       score,
       metrics,
       ...(this.edenEnabled

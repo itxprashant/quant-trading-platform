@@ -4,7 +4,9 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import type {
   LeaderboardEntry,
   NewsItem,
+  OptionContract,
   OrderBookSnapshot,
+  OtcOffer,
   Portfolio,
   PricePoint,
   ServerMessage,
@@ -51,6 +53,10 @@ export interface RealtimeState {
   alerts: AlertMsg[];
   /** New Eden: published fair value per symbol. */
   fairValues: Map<string, number>;
+  /** New Eden: live option contracts in the current cycle(s). */
+  optionContracts: OptionContract[];
+  /** New Eden: pending Deal Desk offers addressed to this trader. */
+  otcOffers: OtcOffer[];
 }
 
 type Action =
@@ -116,6 +122,21 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       };
       return { ...state, alerts: [alert, ...state.alerts].slice(0, ALERT_MAX) };
     }
+    case "option_cycle":
+      return { ...state, optionContracts: msg.data.contracts };
+    case "otc_offer":
+      return {
+        ...state,
+        otcOffers: [
+          msg.data,
+          ...state.otcOffers.filter((o) => o.id !== msg.data.id),
+        ],
+      };
+    case "otc_result":
+      return {
+        ...state,
+        otcOffers: state.otcOffers.filter((o) => o.id !== msg.data.offerId),
+      };
     default:
       return state;
   }
@@ -132,6 +153,8 @@ const initial: RealtimeState = {
   lastOrder: null,
   alerts: [],
   fairValues: new Map(),
+  optionContracts: [],
+  otcOffers: [],
 };
 
 export function useRealtime(challengeId: string | null): RealtimeState {

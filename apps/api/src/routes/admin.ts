@@ -4,12 +4,17 @@ import {
   challengeNews,
   challenges,
   orders,
+  otcOffers,
   participants,
   positions,
   trades,
   users,
 } from "@qtp/db";
-import { zPostNewsInput, type EngineCommand } from "@qtp/shared";
+import {
+  zCreateOtcInput,
+  zPostNewsInput,
+  type EngineCommand,
+} from "@qtp/shared";
 import { redisKeys } from "@qtp/shared";
 import {
   clearNewsFeed,
@@ -150,6 +155,30 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         await publishCommand(app.redis, challengeId, cmd);
       }
 
+      // Broadcast a momentum pulse so the bot ecosystem reacts. Explicit
+      // momentum wins; otherwise derive direction from the signal's FV deltas
+      // (NOISE headlines carry no fvEffects, so the host supplies momentum to
+      // make the retail bots overreact while fair value stays put).
+      const momentum =
+        body.momentum && body.momentum.length > 0
+          ? body.momentum
+          : (body.fvEffects ?? [])
+              .filter((e) => e.delta !== 0)
+              .map((e) => ({
+                symbol: e.symbol,
+                sentiment: Math.sign(e.delta),
+              }));
+      if (momentum.length > 0 || body.volEvent) {
+        const pulse: EngineCommand = {
+          type: "news_pulse",
+          challengeId,
+          effects: momentum,
+          volEvent: !!body.volEvent,
+          ts: Date.now(),
+        };
+        await publishCommand(app.redis, challengeId, pulse);
+      }
+
       return { item };
     },
   );
@@ -204,6 +233,97 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         },
       },
     ]);
+    return { ok: true };
+  });
+
+  // Open a fresh options cycle on all configured underlyings.
+  app.post("/:challengeId/options/open", async (req) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const cmd: EngineCommand = {
+      type: "open_option_cycle",
+      challengeId,
+      cycleId: "",
+      underlying: "",
+      strikes: [],
+      expiresAt: 0,
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challengeId, cmd);
+    return { ok: true };
+  });
+
+  // Close an options cycle, opening its 15-second exercise window.
+  app.post("/:challengeId/options/close", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(z.object({ cycleId: z.string() }), req.body, reply);
+    if (!body) return;
+    const cmd: EngineCommand = {
+      type: "close_option_cycle",
+      challengeId,
+      cycleId: body.cycleId,
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challengeId, cmd);
+    return { ok: true };
+  });
+
+  // Create a Deal Desk OTC offer for a specific trader.
+  app.post("/:challengeId/otc", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      zCreateOtcInput.omit({ challengeId: true }),
+      req.body,
+      reply,
+    );
+    if (!body) return;
+    const expiresAt = new Date(Date.now() + body.expiresSec * 1000);
+    const [row] = await app.db
+      .insert(otcOffers)
+      .values({
+        challengeId,
+        userId: body.userId,
+        description: body.description,
+        legs: body.legs,
+        cashToTrader: body.cashToTrader,
+        status: "pending",
+        expiresAt,
+        createdBy: req.user.sub,
+      })
+      .returning();
+    const offer = {
+      id: row!.id,
+      challengeId,
+      userId: row!.userId,
+      description: row!.description,
+      legs: row!.legs,
+      cashToTrader: row!.cashToTrader,
+      status: row!.status,
+      expiresAt: row!.expiresAt.toISOString(),
+      createdAt: row!.createdAt.toISOString(),
+    };
+    await publishBroadcast(app.redis, challengeId, [
+      { target: body.userId, msg: { type: "otc_offer", challengeId, data: offer } },
+    ]);
+    return { offer };
+  });
+
+  // Open / close an ETF create-redeem window.
+  app.post("/:challengeId/etf-window", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      z.object({ etfSymbol: z.string(), open: z.boolean() }),
+      req.body,
+      reply,
+    );
+    if (!body) return;
+    const cmd: EngineCommand = {
+      type: "etf_window",
+      challengeId,
+      etfSymbol: body.etfSymbol,
+      open: body.open,
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challengeId, cmd);
     return { ok: true };
   });
 

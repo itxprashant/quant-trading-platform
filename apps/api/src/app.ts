@@ -13,6 +13,9 @@ import { portfolioRoutes } from "./routes/portfolio.js";
 import { leaderboardRoutes } from "./routes/leaderboard.js";
 import { adminRoutes } from "./routes/admin.js";
 import { loanRoutes } from "./routes/loans.js";
+import { optionRoutes } from "./routes/options.js";
+import { bondEtfRoutes } from "./routes/markets.js";
+import { otcRoutes } from "./routes/otc.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -55,6 +58,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(leaderboardRoutes, { prefix: "/api/leaderboard" });
   await app.register(adminRoutes, { prefix: "/api/admin" });
   await app.register(loanRoutes, { prefix: "/api/loans" });
+  await app.register(optionRoutes, { prefix: "/api/options" });
+  await app.register(bondEtfRoutes, { prefix: "/api/markets" });
+  await app.register(otcRoutes, { prefix: "/api/otc" });
 
   return app;
 }

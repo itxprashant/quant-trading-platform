@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
-import type { Challenge, NewsItem, NewsLevel } from "@qtp/shared";
+import type { Challenge, NewsItem, NewsKind, NewsLevel } from "@qtp/shared";
 import { get, post } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
 import { AdminGuard } from "@/components/AdminGuard";
 import { ChallengeForm } from "@/components/admin/ChallengeForm";
+import { EdenHostConsole } from "@/components/admin/EdenHostConsole";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
@@ -69,8 +70,13 @@ function LiveControls({ challenge }: { challenge: Challenge }) {
 }
 
 function NewsControls({ challenge }: { challenge: Challenge }) {
+  const isEden = challenge.type === "new_eden";
   const [message, setMessage] = useState("");
   const [level, setLevel] = useState<NewsLevel>("info");
+  const [kind, setKind] = useState<NewsKind>("neutral");
+  const [fvSymbol, setFvSymbol] = useState(challenge.config.symbols[0]?.symbol ?? "");
+  const [fvDelta, setFvDelta] = useState("0");
+  const [volEvent, setVolEvent] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<NewsItem[]>([]);
@@ -87,12 +93,22 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
     setSending(true);
     setError(null);
     try {
-      const res = await post<{ item: NewsItem }>(`/api/admin/${challenge.id}/news`, {
-        message: trimmed,
-        level,
-      });
+      const delta = Number(fvDelta);
+      const body: Record<string, unknown> = { message: trimmed, level };
+      if (isEden) {
+        body.kind = kind;
+        if (kind === "signal" && delta !== 0) {
+          body.fvEffects = [{ symbol: fvSymbol, delta }];
+        }
+        if (volEvent) body.volEvent = true;
+      }
+      const res = await post<{ item: NewsItem }>(
+        `/api/admin/${challenge.id}/news`,
+        body,
+      );
       setRecent((prev) => [res.item, ...prev.filter((n) => n.id !== res.item.id)].slice(0, 5));
       setMessage("");
+      setVolEvent(false);
     } catch {
       setError("Failed to send news");
     } finally {
@@ -125,11 +141,58 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
               <option value="urgent">Urgent</option>
             </Select>
           </Field>
+          {isEden && (
+            <Field label="Kind">
+              <Select
+                value={kind}
+                onChange={(e) => setKind(e.target.value as NewsKind)}
+              >
+                <option value="neutral">Neutral</option>
+                <option value="signal">Signal (moves FV)</option>
+                <option value="noise">Noise (no FV)</option>
+              </Select>
+            </Field>
+          )}
           <Button onClick={send} disabled={sending || !message.trim()}>
             {sending ? "Sending…" : "Send"}
           </Button>
           <span className="pb-2 text-xs text-faint">{message.length}/500</span>
         </div>
+        {isEden && (
+          <div className="flex flex-wrap items-end gap-3">
+            {kind === "signal" && (
+              <>
+                <Field label="FV symbol">
+                  <Select value={fvSymbol} onChange={(e) => setFvSymbol(e.target.value)}>
+                    {challenge.config.symbols.map((s) => (
+                      <option key={s.symbol} value={s.symbol}>
+                        {s.symbol}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="FV delta">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={fvDelta}
+                    onChange={(e) => setFvDelta(e.target.value)}
+                    className="mono"
+                  />
+                </Field>
+              </>
+            )}
+            <label className="flex items-center gap-2 pb-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                checked={volEvent}
+                onChange={(e) => setVolEvent(e.target.checked)}
+                className="size-3.5 accent-accent"
+              />
+              Volatility event (vega snipers react)
+            </label>
+          </div>
+        )}
         {error && <p className="text-xs text-down">{error}</p>}
         {recent.length > 0 && (
           <div className="space-y-2 border-t border-border pt-3">
@@ -184,6 +247,9 @@ function EditInner() {
             {(challenge.status === "live" || challenge.status === "paused") && (
               <div className="mb-4 space-y-4">
                 <LiveControls challenge={challenge} />
+                {challenge.type === "new_eden" && (
+                  <EdenHostConsole challenge={challenge} />
+                )}
                 <NewsControls challenge={challenge} />
               </div>
             )}

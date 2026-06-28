@@ -6,7 +6,9 @@ import {
   createRedis,
   getBookSnapshot,
   getFairValues,
+  getListedSymbols,
   getNewsFeed,
+  getOptionContracts,
   getPrice,
 } from "@qtp/bus";
 import { challenges, getDb } from "@qtp/db";
@@ -77,7 +79,10 @@ async function symbolsFor(challengeId: string): Promise<string[]> {
 
 async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
   const symbols = await symbolsFor(challengeId);
-  for (const symbol of symbols) {
+  // Include dynamically-listed instruments (options / ETFs) so late joiners
+  // see their books and marks too.
+  const listed = await getListedSymbols(redis, challengeId);
+  for (const symbol of [...symbols, ...listed]) {
     const price = await getPrice(redis, challengeId, symbol);
     if (price != null) {
       send(conn, {
@@ -88,6 +93,15 @@ async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
     }
     const book = await getBookSnapshot(redis, challengeId, symbol);
     if (book) send(conn, { type: "book", challengeId, data: book });
+  }
+  // New Eden: deliver the current option contracts to late joiners.
+  const contracts = await getOptionContracts(redis, challengeId);
+  if (contracts.length > 0) {
+    send(conn, {
+      type: "option_cycle",
+      challengeId,
+      data: { contracts, ts: Date.now() },
+    });
   }
   const news = await getNewsFeed(redis, challengeId);
   if (news.length > 0) {

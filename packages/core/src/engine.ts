@@ -7,6 +7,28 @@ import {
 } from "@qtp/shared";
 import { OrderBook, type RestingOrder } from "./order-book.js";
 import { carryCharge, freeCash, liquidationLegs } from "./margin.js";
+import { intrinsicValue, proRataAssign, type OptionType } from "./options.js";
+
+/** Metadata for a dynamically-listed option series (a tradeable book). */
+export interface OptionMeta {
+  symbol: string;
+  underlying: string;
+  optionType: OptionType;
+  strike: number;
+  cycleId: string;
+  /** Epoch ms the cycle was opened and when it closes (for time value). */
+  openedAt: number;
+  expiresAt: number;
+}
+
+/** Outcome of exercising an option series, for the runner to act on. */
+export interface ExerciseResult {
+  events: EngineEvent[];
+  holderId: string;
+  /** Sellers that were assigned, with the quantity each received. */
+  assigned: Array<{ userId: string; quantity: number }>;
+  exercised: number;
+}
 
 export interface EngineConfig {
   challengeId: string;
@@ -84,6 +106,10 @@ export class ChallengeEngine {
   private readonly fairValues = new Map<string, number>();
   private readonly symbolCfg = new Map<string, SymbolConfig>();
   private readonly accounts = new Map<string, Account>();
+  /** Symbols whose price moves on the autonomous clock (spot underlyings). */
+  private readonly autonomousSet = new Set<string>();
+  /** Dynamically-listed option series, keyed by tradeable symbol. */
+  private readonly options = new Map<string, OptionMeta>();
   private seq = 0;
   private bookSequence = 0;
   /** Orders cancelled before placeOrder rested them on the book. */
@@ -96,7 +122,202 @@ export class ChallengeEngine {
       this.books.set(s.symbol, new OrderBook());
       this.prices.set(s.symbol, s.initialPrice);
       this.symbolCfg.set(s.symbol, s);
+      this.autonomousSet.add(s.symbol);
     }
+  }
+
+  /* ----------------------------------------------------------------- *
+   * Dynamic instruments (options, ETFs) — listed after construction
+   * ----------------------------------------------------------------- */
+
+  /** Symbols that the autonomous price clock should walk (spot only). */
+  autonomousSymbols(): string[] {
+    return [...this.autonomousSet];
+  }
+
+  hasSymbol(symbol: string): boolean {
+    return this.books.has(symbol);
+  }
+
+  /**
+   * List a new tradeable instrument with its own order book. `autonomous`
+   * controls whether the price clock walks it (ETFs/options do not).
+   */
+  addSymbol(cfg: SymbolConfig, opts: { autonomous?: boolean } = {}): void {
+    if (this.books.has(cfg.symbol)) return;
+    this.books.set(cfg.symbol, new OrderBook());
+    this.prices.set(cfg.symbol, cfg.initialPrice);
+    this.symbolCfg.set(cfg.symbol, cfg);
+    if (opts.autonomous) this.autonomousSet.add(cfg.symbol);
+  }
+
+  /** Remove an instrument and its book (e.g. an expired option series). */
+  removeSymbol(symbol: string): void {
+    this.books.delete(symbol);
+    this.prices.delete(symbol);
+    this.symbolCfg.delete(symbol);
+    this.fairValues.delete(symbol);
+    this.autonomousSet.delete(symbol);
+    this.options.delete(symbol);
+  }
+
+  setPrice(symbol: string, price: number): void {
+    this.prices.set(symbol, price);
+  }
+
+  /* ----------------------------------------------------------------- *
+   * Option registry + physical exercise / assignment
+   * ----------------------------------------------------------------- */
+  registerOption(meta: OptionMeta): void {
+    this.options.set(meta.symbol, meta);
+  }
+
+  getOption(symbol: string): OptionMeta | undefined {
+    return this.options.get(symbol);
+  }
+
+  optionSymbols(): string[] {
+    return [...this.options.keys()];
+  }
+
+  optionMetas(): OptionMeta[] {
+    return [...this.options.values()];
+  }
+
+  /** Best resting bid/ask prices for a symbol (undefined if no liquidity). */
+  bestBidAsk(symbol: string): { bid?: number; ask?: number } {
+    const book = this.books.get(symbol);
+    if (!book) return {};
+    return { bid: book.bestBid(), ask: book.bestAsk() };
+  }
+
+  /** Current signed position a user holds in a symbol. */
+  positionOf(userId: string, symbol: string): number {
+    return this.ensureAccount(userId).positions.get(symbol)?.qty ?? 0;
+  }
+
+  /** Users net-short a symbol, with their (positive) short quantity. */
+  shortHoldersOf(symbol: string): Array<{ id: string; qty: number }> {
+    const out: Array<{ id: string; qty: number }> = [];
+    for (const [userId, acct] of this.accounts) {
+      const q = acct.positions.get(symbol)?.qty ?? 0;
+      if (q < 0) out.push({ id: userId, qty: -q });
+    }
+    return out;
+  }
+
+  /** Direct cash adjustment (coupons, grants, taxes, OTC net cash). */
+  adjustCash(userId: string, delta: number): void {
+    this.ensureAccount(userId).cash += delta;
+  }
+
+  /**
+   * Apply an off-book settlement fill (option exercise/assignment, OTC, ETF
+   * create/redeem). Mutates cash, position, avg cost and realized PnL exactly
+   * like a matched trade, but without touching any order book.
+   */
+  settleFill(
+    userId: string,
+    symbol: string,
+    deltaQty: number,
+    price: number,
+  ): void {
+    if (deltaQty === 0) {
+      this.ensureAccount(userId);
+      return;
+    }
+    this.applyFill(userId, symbol, deltaQty, price);
+  }
+
+  /**
+   * Exercise `quantity` of an option series held long by `holderId`. Long is
+   * physically settled against pro-rata assigned short holders: calls deliver
+   * the underlying at the strike, puts take it in. Returns the resulting events
+   * plus the assigned sellers so the caller can check inventory-cap breaches.
+   */
+  exerciseOption(
+    holderId: string,
+    optionSymbol: string,
+    quantity: number,
+    ts: number,
+  ): ExerciseResult {
+    const meta = this.options.get(optionSymbol);
+    const events: EngineEvent[] = [];
+    if (!meta || quantity <= 0) {
+      return { events, holderId, assigned: [], exercised: 0 };
+    }
+    const held = this.positionOf(holderId, optionSymbol);
+    const qty = Math.min(quantity, Math.max(0, held));
+    if (qty <= 0) return { events, holderId, assigned: [], exercised: 0 };
+
+    const { underlying, optionType, strike } = meta;
+    // Only worth exercising when in-the-money; closes the option at zero so the
+    // premium already paid is realized as the option's cost.
+    const shorts = this.shortHoldersOf(optionSymbol);
+    const assigned = proRataAssign(shorts, qty);
+
+    // Holder leg: close the long option, take/deliver underlying at strike.
+    this.settleFill(holderId, optionSymbol, -qty, 0);
+    if (optionType === "call") {
+      this.settleFill(holderId, underlying, qty, strike); // buy underlying @K
+    } else {
+      this.settleFill(holderId, underlying, -qty, strike); // sell underlying @K
+    }
+    events.push({
+      type: "option_exercised",
+      challengeId: this.challengeId,
+      userId: holderId,
+      symbol: optionSymbol,
+      quantity: qty,
+      ts,
+    });
+
+    // Assigned sellers: close their short option and take the opposite leg.
+    const assignedOut: Array<{ userId: string; quantity: number }> = [];
+    for (const a of assigned) {
+      this.settleFill(a.id, optionSymbol, a.qty, 0); // buy back short option
+      if (optionType === "call") {
+        this.settleFill(a.id, underlying, -a.qty, strike); // deliver underlying
+      } else {
+        this.settleFill(a.id, underlying, a.qty, strike); // take underlying
+      }
+      assignedOut.push({ userId: a.id, quantity: a.qty });
+      events.push({
+        type: "option_assigned",
+        challengeId: this.challengeId,
+        userId: a.id,
+        symbol: optionSymbol,
+        quantity: a.qty,
+        ts,
+      });
+    }
+
+    return { events, holderId, assigned: assignedOut, exercised: qty };
+  }
+
+  /**
+   * Expire an option series worthless: every open long/short position is
+   * settled to zero, realizing the premium as PnL for both sides. Returns the
+   * affected user ids so the caller can refresh their portfolios.
+   */
+  expireOption(optionSymbol: string): string[] {
+    const affected: string[] = [];
+    for (const [userId, acct] of this.accounts) {
+      const q = acct.positions.get(optionSymbol)?.qty ?? 0;
+      if (q !== 0) {
+        this.settleFill(userId, optionSymbol, -q, 0);
+        affected.push(userId);
+      }
+    }
+    return affected;
+  }
+
+  /** Intrinsic value of an option series at the current underlying price. */
+  optionIntrinsic(optionSymbol: string): number {
+    const meta = this.options.get(optionSymbol);
+    if (!meta) return 0;
+    const spot = this.prices.get(meta.underlying) ?? 0;
+    return intrinsicValue(meta.optionType, spot, meta.strike);
   }
 
   getPrice(symbol: string): number | undefined {

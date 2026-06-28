@@ -55,6 +55,12 @@ export const redisKeys = {
   lockedSymbols: (challengeId: string) => `qtp:locked:${challengeId}`,
   /** Latest fair-value snapshot JSON (all symbols) for quick reads. */
   fairValueSnapshot: (challengeId: string) => `qtp:fvsnap:${challengeId}`,
+  /** Set of dynamically-listed tradeable symbols (options, ETFs). */
+  listedSymbols: (challengeId: string) => `qtp:listed:${challengeId}`,
+  /** Open ETF create/redeem windows (set of ETF symbols). */
+  etfWindows: (challengeId: string) => `qtp:etfwin:${challengeId}`,
+  /** Latest option contracts JSON for a challenge (host + trader UI). */
+  optionContracts: (challengeId: string) => `qtp:opts:${challengeId}`,
 } as const;
 
 export const PRICE_HISTORY_MAX = 1000;

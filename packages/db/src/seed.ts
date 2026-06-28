@@ -112,7 +112,14 @@ async function main() {
         quoteSize: 10,
         intensity: 0.5,
       },
-      options: { enabled: true, underlyings: ["AERIUM"], cycleMinutes: 5, exerciseWindowSec: 15 },
+      options: {
+        enabled: true,
+        underlyings: ["AERIUM"],
+        cycleMinutes: 5,
+        exerciseWindowSec: 15,
+        autoCycle: true,
+        strikeSteps: 1,
+      },
       bonds: [
         { id: "standard", name: "Treasury 5Y", price: 950, faceValue: 1000, couponPer5Min: 10, maxPerUser: 5 },
         {

@@ -1,5 +1,5 @@
 import type { OrderSide, OrderStatus, OrderType } from "./domain.js";
-import type { FvEffect, OtcLeg } from "./schemas.js";
+import type { FvEffect, MomentumEffect, OtcLeg } from "./schemas.js";
 
 /* ------------------------------------------------------------------ *
  * Commands: API -> Engine (per-challenge command stream)
@@ -46,6 +46,17 @@ export type EngineCommand =
       type: "apply_fv_delta";
       challengeId: string;
       effects: FvEffect[];
+      ts: number;
+    }
+  | {
+      /**
+       * Broadcast a headline's momentum signal to the bot ecosystem. Drives
+       * retail momentum chasing (signal or noise) and vega snipers.
+       */
+      type: "news_pulse";
+      challengeId: string;
+      effects: MomentumEffect[];
+      volEvent: boolean;
       ts: number;
     }
   | {

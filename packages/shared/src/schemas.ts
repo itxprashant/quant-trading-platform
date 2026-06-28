@@ -179,6 +179,10 @@ export const zEdenOptionsConfig = z.object({
   cycleMinutes: z.number().int().positive().default(5),
   /** Exercise window (seconds) after a cycle closes. */
   exerciseWindowSec: z.number().int().positive().default(15),
+  /** Automatically run continuous cycles (else the host opens each manually). */
+  autoCycle: z.boolean().default(true),
+  /** Number of strikes listed each side of at-the-money. */
+  strikeSteps: z.number().int().min(1).max(5).default(1),
 });
 export type EdenOptionsConfig = z.infer<typeof zEdenOptionsConfig>;
 
@@ -417,6 +421,18 @@ export const zFvEffect = z.object({
 });
 export type FvEffect = z.infer<typeof zFvEffect>;
 
+/**
+ * The momentum signal a headline broadcasts to the bot ecosystem. Retail
+ * momentum bots react to this regardless of whether the news is signal or
+ * noise (comp_desc Section 3.1 & 4.2) — letting humans fade NOISE-driven
+ * spikes. `sentiment` is a normalized direction in [-1, 1].
+ */
+export const zMomentumEffect = z.object({
+  symbol: z.string(),
+  sentiment: z.number().min(-1).max(1),
+});
+export type MomentumEffect = z.infer<typeof zMomentumEffect>;
+
 export const zNewsItem = z.object({
   id: z.string().uuid(),
   challengeId: z.string().uuid(),
@@ -437,6 +453,13 @@ export const zPostNewsInput = z.object({
   kind: zNewsKind.default("neutral"),
   /** Signal headlines may shift fair value for one or more symbols. */
   fvEffects: z.array(zFvEffect).max(20).optional(),
+  /**
+   * Direction the bot ecosystem should chase. Omit to auto-derive from
+   * `fvEffects` (signal) — supply explicitly to make NOISE bots overreact.
+   */
+  momentum: z.array(zMomentumEffect).max(20).optional(),
+  /** Flags a scheduled high-impact event so vega snipers buy volatility. */
+  volEvent: z.boolean().optional(),
   /** Seconds non-premium traders are delayed (premium feed lead time). */
   embargoSec: z.number().int().min(0).max(120).optional(),
 });
@@ -482,6 +505,22 @@ export const zExerciseOptionInput = z.object({
 });
 export type ExerciseOptionInput = z.infer<typeof zExerciseOptionInput>;
 
+/* ---- Bonds & ETFs ---- */
+export const zPurchaseBondInput = z.object({
+  challengeId: z.string().uuid(),
+  bondId: z.string(),
+  quantity: z.number().int().positive().default(1),
+});
+export type PurchaseBondInput = z.infer<typeof zPurchaseBondInput>;
+
+export const zEtfTradeInput = z.object({
+  challengeId: z.string().uuid(),
+  etfSymbol: z.string(),
+  action: z.enum(["create", "redeem"]),
+  quantity: z.number().int().positive(),
+});
+export type EtfTradeInput = z.infer<typeof zEtfTradeInput>;
+
 /* ---- Deal Desk (OTC) ---- */
 export const zOtcLeg = z.object({
   symbol: z.string(),
@@ -513,6 +552,20 @@ export const zOtcRespondInput = z.object({
   counterCash: z.number().optional(),
 });
 export type OtcRespondInput = z.infer<typeof zOtcRespondInput>;
+
+/** Host-authored OTC offer (Deal Desk). */
+export const zCreateOtcInput = z.object({
+  challengeId: z.string().uuid(),
+  /** Target trader. */
+  userId: z.string().uuid(),
+  description: z.string().min(1).max(280),
+  legs: z.array(zOtcLeg).min(1).max(6),
+  /** Net cash to the trader on settlement (positive = trader is paid). */
+  cashToTrader: z.number().default(0),
+  /** Seconds the trader has to respond before the offer expires. */
+  expiresSec: z.number().int().min(5).max(300).default(15),
+});
+export type CreateOtcInput = z.infer<typeof zCreateOtcInput>;
 
 /* ---- Blind auctions (premium feed) ---- */
 export const zAuction = z.object({

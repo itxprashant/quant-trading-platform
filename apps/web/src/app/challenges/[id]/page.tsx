@@ -22,6 +22,9 @@ import { Leaderboard } from "@/components/trade/Leaderboard";
 import { NewsTicker } from "@/components/trade/NewsTicker";
 import { BankPanel } from "@/components/trade/BankPanel";
 import { AlertStack } from "@/components/trade/AlertStack";
+import { OptionsPanel } from "@/components/trade/OptionsPanel";
+import { MarketsPanel } from "@/components/trade/MarketsPanel";
+import { DealDesk } from "@/components/trade/DealDesk";
 import { money, signed, dirClass } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -250,6 +253,22 @@ export default function TradePage() {
           )}
         </div>
 
+        {/* New Eden derivatives & structured products */}
+        {isEden && (
+          <div className="grid gap-3 lg:grid-cols-2">
+            <OptionsPanel
+              challengeId={challengeId}
+              contracts={rt.optionContracts}
+              prices={rt.prices}
+              onChange={() => setOrderRefresh((n) => n + 1)}
+            />
+            <MarketsPanel
+              challengeId={challengeId}
+              onChange={() => setOrderRefresh((n) => n + 1)}
+            />
+          </div>
+        )}
+
         {/* Order book, open orders, leaderboard */}
         <div className="grid gap-3 xl:grid-cols-12">
           <div className="xl:col-span-4">
@@ -271,6 +290,8 @@ export default function TradePage() {
           </div>
         </div>
       </main>
+
+      {isEden && <DealDesk offers={rt.otcOffers} />}
     </div>
   );
 }
