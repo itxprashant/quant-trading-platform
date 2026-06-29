@@ -253,22 +253,6 @@ export default function TradePage() {
           )}
         </div>
 
-        {/* New Eden derivatives & structured products */}
-        {isEden && (
-          <div className="grid gap-3 lg:grid-cols-2">
-            <OptionsPanel
-              challengeId={challengeId}
-              contracts={rt.optionContracts}
-              prices={rt.prices}
-              onChange={() => setOrderRefresh((n) => n + 1)}
-            />
-            <MarketsPanel
-              challengeId={challengeId}
-              onChange={() => setOrderRefresh((n) => n + 1)}
-            />
-          </div>
-        )}
-
         {/* Order book, open orders, leaderboard */}
         <div className="grid gap-3 xl:grid-cols-12">
           <div className="xl:col-span-4">
@@ -289,6 +273,22 @@ export default function TradePage() {
             />
           </div>
         </div>
+
+        {/* New Eden derivatives & structured products */}
+        {isEden && (
+          <div className="grid gap-3 lg:grid-cols-2">
+            <OptionsPanel
+              challengeId={challengeId}
+              contracts={rt.optionContracts}
+              prices={rt.prices}
+              onChange={() => setOrderRefresh((n) => n + 1)}
+            />
+            <MarketsPanel
+              challengeId={challengeId}
+              onChange={() => setOrderRefresh((n) => n + 1)}
+            />
+          </div>
+        )}
       </main>
 
       {isEden && <DealDesk offers={rt.otcOffers} />}
