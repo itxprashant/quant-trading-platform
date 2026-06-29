@@ -25,6 +25,9 @@ import { AlertStack } from "@/components/trade/AlertStack";
 import { OptionsPanel } from "@/components/trade/OptionsPanel";
 import { MarketsPanel } from "@/components/trade/MarketsPanel";
 import { DealDesk } from "@/components/trade/DealDesk";
+import { AuctionPanel } from "@/components/trade/AuctionPanel";
+import { VotePanel } from "@/components/trade/VotePanel";
+import { GrantBanner } from "@/components/trade/GrantBanner";
 import { money, signed, dirClass } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -140,6 +143,8 @@ export default function TradePage() {
       />
 
       {news.length > 0 && <NewsTicker items={news} />}
+
+      {isEden && <GrantBanner grant={rt.grant} />}
 
       <AlertStack alerts={rt.alerts} />
 
@@ -276,18 +281,28 @@ export default function TradePage() {
 
         {/* New Eden derivatives & structured products */}
         {isEden && (
-          <div className="grid gap-3 lg:grid-cols-2">
-            <OptionsPanel
-              challengeId={challengeId}
-              contracts={rt.optionContracts}
-              prices={rt.prices}
-              onChange={() => setOrderRefresh((n) => n + 1)}
-            />
-            <MarketsPanel
-              challengeId={challengeId}
-              onChange={() => setOrderRefresh((n) => n + 1)}
-            />
-          </div>
+          <>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <OptionsPanel
+                challengeId={challengeId}
+                contracts={rt.optionContracts}
+                prices={rt.prices}
+                onChange={() => setOrderRefresh((n) => n + 1)}
+              />
+              <MarketsPanel
+                challengeId={challengeId}
+                onChange={() => setOrderRefresh((n) => n + 1)}
+              />
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <AuctionPanel
+                challengeId={challengeId}
+                liveAuction={rt.auction}
+                liveWon={rt.auctionWon}
+              />
+              <VotePanel challengeId={challengeId} liveVote={rt.vote} />
+            </div>
+          </>
         )}
       </main>
 

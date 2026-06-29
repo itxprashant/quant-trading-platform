@@ -162,7 +162,11 @@ export type EngineCommand =
       challengeId: string;
       grantId: string;
       symbol: string;
+      description: string;
       prize: number;
+      /** ISO timestamps so the engine can echo back a full grant message. */
+      expiresAt: string;
+      createdAt: string;
       ts: number;
     };
 

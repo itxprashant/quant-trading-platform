@@ -146,6 +146,11 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
           <OtcBuilder challenge={challenge} onSent={() => setMsg("OTC offer sent")} />
         </section>
 
+        {/* Premium auction / policy vote / grant */}
+        <section className="border-t border-border pt-4">
+          <OpsControls challenge={challenge} onMsg={setMsg} />
+        </section>
+
         {msg && <p className="text-xs text-up">{msg}</p>}
       </div>
     </Panel>
@@ -317,6 +322,169 @@ function OtcBuilder({
         </Button>
       </div>
       {error && <p className="text-xs text-down">{error}</p>}
+    </div>
+  );
+}
+
+function OpsControls({
+  challenge,
+  onMsg,
+}: {
+  challenge: Challenge;
+  onMsg: (m: string) => void;
+}) {
+  const challengeId = challenge.id;
+  const symbols = challenge.config.symbols.map((s) => s.symbol);
+
+  const [auctionSec, setAuctionSec] = useState("30");
+  const [voteTitle, setVoteTitle] = useState("Solidarity Tax");
+  const [voteDesc, setVoteDesc] = useState(
+    "Tax the wealthiest 10% and redistribute to the bottom 20%.",
+  );
+  const [voteSec, setVoteSec] = useState("60");
+  const [grantSymbol, setGrantSymbol] = useState(symbols[0] ?? "");
+  const [grantDesc, setGrantDesc] = useState(
+    "Largest holder at the deadline wins the grant.",
+  );
+  const [grantPrize, setGrantPrize] = useState("5000");
+  const [grantSec, setGrantSec] = useState("120");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function openAuction() {
+    setBusy("auction");
+    try {
+      await post(`/api/admin/${challengeId}/auction`, {
+        durationSec: Number(auctionSec),
+      });
+      onMsg("Auction round opened");
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function openVote() {
+    setBusy("vote");
+    try {
+      await post(`/api/admin/${challengeId}/vote`, {
+        title: voteTitle.trim(),
+        description: voteDesc.trim(),
+        durationSec: Number(voteSec),
+      });
+      onMsg("Policy vote opened");
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function openGrant() {
+    setBusy("grant");
+    try {
+      await post(`/api/admin/${challengeId}/grant`, {
+        symbol: grantSymbol,
+        description: grantDesc.trim(),
+        prize: Number(grantPrize),
+        durationSec: Number(grantSec),
+      });
+      onMsg("Grant mission opened");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Premium auction */}
+      <div className="space-y-1.5">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Premium auction
+        </p>
+        <div className="grid grid-cols-[100px_1fr] items-end gap-2">
+          <Field label="Duration (s)">
+            <Input
+              type="number"
+              min={5}
+              max={600}
+              value={auctionSec}
+              onChange={(e) => setAuctionSec(e.target.value)}
+              className="mono"
+            />
+          </Field>
+          <Button variant="secondary" loading={busy === "auction"} onClick={openAuction}>
+            Open auction
+          </Button>
+        </div>
+      </div>
+
+      {/* Policy vote */}
+      <div className="space-y-1.5">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Policy vote
+        </p>
+        <Field label="Title">
+          <Input value={voteTitle} onChange={(e) => setVoteTitle(e.target.value)} />
+        </Field>
+        <Field label="Description">
+          <Input value={voteDesc} onChange={(e) => setVoteDesc(e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-[100px_1fr] items-end gap-2">
+          <Field label="Duration (s)">
+            <Input
+              type="number"
+              min={5}
+              max={600}
+              value={voteSec}
+              onChange={(e) => setVoteSec(e.target.value)}
+              className="mono"
+            />
+          </Field>
+          <Button variant="secondary" loading={busy === "vote"} onClick={openVote}>
+            Open vote
+          </Button>
+        </div>
+      </div>
+
+      {/* Government grant */}
+      <div className="space-y-1.5">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Government grant
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Symbol">
+            <Select value={grantSymbol} onChange={(e) => setGrantSymbol(e.target.value)}>
+              {symbols.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Prize">
+            <Input
+              type="number"
+              step="0.01"
+              value={grantPrize}
+              onChange={(e) => setGrantPrize(e.target.value)}
+              className="mono"
+            />
+          </Field>
+        </div>
+        <Field label="Description">
+          <Input value={grantDesc} onChange={(e) => setGrantDesc(e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-[100px_1fr] items-end gap-2">
+          <Field label="Duration (s)">
+            <Input
+              type="number"
+              min={5}
+              max={3600}
+              value={grantSec}
+              onChange={(e) => setGrantSec(e.target.value)}
+              className="mono"
+            />
+          </Field>
+          <Button variant="secondary" loading={busy === "grant"} onClick={openGrant}>
+            Open grant
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

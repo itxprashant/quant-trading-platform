@@ -10,7 +10,9 @@ import {
   getNewsFeed,
   getOptionContracts,
   getPrice,
+  hasPremiumAccess,
 } from "@qtp/bus";
+import type { NewsItem } from "@qtp/shared";
 import { challenges, getDb } from "@qtp/db";
 import type {
   BroadcastEnvelope,
@@ -44,12 +46,49 @@ function dispatch(challengeId: string, envelopes: BroadcastEnvelope[]): void {
   const conns = registry.get(challengeId);
   if (!conns || conns.size === 0) return;
   for (const env_ of envelopes) {
+    // Embargoed live news: premium subscribers see it immediately, everyone
+    // else only after the embargo lifts (the premium-feed lead time).
+    if (
+      env_.target === "all" &&
+      env_.msg.type === "news" &&
+      isEmbargoed(env_.msg.data, Date.now())
+    ) {
+      void dispatchEmbargoedNews(challengeId, conns, env_.msg);
+      continue;
+    }
     if (env_.target === "all") {
       for (const conn of conns) send(conn, env_.msg);
     } else {
       for (const conn of conns) {
         if (conn.userId === env_.target) send(conn, env_.msg);
       }
+    }
+  }
+}
+
+function isEmbargoed(item: NewsItem, now: number): boolean {
+  return item.embargoUntil != null && new Date(item.embargoUntil).getTime() > now;
+}
+
+async function dispatchEmbargoedNews(
+  challengeId: string,
+  conns: Set<Conn>,
+  msg: Extract<ServerMessage, { type: "news" }>,
+): Promise<void> {
+  const item = msg.data;
+  const releaseMs = Math.max(
+    0,
+    new Date(item.embargoUntil!).getTime() - Date.now(),
+  );
+  for (const conn of conns) {
+    const premium = await hasPremiumAccess(redis, challengeId, conn.userId);
+    if (premium) {
+      send(conn, msg);
+    } else {
+      // Deliver to non-premium subscribers once the embargo lifts.
+      setTimeout(() => {
+        if (conn.ws.readyState === WebSocket.OPEN) send(conn, msg);
+      }, releaseMs).unref?.();
     }
   }
 }
@@ -105,7 +144,13 @@ async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
   }
   const news = await getNewsFeed(redis, challengeId);
   if (news.length > 0) {
-    send(conn, { type: "news_feed", challengeId, data: news });
+    const premium = await hasPremiumAccess(redis, challengeId, conn.userId);
+    const visible = premium
+      ? news
+      : news.filter((n) => !isEmbargoed(n, Date.now()));
+    if (visible.length > 0) {
+      send(conn, { type: "news_feed", challengeId, data: visible });
+    }
   }
   // New Eden: deliver current fair values so late joiners see them.
   const fvs = await getFairValues(redis, challengeId);

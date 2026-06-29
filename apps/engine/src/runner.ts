@@ -1,4 +1,10 @@
-import { ChallengeEngine, computeScore, loanBleed } from "@qtp/core";
+import {
+  ChallengeEngine,
+  computeScore,
+  grantWinner,
+  loanBleed,
+  wealthTaxTransfers,
+} from "@qtp/core";
 import {
   appendEvents,
   createRedis,
@@ -14,7 +20,12 @@ import {
   type Redis,
 } from "@qtp/bus";
 import { eq } from "drizzle-orm";
-import { participants, type Challenge, type Database } from "@qtp/db";
+import {
+  grantMissions,
+  participants,
+  type Challenge,
+  type Database,
+} from "@qtp/db";
 import {
   midFromBook,
   type BroadcastEnvelope,
@@ -306,9 +317,140 @@ export class ChallengeRunner {
         return [];
       case "execute_otc":
         return this.settleOtc(cmd.offerId, cmd.userId, cmd.legs, cmd.cashToTrader, cmd.ts);
+      case "apply_wealth_tax":
+        void this.applyWealthTax(cmd.ratePct, cmd.topPct, cmd.bottomPct, cmd.ts);
+        return [];
+      case "award_grant":
+        void this.awardGrant(cmd);
+        return [];
       default:
         return [];
     }
+  }
+
+  /**
+   * Solidarity tax (comp_desc): tax the wealthiest cohort and redistribute the
+   * pool evenly to the poorest. Cash is authoritative in the engine, so the
+   * redistribution happens here and emits a public notice plus per-trader alerts.
+   */
+  private async applyWealthTax(
+    ratePct: number,
+    topPct: number,
+    bottomPct: number,
+    ts: number,
+  ): Promise<void> {
+    const accounts = this.engine
+      .accountIds()
+      .filter((id) => UUID_RE.test(id))
+      .map((id) => ({ id, cash: this.engine.cashOf(id) }));
+    const { deltas, redistributed } = wealthTaxTransfers(
+      accounts,
+      ratePct,
+      topPct,
+      bottomPct,
+    );
+    if (redistributed <= 0) return;
+
+    const events: EngineEvent[] = [];
+    const touched: string[] = [];
+    for (const d of deltas) {
+      if (d.delta === 0) continue;
+      this.engine.adjustCash(d.id, d.delta);
+      touched.push(d.id);
+      events.push({
+        type: "alert",
+        challengeId: this.challenge.id,
+        userId: d.id,
+        level: d.delta < 0 ? "warning" : "info",
+        message:
+          d.delta < 0
+            ? `Solidarity tax: -$${Math.abs(d.delta).toFixed(0)} levied on your account.`
+            : `Solidarity relief: +$${d.delta.toFixed(0)} credited to your account.`,
+        ts,
+      });
+    }
+    events.push({
+      type: "wealth_tax",
+      challengeId: this.challenge.id,
+      redistributed,
+      ts,
+    });
+    await this.emit(events);
+    await this.refreshPortfolios(touched, ts);
+  }
+
+  /**
+   * Award a government grant to the largest holder of the target symbol. The
+   * engine owns live positions and cash, so it picks the winner, credits the
+   * prize, persists the mission outcome, and broadcasts the resolved grant.
+   */
+  private async awardGrant(cmd: {
+    grantId: string;
+    symbol: string;
+    description: string;
+    prize: number;
+    expiresAt: string;
+    createdAt: string;
+    ts: number;
+  }): Promise<void> {
+    const holders = this.engine
+      .accountIds()
+      .filter((id) => UUID_RE.test(id))
+      .map((id) => ({ id, qty: this.engine.positionOf(id, cmd.symbol) }));
+    const winnerId = grantWinner(holders);
+    const events: EngineEvent[] = [];
+    if (winnerId) {
+      this.engine.adjustCash(winnerId, cmd.prize);
+      events.push({
+        type: "grant_awarded",
+        challengeId: this.challenge.id,
+        grantId: cmd.grantId,
+        userId: winnerId,
+        symbol: cmd.symbol,
+        prize: cmd.prize,
+        ts: cmd.ts,
+      });
+      events.push({
+        type: "alert",
+        challengeId: this.challenge.id,
+        userId: winnerId,
+        level: "info",
+        message: `Government grant: +$${cmd.prize.toFixed(0)} for the largest ${cmd.symbol} position.`,
+        ts: cmd.ts,
+      });
+    }
+    // Persist the outcome on the mission row.
+    try {
+      await this.db
+        .update(grantMissions)
+        .set({ status: "awarded", winnerId: winnerId ?? null })
+        .where(eq(grantMissions.id, cmd.grantId));
+    } catch (err) {
+      console.error(`[${this.challenge.slug}] grant persist error`, err);
+    }
+    await this.emit(events);
+    // Broadcast the resolved grant so the banner flips to "awarded".
+    await publishBroadcast(this.redis, this.challenge.id, [
+      {
+        target: "all",
+        msg: {
+          type: "grant",
+          challengeId: this.challenge.id,
+          data: {
+            id: cmd.grantId,
+            challengeId: this.challenge.id,
+            symbol: cmd.symbol,
+            description: cmd.description,
+            prize: cmd.prize,
+            status: "awarded",
+            expiresAt: cmd.expiresAt,
+            winnerId: winnerId ?? null,
+            createdAt: cmd.createdAt,
+          },
+        },
+      },
+    ]);
+    if (winnerId) await this.refreshPortfolios([winnerId], cmd.ts);
   }
 
   /** Disburse a loan: credit cash, record 2× repayment, notify the trader. */
@@ -661,6 +803,10 @@ export class ChallengeRunner {
           break;
         case "grant_awarded":
           if (e.userId) affectedUsers.add(e.userId);
+          break;
+        case "wealth_tax":
+          // Redistribution touched many accounts; the alerts that accompany it
+          // carry per-user portfolio refreshes via their own affectedUsers set.
           break;
         case "margin_call":
           affectedUsers.add(e.userId);

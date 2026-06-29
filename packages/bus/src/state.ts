@@ -238,6 +238,30 @@ export async function getEtfWindows(
   return redis.smembers(redisKeys.etfWindows(challengeId));
 }
 
+/* ---- New Eden: premium news access (blind auction winners) ---- */
+export async function grantPremiumAccess(
+  redis: Redis,
+  challengeId: string,
+  userId: string,
+  ttlMs: number,
+): Promise<void> {
+  await redis.set(
+    redisKeys.premiumAccess(challengeId, userId),
+    "1",
+    "PX",
+    Math.max(1000, ttlMs),
+  );
+}
+
+export async function hasPremiumAccess(
+  redis: Redis,
+  challengeId: string,
+  userId: string | null,
+): Promise<boolean> {
+  if (!userId) return false;
+  return (await redis.get(redisKeys.premiumAccess(challengeId, userId))) != null;
+}
+
 /* ---- Order book snapshots ---- */
 export async function setBookSnapshot(
   redis: Redis,

@@ -2,6 +2,8 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 import type {
+  Auction,
+  GrantMission,
   LeaderboardEntry,
   NewsItem,
   OptionContract,
@@ -10,6 +12,7 @@ import type {
   Portfolio,
   PricePoint,
   ServerMessage,
+  VoteProposal,
 } from "@qtp/shared";
 import { TOKEN_KEY, WS_URL } from "@/lib/config";
 
@@ -57,6 +60,14 @@ export interface RealtimeState {
   optionContracts: OptionContract[];
   /** New Eden: pending Deal Desk offers addressed to this trader. */
   otcOffers: OtcOffer[];
+  /** New Eden: current premium-feed blind auction (open or resolved). */
+  auction: Auction | null;
+  /** New Eden: whether this trader won premium access in the latest auction. */
+  auctionWon: boolean;
+  /** New Eden: current policy vote proposal. */
+  vote: VoteProposal | null;
+  /** New Eden: current government grant mission. */
+  grant: GrantMission | null;
 }
 
 type Action =
@@ -137,6 +148,20 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
         ...state,
         otcOffers: state.otcOffers.filter((o) => o.id !== msg.data.offerId),
       };
+    case "auction":
+      return { ...state, auction: msg.data };
+    case "auction_result":
+      return {
+        ...state,
+        auctionWon: msg.data.won,
+        auction: state.auction
+          ? { ...state.auction, status: "resolved", cutoff: msg.data.cutoff }
+          : state.auction,
+      };
+    case "vote":
+      return { ...state, vote: msg.data };
+    case "grant":
+      return { ...state, grant: msg.data };
     default:
       return state;
   }
@@ -155,6 +180,10 @@ const initial: RealtimeState = {
   fairValues: new Map(),
   optionContracts: [],
   otcOffers: [],
+  auction: null,
+  auctionWon: false,
+  vote: null,
+  grant: null,
 };
 
 export function useRealtime(challengeId: string | null): RealtimeState {
