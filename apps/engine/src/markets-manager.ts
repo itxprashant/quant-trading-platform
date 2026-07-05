@@ -18,9 +18,9 @@ import {
 } from "@qtp/db";
 import type {
   BondTemplate,
-  EdenConfig,
   EngineEvent,
   EtfConfig,
+  SymbolConfig,
 } from "@qtp/shared";
 
 /**
@@ -41,13 +41,15 @@ export class MarketsManager {
   private readonly bondValue = new Map<string, number>();
   private readonly timers = new Set<NodeJS.Timeout>();
   private running = false;
+  private windowLoopStarted = false;
 
   constructor(
     private readonly engine: ChallengeEngine,
     private readonly redis: Redis,
     private readonly db: Database,
     private readonly challenge: Challenge,
-    private readonly eden: EdenConfig,
+    bonds: BondTemplate[],
+    etfs: EtfConfig[],
     private readonly minuteMs: number,
     private readonly emit: (events: EngineEvent[]) => Promise<void>,
     private readonly refreshPortfolios: (
@@ -55,8 +57,8 @@ export class MarketsManager {
       ts: number,
     ) => Promise<void>,
   ) {
-    this.bonds = eden.bonds ?? [];
-    this.etfs = eden.etfs ?? [];
+    this.bonds = bonds;
+    this.etfs = etfs;
   }
 
   get hasBonds(): boolean {
@@ -113,16 +115,52 @@ export class MarketsManager {
     }
 
     // Periodic create/redeem windows: open every 10 game-minutes for 30s.
-    if (this.etfs.length > 0) {
-      const open = () => {
-        if (!this.running) return;
-        void this.openWindows();
-        const close = setTimeout(() => void this.closeWindows(), 30_000);
-        this.timers.add(close);
-      };
-      const loop = setInterval(open, this.minuteMs * 10);
-      this.timers.add(loop as unknown as NodeJS.Timeout);
-    }
+    if (this.etfs.length > 0) this.ensureWindowLoop();
+  }
+
+  /**
+   * Introduce a new ETF into a live challenge (no pause). Lists it as a
+   * tradeable non-autonomous instrument around its NAV and ensures the periodic
+   * create/redeem window loop is running.
+   */
+  async listEtf(cfg: EtfConfig): Promise<SymbolConfig | null> {
+    if (this.etfs.some((e) => e.symbol === cfg.symbol)) return null;
+    this.etfs.push(cfg);
+    const now = Date.now();
+    const nav = Math.max(0.1, this.navOf(cfg));
+    const symbolCfg: SymbolConfig = {
+      symbol: cfg.symbol,
+      name: cfg.name,
+      initialPrice: nav,
+      volatility: 0,
+      tickSize: 0.1,
+    };
+    this.engine.addSymbol(symbolCfg, { autonomous: false });
+    await setPrice(this.redis, this.challenge.id, cfg.symbol, nav, now);
+    await setFairValue(this.redis, this.challenge.id, cfg.symbol, nav);
+    await setBookSnapshot(this.redis, this.challenge.id, {
+      symbol: cfg.symbol,
+      bids: [],
+      asks: [],
+      sequence: 0,
+    });
+    await addListedSymbol(this.redis, this.challenge.id, cfg.symbol);
+    this.ensureWindowLoop();
+    return symbolCfg;
+  }
+
+  /** Start the periodic create/redeem window loop once. */
+  private ensureWindowLoop(): void {
+    if (this.windowLoopStarted || !this.running) return;
+    this.windowLoopStarted = true;
+    const open = () => {
+      if (!this.running || this.etfs.length === 0) return;
+      void this.openWindows();
+      const close = setTimeout(() => void this.closeWindows(), 30_000);
+      this.timers.add(close);
+    };
+    const loop = setInterval(open, this.minuteMs * 10);
+    this.timers.add(loop as unknown as NodeJS.Timeout);
   }
 
   stop(): void {

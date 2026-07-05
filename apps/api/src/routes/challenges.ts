@@ -1,10 +1,11 @@
-import { and, desc, eq, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { challengeNews, challenges, participants, users } from "@qtp/db";
 import {
   defaultScoringFor,
   zChallengeStatus,
   zCreateChallengeInput,
+  zNewsFeed,
   zUpdateChallengeInput,
 } from "@qtp/shared";
 import {
@@ -67,7 +68,10 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const query = validate(
-        z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) }),
+        z.object({
+          limit: z.coerce.number().int().min(1).max(50).default(20),
+          feed: zNewsFeed.optional(),
+        }),
         req.query,
         reply,
       );
@@ -84,7 +88,9 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ error: "not_found" });
       }
 
-      let items = await getNewsFeed(app.redis, id, query.limit);
+      // Redis holds only already-published items (dormant scheduled items are
+      // never pushed there). Warm it from Postgres on a cold cache.
+      let items = await getNewsFeed(app.redis, id, 50);
       if (items.length === 0) {
         const rows = await app.db
           .select({
@@ -92,21 +98,32 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
             challengeId: challengeNews.challengeId,
             message: challengeNews.message,
             level: challengeNews.level,
+            feed: challengeNews.feed,
             createdAt: challengeNews.createdAt,
             authorDisplayName: users.displayName,
           })
           .from(challengeNews)
           .leftJoin(users, eq(challengeNews.createdBy, users.id))
-          .where(eq(challengeNews.challengeId, id))
+          .where(
+            and(
+              eq(challengeNews.challengeId, id),
+              // Exclude scheduled items that have not published yet.
+              or(
+                isNull(challengeNews.publishAt),
+                isNotNull(challengeNews.publishedAt),
+              ),
+            ),
+          )
           .orderBy(desc(challengeNews.createdAt))
-          .limit(query.limit);
+          .limit(50);
         items = rows.map((r) => serializeNewsItem(r));
         if (items.length > 0) {
           await setNewsFeed(app.redis, id, items);
         }
       }
 
-      return { items };
+      if (query.feed) items = items.filter((i) => i.feed === query.feed);
+      return { items: items.slice(0, query.limit) };
     },
   );
 

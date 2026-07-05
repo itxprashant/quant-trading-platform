@@ -413,6 +413,13 @@ export type NewsLevel = z.infer<typeof zNewsLevel>;
 export const zNewsKind = z.enum(["signal", "noise", "neutral"]);
 export type NewsKind = z.infer<typeof zNewsKind>;
 
+/**
+ * Which feed an item belongs to. `announcement` is the operational/rule ticker;
+ * `news` is the separate market/flavor headline feed shown in its own panel.
+ */
+export const zNewsFeed = z.enum(["announcement", "news"]);
+export type NewsFeed = z.infer<typeof zNewsFeed>;
+
 /** Fair-value adjustment applied by a signal headline. */
 export const zFvEffect = z.object({
   symbol: z.string(),
@@ -438,6 +445,8 @@ export const zNewsItem = z.object({
   challengeId: z.string().uuid(),
   message: z.string().min(1).max(500),
   level: zNewsLevel,
+  /** Feed the item belongs to; defaults to the announcements ticker. */
+  feed: zNewsFeed.default("announcement"),
   /** Host-only classification; never exposed to traders. */
   kind: zNewsKind.optional(),
   createdAt: z.string(),
@@ -450,6 +459,11 @@ export type NewsItem = z.infer<typeof zNewsItem>;
 export const zPostNewsInput = z.object({
   message: z.string().min(1).max(500),
   level: zNewsLevel.default("info"),
+  /** Which feed to post to; defaults to the announcements ticker. */
+  feed: zNewsFeed.default("announcement"),
+  /** Future publish time (ISO). When set in the future, the item stays dormant
+   * until the engine publishes it. Omit for immediate publish. */
+  publishAt: z.string().datetime().optional(),
   kind: zNewsKind.default("neutral"),
   /** Signal headlines may shift fair value for one or more symbols. */
   fvEffects: z.array(zFvEffect).max(20).optional(),

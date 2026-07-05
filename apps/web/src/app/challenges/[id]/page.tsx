@@ -4,7 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, Wifi, WifiOff } from "lucide-react";
-import type { Challenge, LeaderboardEntry, NewsItem, Portfolio } from "@qtp/shared";
+import type {
+  Challenge,
+  LeaderboardEntry,
+  NewsItem,
+  Portfolio,
+  SymbolConfig,
+} from "@qtp/shared";
 import { get } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useRealtime } from "@/hooks/useRealtime";
@@ -20,6 +26,7 @@ import { PortfolioPanel } from "@/components/trade/PortfolioPanel";
 import { OpenOrders } from "@/components/trade/OpenOrders";
 import { Leaderboard } from "@/components/trade/Leaderboard";
 import { NewsTicker } from "@/components/trade/NewsTicker";
+import { NewsPanel } from "@/components/trade/NewsPanel";
 import { BankPanel } from "@/components/trade/BankPanel";
 import { AlertStack } from "@/components/trade/AlertStack";
 import { OptionsPanel } from "@/components/trade/OptionsPanel";
@@ -84,6 +91,12 @@ export default function TradePage() {
   }, [challengeId]);
 
   const news = rt.news.length ? rt.news : restNews;
+  // Announcements ticker vs the separate market-news panel. Items without an
+  // explicit feed (legacy) default to the announcements ticker.
+  const announcements = news.filter(
+    (n) => (n.feed ?? "announcement") === "announcement",
+  );
+  const marketNews = news.filter((n) => n.feed === "news");
 
   // Seed the limit price input when switching symbols.
   useEffect(() => {
@@ -93,21 +106,35 @@ export default function TradePage() {
   }, [activeSymbol, rt.prices.get(activeSymbol)?.price]);
 
   const portfolio = rt.portfolio ?? restPortfolio;
-  const activeCfg = challenge?.config.symbols.find((s) => s.symbol === activeSymbol);
+
+  // Base config symbols plus any spot/ETF instruments introduced live.
+  const tradableSymbols = useMemo<SymbolConfig[]>(() => {
+    const base = challenge?.config.symbols ?? [];
+    const extra = rt.listedSymbols
+      .filter((s) => s.kind === "spot" || s.kind === "etf")
+      .filter((s) => !base.some((b) => b.symbol === s.symbol))
+      .map(({ kind: _kind, ...cfg }) => cfg);
+    return [...base, ...extra];
+  }, [challenge, rt.listedSymbols]);
+
+  const activeCfg = tradableSymbols.find((s) => s.symbol === activeSymbol);
   const book = rt.books.get(activeSymbol);
   const livePrice = rt.prices.get(activeSymbol);
 
   const metric = challenge?.type === "market_making" ? "score" : "pnl";
   const isEden = challenge?.type === "new_eden";
+  const hasOptions = isEden || rt.optionContracts.length > 0;
+  const hasEtfs =
+    isEden || rt.listedSymbols.some((s) => s.kind === "etf");
 
   const symbolStrip = useMemo(
     () =>
-      challenge?.config.symbols.map((s) => {
+      tradableSymbols.map((s) => {
         const price = rt.prices.get(s.symbol)?.price ?? s.initialPrice;
         const change = (price - s.initialPrice) / s.initialPrice;
         return { symbol: s.symbol, name: s.name, price, change };
-      }) ?? [],
-    [challenge, rt.prices],
+      }),
+    [tradableSymbols, rt.prices],
   );
 
   if (notFound) {
@@ -142,7 +169,7 @@ export default function TradePage() {
         }
       />
 
-      {news.length > 0 && <NewsTicker items={news} />}
+      {announcements.length > 0 && <NewsTicker items={announcements} />}
 
       {isEden && <GrantBanner grant={rt.grant} />}
 
@@ -279,30 +306,38 @@ export default function TradePage() {
           </div>
         </div>
 
-        {/* New Eden derivatives & structured products */}
-        {isEden && (
-          <>
-            <div className="grid gap-3 lg:grid-cols-2">
+        {/* Market news feed (separate from the announcements ticker) */}
+        {marketNews.length > 0 && <NewsPanel items={marketNews} />}
+
+        {/* Derivatives & structured products (options/ETFs can be introduced
+            live into any challenge type; auctions/votes stay New Eden). */}
+        {(hasOptions || hasEtfs) && (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {hasOptions && (
               <OptionsPanel
                 challengeId={challengeId}
                 contracts={rt.optionContracts}
                 prices={rt.prices}
                 onChange={() => setOrderRefresh((n) => n + 1)}
               />
+            )}
+            {hasEtfs && (
               <MarketsPanel
                 challengeId={challengeId}
                 onChange={() => setOrderRefresh((n) => n + 1)}
               />
-            </div>
-            <div className="grid gap-3 lg:grid-cols-2">
-              <AuctionPanel
-                challengeId={challengeId}
-                liveAuction={rt.auction}
-                liveWon={rt.auctionWon}
-              />
-              <VotePanel challengeId={challengeId} liveVote={rt.vote} />
-            </div>
-          </>
+            )}
+          </div>
+        )}
+        {isEden && (
+          <div className="grid gap-3 lg:grid-cols-2">
+            <AuctionPanel
+              challengeId={challengeId}
+              liveAuction={rt.auction}
+              liveWon={rt.auctionWon}
+            />
+            <VotePanel challengeId={challengeId} liveVote={rt.vote} />
+          </div>
         )}
       </main>
 

@@ -1,5 +1,11 @@
 import type { OrderSide, OrderStatus, OrderType } from "./domain.js";
-import type { FvEffect, MomentumEffect, OtcLeg } from "./schemas.js";
+import type {
+  EtfConfig,
+  FvEffect,
+  MomentumEffect,
+  OtcLeg,
+  SymbolConfig,
+} from "./schemas.js";
 
 /* ------------------------------------------------------------------ *
  * Commands: API -> Engine (per-challenge command stream)
@@ -65,6 +71,22 @@ export type EngineCommand =
       challengeId: string;
       symbol: string;
       tradeable: boolean;
+      ts: number;
+    }
+  | {
+      /** Introduce a new spot asset into a live challenge (no pause). */
+      type: "add_symbol";
+      challengeId: string;
+      config: SymbolConfig;
+      /** Start locked (untradeable) until the host unlocks it. */
+      locked: boolean;
+      ts: number;
+    }
+  | {
+      /** Introduce a new ETF into a live challenge (no pause). */
+      type: "add_etf";
+      challengeId: string;
+      config: EtfConfig;
       ts: number;
     }
   | {

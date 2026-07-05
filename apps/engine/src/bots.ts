@@ -36,6 +36,11 @@ export class BotEngine {
     return this.cfg.marketMakers > 0 || this.cfg.noiseTraders > 0;
   }
 
+  /** Register a symbol introduced after startup so MM bots quote it too. */
+  addSymbol(cfg: SymbolConfig): void {
+    this.symbolCfg.set(cfg.symbol, cfg);
+  }
+
   /** Generate the commands for one bot tick. Pure w.r.t. external state. */
   act(
     now: number,

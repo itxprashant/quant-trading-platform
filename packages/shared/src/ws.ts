@@ -9,6 +9,7 @@ import type {
   OtcOffer,
   Portfolio,
   PricePoint,
+  SymbolConfig,
   VoteProposal,
 } from "./schemas.js";
 import type { OrderSide, OrderStatus } from "./domain.js";
@@ -104,6 +105,19 @@ export type ServerMessage =
       type: "option_cycle";
       challengeId: string;
       data: { contracts: OptionContract[]; ts: number };
+    }
+  | {
+      /** A new tradable instrument was introduced into a live challenge. */
+      type: "symbol_listed";
+      challengeId: string;
+      data: {
+        config: SymbolConfig;
+        /** Instrument family for UI grouping. */
+        kind: "spot" | "etf" | "option";
+        /** Whether the symbol is locked (untradeable) at listing time. */
+        locked: boolean;
+        ts: number;
+      };
     };
 
 export type ServerMessageType = ServerMessage["type"];

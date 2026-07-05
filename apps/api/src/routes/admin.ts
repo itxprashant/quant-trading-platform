@@ -19,7 +19,12 @@ import {
 } from "@qtp/db";
 import {
   zCreateOtcInput,
+  zEdenConfig,
+  zEdenOptionsConfig,
+  zEtfConfig,
   zPostNewsInput,
+  zSymbolConfig,
+  type ChallengeConfig,
   type EngineCommand,
 } from "@qtp/shared";
 import { redisKeys } from "@qtp/shared";
@@ -130,15 +135,23 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           ? new Date(Date.now() + body.embargoSec * 1000)
           : null;
 
+      // Future publish time keeps the item dormant until the engine publishes
+      // it (see ChallengeRunner news scheduler). Past/now publishes immediately.
+      const publishAt = body.publishAt ? new Date(body.publishAt) : null;
+      const scheduled = publishAt != null && publishAt.getTime() > Date.now();
+
       const [row] = await app.db
         .insert(challengeNews)
         .values({
           challengeId,
           message: body.message,
           level: body.level,
+          feed: body.feed,
           kind: body.kind,
           fvEffects: body.fvEffects ?? null,
           embargoUntil,
+          publishAt,
+          publishedAt: scheduled ? null : new Date(),
           createdBy: req.user.sub,
         })
         .returning();
@@ -147,6 +160,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         ...row!,
         authorDisplayName: author?.displayName ?? null,
       });
+
+      // Dormant scheduled items are neither cached nor broadcast, and their
+      // signal/momentum effects fire only when the engine publishes them.
+      if (scheduled) {
+        return { item, scheduled: true };
+      }
 
       await pushNews(app.redis, challengeId, item);
       await publishBroadcast(app.redis, challengeId, [
@@ -249,14 +268,136 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-  // Open a fresh options cycle on all configured underlyings.
-  app.post("/:challengeId/options/open", async (req) => {
+  // Introduce a new spot asset into a live challenge (no pause). Persists to
+  // the challenge config (so it survives a runner restart) and tells the engine
+  // to list it immediately.
+  app.post("/:challengeId/symbols", async (req, reply) => {
     const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      zSymbolConfig.extend({ locked: z.boolean().optional() }),
+      req.body,
+      reply,
+    );
+    if (!body) return;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+
+    const { locked, ...symbolCfg } = body;
+    const exists =
+      challenge.config.symbols.some((s) => s.symbol === symbolCfg.symbol) ||
+      (await app.redis.sismember(
+        redisKeys.listedSymbols(challengeId),
+        symbolCfg.symbol,
+      )) === 1;
+    if (exists) return reply.code(409).send({ error: "symbol_exists" });
+
+    const config: ChallengeConfig = {
+      ...challenge.config,
+      symbols: [...challenge.config.symbols, symbolCfg],
+    };
+    await app.db
+      .update(challenges)
+      .set({ config })
+      .where(eq(challenges.id, challengeId));
+
+    // Seed a starting price so late joiners / restarts have state.
+    await setPrice(
+      app.redis,
+      challengeId,
+      symbolCfg.symbol,
+      symbolCfg.initialPrice,
+      Date.now(),
+    );
+    const cmd: EngineCommand = {
+      type: "add_symbol",
+      challengeId,
+      config: symbolCfg,
+      locked: !!locked,
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challengeId, cmd);
+    return { ok: true, symbol: symbolCfg.symbol };
+  });
+
+  // Introduce a new ETF into a live challenge (no pause). Persists to the eden
+  // config bucket (created on demand for non-Eden challenges) and lists it.
+  app.post("/:challengeId/etfs", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(zEtfConfig, req.body, reply);
+    if (!body) return;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+
+    const eden = challenge.config.eden ?? zEdenConfig.parse({});
+    if (eden.etfs?.some((e) => e.symbol === body.symbol)) {
+      return reply.code(409).send({ error: "symbol_exists" });
+    }
+    const config: ChallengeConfig = {
+      ...challenge.config,
+      eden: { ...eden, etfs: [...(eden.etfs ?? []), body] },
+    };
+    await app.db
+      .update(challenges)
+      .set({ config })
+      .where(eq(challenges.id, challengeId));
+
+    const cmd: EngineCommand = {
+      type: "add_etf",
+      challengeId,
+      config: body,
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challengeId, cmd);
+    return { ok: true, symbol: body.symbol };
+  });
+
+  // Open a fresh options cycle. With no underlying, opens on all configured
+  // underlyings (New Eden); with an underlying, opens a single cycle on it and
+  // (for non-Eden challenges) persists the options config so it survives a
+  // restart.
+  app.post("/:challengeId/options/open", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      z.object({ underlying: z.string().optional() }),
+      req.body ?? {},
+      reply,
+    );
+    if (!body) return;
+
+    if (body.underlying) {
+      const challenge = await app.db.query.challenges.findFirst({
+        where: eq(challenges.id, challengeId),
+      });
+      if (!challenge) return reply.code(404).send({ error: "not_found" });
+      const eden = challenge.config.eden ?? zEdenConfig.parse({});
+      const opts =
+        eden.options ??
+        zEdenOptionsConfig.parse({ enabled: true, autoCycle: false });
+      const underlyings = Array.from(
+        new Set([...(opts.underlyings ?? []), body.underlying]),
+      );
+      const config: ChallengeConfig = {
+        ...challenge.config,
+        eden: {
+          ...eden,
+          options: { ...opts, enabled: true, underlyings, autoCycle: false },
+        },
+      };
+      await app.db
+        .update(challenges)
+        .set({ config })
+        .where(eq(challenges.id, challengeId));
+    }
+
     const cmd: EngineCommand = {
       type: "open_option_cycle",
       challengeId,
       cycleId: "",
-      underlying: "",
+      underlying: body.underlying ?? "",
       strikes: [],
       expiresAt: 0,
       ts: Date.now(),

@@ -29,7 +29,7 @@ export function serializeChallenge(
 export function serializeNewsItem(
   row: Pick<
     typeof challengeNews.$inferSelect,
-    "id" | "challengeId" | "message" | "level" | "createdAt"
+    "id" | "challengeId" | "message" | "level" | "feed" | "createdAt"
   > & { authorDisplayName?: string | null },
 ): NewsItem {
   return {
@@ -37,6 +37,7 @@ export function serializeNewsItem(
     challengeId: row.challengeId,
     message: row.message,
     level: row.level,
+    feed: row.feed,
     createdAt: row.createdAt.toISOString(),
     ...(row.authorDisplayName
       ? { authorDisplayName: row.authorDisplayName }

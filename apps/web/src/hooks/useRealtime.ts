@@ -12,6 +12,7 @@ import type {
   Portfolio,
   PricePoint,
   ServerMessage,
+  SymbolConfig,
   VoteProposal,
 } from "@qtp/shared";
 import { TOKEN_KEY, WS_URL } from "@/lib/config";
@@ -68,6 +69,8 @@ export interface RealtimeState {
   vote: VoteProposal | null;
   /** New Eden: current government grant mission. */
   grant: GrantMission | null;
+  /** Instruments introduced live (spot/ETF/option) after the initial config. */
+  listedSymbols: Array<SymbolConfig & { kind: "spot" | "etf" | "option" }>;
 }
 
 type Action =
@@ -162,6 +165,16 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, vote: msg.data };
     case "grant":
       return { ...state, grant: msg.data };
+    case "symbol_listed": {
+      const { config, kind } = msg.data;
+      if (state.listedSymbols.some((s) => s.symbol === config.symbol)) {
+        return state;
+      }
+      return {
+        ...state,
+        listedSymbols: [...state.listedSymbols, { ...config, kind }],
+      };
+    }
     default:
       return state;
   }
@@ -184,6 +197,7 @@ const initial: RealtimeState = {
   auctionWon: false,
   vote: null,
   grant: null,
+  listedSymbols: [],
 };
 
 export function useRealtime(challengeId: string | null): RealtimeState {

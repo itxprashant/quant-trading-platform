@@ -72,6 +72,11 @@ export class EdenBotEngine {
     );
   }
 
+  /** Register a symbol introduced after startup so HFT MMs quote it too. */
+  addSymbol(cfg: SymbolConfig): void {
+    this.symbolCfg.set(cfg.symbol, cfg);
+  }
+
   /** Feed a news pulse so momentum + vega bots react over the next few ticks. */
   onNewsPulse(effects: MomentumEffect[], volEvent: boolean): void {
     if (effects.length > 0) {

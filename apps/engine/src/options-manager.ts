@@ -105,6 +105,14 @@ export class OptionsManager {
     await this.broadcastContracts(now);
   }
 
+  /** Open a cycle on a single underlying (host-specified, any challenge type). */
+  async openOn(underlying: string): Promise<void> {
+    if (!this.running) return;
+    const now = Date.now();
+    await this.open(underlying, now);
+    await this.broadcastContracts(now);
+  }
+
   async open(underlying: string, now: number): Promise<void> {
     const spot =
       this.engine.getFairValue(underlying) ??

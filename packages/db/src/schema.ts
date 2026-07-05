@@ -43,6 +43,7 @@ export const orderStatusEnum = pgEnum("order_status", [
 ]);
 export const newsLevelEnum = pgEnum("news_level", ["info", "warning", "urgent"]);
 export const newsKindEnum = pgEnum("news_kind", ["signal", "noise", "neutral"]);
+export const newsFeedEnum = pgEnum("news_feed", ["announcement", "news"]);
 export const loanStatusEnum = pgEnum("loan_status", ["active", "repaid"]);
 export const optionStatusEnum = pgEnum("option_status", [
   "open",
@@ -234,12 +235,18 @@ export const challengeNews = pgTable(
       .references(() => challenges.id, { onDelete: "cascade" }),
     message: text("message").notNull(),
     level: newsLevelEnum("level").notNull().default("info"),
+    /** announcement (ops/rule messages) vs news (market/flavor headlines). */
+    feed: newsFeedEnum("feed").notNull().default("announcement"),
     /** signal / noise / neutral (host-only classification). */
     kind: newsKindEnum("kind").notNull().default("neutral"),
     /** Fair-value adjustments applied by a signal headline. */
     fvEffects: jsonb("fv_effects").$type<FvEffect[]>(),
     /** Non-premium traders see this item only after this time. */
     embargoUntil: timestamp("embargo_until", { withTimezone: true }),
+    /** Scheduled publish time; item stays dormant until then. Null = immediate. */
+    publishAt: timestamp("publish_at", { withTimezone: true }),
+    /** Set when a scheduled item has been broadcast. Null = not yet published. */
+    publishedAt: timestamp("published_at", { withTimezone: true }),
     createdBy: uuid("created_by").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -252,6 +259,7 @@ export const challengeNews = pgTable(
       t.challengeId,
       t.createdAt,
     ),
+    index("challenge_news_pending_idx").on(t.publishAt, t.publishedAt),
   ],
 );
 

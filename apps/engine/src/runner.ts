@@ -6,21 +6,25 @@ import {
   wealthTaxTransfers,
 } from "@qtp/core";
 import {
+  addListedSymbol,
   appendEvents,
   createRedis,
   getFairValue,
   getPrice,
   publishBroadcast,
+  pushNews,
   readCommands,
   setBookSnapshot,
   setFairValue,
   setMidPrice,
   setPrice,
+  setSymbolTradeable,
   setTraderMetrics,
   type Redis,
 } from "@qtp/bus";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, lte } from "drizzle-orm";
 import {
+  challengeNews,
   grantMissions,
   participants,
   type Challenge,
@@ -28,11 +32,16 @@ import {
 } from "@qtp/db";
 import {
   midFromBook,
+  zEdenOptionsConfig,
+  zEdenRules,
   type BroadcastEnvelope,
   type EdenConfig,
   type EngineCommand,
   type EngineEvent,
+  type EtfConfig,
+  type NewsItem,
   type OtcLeg,
+  type SymbolConfig,
   type TraderMetrics,
 } from "@qtp/shared";
 import { env } from "./env.js";
@@ -62,6 +71,7 @@ export class ChallengeRunner {
   private botTimer?: NodeJS.Timeout;
   private metricsTimer?: NodeJS.Timeout;
   private minuteTimer?: NodeJS.Timeout;
+  private newsTimer?: NodeJS.Timeout;
   private readonly eden?: EdenConfig;
   private readonly edenEnabled: boolean;
 
@@ -70,9 +80,12 @@ export class ChallengeRunner {
     private readonly db: Database,
     private readonly challenge: Challenge,
   ) {
-    this.eden =
-      challenge.type === "new_eden" ? challenge.config.eden : undefined;
-    this.edenEnabled = !!this.eden?.rules.enabled;
+    // `eden` config drives the options/ETF managers for ANY challenge type
+    // (so instruments introduced live survive a runner restart); the full New
+    // Eden bot ecosystem + rules only activate for `new_eden` challenges.
+    this.eden = challenge.config.eden;
+    this.edenEnabled =
+      challenge.type === "new_eden" && !!this.eden?.rules.enabled;
     this.engine = new ChallengeEngine({
       challengeId: challenge.id,
       symbols: challenge.config.symbols,
@@ -102,30 +115,30 @@ export class ChallengeRunner {
         challenge.config.symbols,
       );
     }
-    if (this.edenEnabled && this.eden?.options?.enabled) {
+    if (this.eden?.options?.enabled) {
       this.options = new OptionsManager(
         this.engine,
         this.redis,
         this.db,
         challenge,
         this.eden.options,
-        this.eden.rules,
+        this.eden.rules ?? zEdenRules.parse({}),
         env.minuteMs,
         (events) => this.emit(events),
         (userIds, ts) => this.refreshPortfolios(userIds, ts),
       );
     }
     if (
-      this.edenEnabled &&
-      this.eden &&
-      ((this.eden.bonds?.length ?? 0) > 0 || (this.eden.etfs?.length ?? 0) > 0)
+      (this.eden?.bonds?.length ?? 0) > 0 ||
+      (this.eden?.etfs?.length ?? 0) > 0
     ) {
       this.markets = new MarketsManager(
         this.engine,
         this.redis,
         this.db,
         challenge,
-        this.eden,
+        this.eden?.bonds ?? [],
+        this.eden?.etfs ?? [],
         env.minuteMs,
         (events) => this.emit(events),
         (userIds, ts) => this.refreshPortfolios(userIds, ts),
@@ -202,6 +215,13 @@ export class ChallengeRunner {
         console.error(`[${this.challenge.slug}] metrics error`, err),
       );
     }, env.metricsMs);
+    // Publish any scheduled news items whose publish time has arrived. The
+    // runner holds the per-challenge engine lock, so it is the single writer.
+    this.newsTimer = setInterval(() => {
+      this.publishDueNews().catch((err) =>
+        console.error(`[${this.challenge.slug}] news scheduler error`, err),
+      );
+    }, 5000);
     console.log(`[engine] running challenge ${this.challenge.slug}`);
   }
 
@@ -214,6 +234,7 @@ export class ChallengeRunner {
     if (this.flushTimer) clearInterval(this.flushTimer);
     if (this.metricsTimer) clearInterval(this.metricsTimer);
     if (this.minuteTimer) clearInterval(this.minuteTimer);
+    if (this.newsTimer) clearInterval(this.newsTimer);
     await this.persistence.flush().catch(() => {});
     await this.cmdRedis.quit().catch(() => {});
     console.log(`[engine] stopped challenge ${this.challenge.slug}`);
@@ -294,9 +315,18 @@ export class ChallengeRunner {
         return [];
       case "exercise_option":
         return this.options?.exercise(cmd.userId, cmd.symbol, cmd.quantity, cmd.ts) ?? [];
-      case "open_option_cycle":
-        void this.options?.openAll();
+      case "add_symbol":
+        void this.addSpotSymbol(cmd.config, cmd.locked, cmd.ts);
         return [];
+      case "add_etf":
+        void this.addEtf(cmd.config, cmd.ts);
+        return [];
+      case "open_option_cycle": {
+        const mgr = this.ensureOptions();
+        if (cmd.underlying) void mgr.openOn(cmd.underlying);
+        else void mgr.openAll();
+        return [];
+      }
       case "close_option_cycle":
         void this.options?.close(cmd.cycleId);
         return [];
@@ -326,6 +356,170 @@ export class ChallengeRunner {
       default:
         return [];
     }
+  }
+
+  /**
+   * Publish scheduled news whose publish time has arrived. Atomically claims
+   * due rows by stamping `publishedAt`, then caches + broadcasts each item and
+   * applies its signal/momentum side effects (derived from stored fvEffects).
+   */
+  private async publishDueNews(): Promise<void> {
+    const now = new Date();
+    const claimed = await this.db
+      .update(challengeNews)
+      .set({ publishedAt: now })
+      .where(
+        and(
+          eq(challengeNews.challengeId, this.challenge.id),
+          lte(challengeNews.publishAt, now),
+          isNull(challengeNews.publishedAt),
+        ),
+      )
+      .returning();
+    if (claimed.length === 0) return;
+
+    // Oldest first so the feed ordering matches creation order.
+    claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    const fvEvents: EngineEvent[] = [];
+    for (const row of claimed) {
+      const item: NewsItem = {
+        id: row.id,
+        challengeId: row.challengeId,
+        message: row.message,
+        level: row.level,
+        feed: row.feed,
+        createdAt: row.createdAt.toISOString(),
+      };
+      await pushNews(this.redis, this.challenge.id, item);
+      await publishBroadcast(this.redis, this.challenge.id, [
+        {
+          target: "all",
+          msg: { type: "news", challengeId: this.challenge.id, data: item },
+        },
+      ]);
+
+      // Signal headlines move fair value; derive a momentum pulse for the bots.
+      const effects = row.fvEffects ?? [];
+      if (row.kind === "signal" && effects.length > 0) {
+        for (const e of effects) {
+          fvEvents.push({
+            type: "fair_value",
+            challengeId: this.challenge.id,
+            symbol: e.symbol,
+            fairValue: this.engine.applyFairValueDelta(e.symbol, e.delta),
+            ts: now.getTime(),
+          });
+        }
+      }
+      const momentum = effects
+        .filter((e) => e.delta !== 0)
+        .map((e) => ({ symbol: e.symbol, sentiment: Math.sign(e.delta) }));
+      if (momentum.length > 0) {
+        this.edenBots?.onNewsPulse(momentum, false);
+      }
+    }
+    if (fvEvents.length > 0) await this.emit(fvEvents);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Live instrument introduction (any challenge type, no pause)
+   * ------------------------------------------------------------------ */
+
+  /** Lazily construct the options manager so any challenge type can list them. */
+  private ensureOptions(): OptionsManager {
+    if (!this.options) {
+      const opts =
+        this.eden?.options ??
+        zEdenOptionsConfig.parse({ enabled: true, autoCycle: false });
+      const rules = this.eden?.rules ?? zEdenRules.parse({});
+      this.options = new OptionsManager(
+        this.engine,
+        this.redis,
+        this.db,
+        this.challenge,
+        opts,
+        rules,
+        env.minuteMs,
+        (events) => this.emit(events),
+        (userIds, ts) => this.refreshPortfolios(userIds, ts),
+      );
+      void this.options.start();
+    }
+    return this.options;
+  }
+
+  /** Lazily construct the markets manager so any challenge type can list ETFs. */
+  private ensureMarkets(): MarketsManager {
+    if (!this.markets) {
+      this.markets = new MarketsManager(
+        this.engine,
+        this.redis,
+        this.db,
+        this.challenge,
+        [],
+        [],
+        env.minuteMs,
+        (events) => this.emit(events),
+        (userIds, ts) => this.refreshPortfolios(userIds, ts),
+      );
+      void this.markets.start();
+    }
+    return this.markets;
+  }
+
+  /** Introduce a spot asset into the live book and announce it to clients. */
+  private async addSpotSymbol(
+    cfg: SymbolConfig,
+    locked: boolean,
+    ts: number,
+  ): Promise<void> {
+    // Skip if the symbol already has a book (idempotent on redelivery).
+    if (this.engine.getPrice(cfg.symbol) !== undefined) return;
+    this.engine.addSymbol(cfg, { autonomous: true });
+    this.bots.addSymbol(cfg);
+    this.edenBots?.addSymbol(cfg);
+    await setPrice(this.redis, this.challenge.id, cfg.symbol, cfg.initialPrice, ts);
+    await setBookSnapshot(this.redis, this.challenge.id, {
+      symbol: cfg.symbol,
+      bids: [],
+      asks: [],
+      sequence: 0,
+    });
+    if (this.edenEnabled) {
+      const fv = this.engine.setFairValue(cfg.symbol, cfg.initialPrice);
+      await setFairValue(this.redis, this.challenge.id, cfg.symbol, fv);
+    }
+    await addListedSymbol(this.redis, this.challenge.id, cfg.symbol);
+    if (locked) {
+      await setSymbolTradeable(this.redis, this.challenge.id, cfg.symbol, false);
+    }
+    await publishBroadcast(this.redis, this.challenge.id, [
+      {
+        target: "all",
+        msg: {
+          type: "symbol_listed",
+          challengeId: this.challenge.id,
+          data: { config: cfg, kind: "spot", locked, ts },
+        },
+      },
+    ]);
+  }
+
+  /** Introduce an ETF into the live challenge and announce it to clients. */
+  private async addEtf(cfg: EtfConfig, ts: number): Promise<void> {
+    const mgr = this.ensureMarkets();
+    const listed = await mgr.listEtf(cfg);
+    if (!listed) return;
+    await publishBroadcast(this.redis, this.challenge.id, [
+      {
+        target: "all",
+        msg: {
+          type: "symbol_listed",
+          challengeId: this.challenge.id,
+          data: { config: listed, kind: "etf", locked: false, ts },
+        },
+      },
+    ]);
   }
 
   /**
