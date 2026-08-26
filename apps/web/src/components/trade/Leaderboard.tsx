@@ -28,24 +28,20 @@ function Rank({ rank }: { rank: number }) {
   );
 }
 
-export function Leaderboard({
-  entries,
-  meId,
-  metric = "score",
-  mm = false,
+function Row({
+  e,
+  highlight,
+  cols,
+  metric,
+  mm,
 }: {
-  entries: LeaderboardEntry[];
-  meId?: string;
-  metric?: "score" | "pnl";
-  mm?: boolean;
+  e: LeaderboardEntry;
+  highlight?: boolean;
+  cols: string;
+  metric: "score" | "pnl";
+  mm: boolean;
 }) {
-  const me = entries.find((e) => e.userId === meId);
-  const top = entries.slice(0, 12);
-  const cols = mm
-    ? "grid-cols-[auto_1fr_auto_auto]"
-    : "grid-cols-[auto_1fr_auto]";
-
-  const Row = ({ e, highlight }: { e: LeaderboardEntry; highlight?: boolean }) => (
+  return (
     <div
       className={cn(
         "grid items-center gap-3 px-3 py-1.5 text-xs",
@@ -68,6 +64,24 @@ export function Leaderboard({
       </span>
     </div>
   );
+}
+
+export function Leaderboard({
+  entries,
+  meId,
+  metric = "score",
+  mm = false,
+}: {
+  entries: LeaderboardEntry[];
+  meId?: string;
+  metric?: "score" | "pnl";
+  mm?: boolean;
+}) {
+  const me = entries.find((e) => e.userId === meId);
+  const top = entries.slice(0, 12);
+  const cols = mm
+    ? "grid-cols-[auto_1fr_auto_auto]"
+    : "grid-cols-[auto_1fr_auto]";
 
   return (
     <Panel className="flex h-full flex-col">
@@ -84,12 +98,21 @@ export function Leaderboard({
             No rankings yet
           </div>
         ) : (
-          top.map((e) => <Row key={e.userId} e={e} highlight={e.userId === meId} />)
+          top.map((e) => (
+            <Row
+              key={e.userId}
+              e={e}
+              highlight={e.userId === meId}
+              cols={cols}
+              metric={metric}
+              mm={mm}
+            />
+          ))
         )}
       </div>
       {me && me.rank > 12 && (
         <div className="border-t border-border">
-          <Row e={me} highlight />
+          <Row e={me} highlight cols={cols} metric={metric} mm={mm} />
         </div>
       )}
     </Panel>

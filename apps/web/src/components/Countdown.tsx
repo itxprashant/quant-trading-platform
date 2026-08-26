@@ -13,6 +13,15 @@ function parts(ms: number) {
 
 const pad = (n: number) => n.toString().padStart(2, "0");
 
+function Unit({ v, u }: { v: number; u: string }) {
+  return (
+    <div className="flex flex-col items-center">
+      <span className="mono text-sm font-semibold leading-none">{pad(v)}</span>
+      <span className="text-[10px] uppercase tracking-wide text-faint">{u}</span>
+    </div>
+  );
+}
+
 export function Countdown({ target, label = "Ends in" }: { target: string | null; label?: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -23,13 +32,6 @@ export function Countdown({ target, label = "Ends in" }: { target: string | null
   if (!target) return null;
   const ms = new Date(target).getTime() - now;
   const { d, h, m, s } = parts(ms);
-
-  const Unit = ({ v, u }: { v: number; u: string }) => (
-    <div className="flex flex-col items-center">
-      <span className="mono text-sm font-semibold leading-none">{pad(v)}</span>
-      <span className="text-[10px] uppercase tracking-wide text-faint">{u}</span>
-    </div>
-  );
 
   return (
     <div className="flex items-center gap-2">
