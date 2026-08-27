@@ -168,6 +168,12 @@ describe("ChallengeEngine matching", () => {
     expect(e.cancelOrder(cmd)).toHaveLength(0);
   });
 
+  it("PnL subtracts starting cash so a funded book starts at zero", () => {
+    const e = makeEngine({ startingCash: 10_000 });
+    expect(e.portfolioOf("alice").cash).toBe(10_000);
+    expect(e.portfolioOf("alice").pnl).toBe(0);
+  });
+
   it("PnL is conserved between counterparties before price moves", () => {
     const e = makeEngine();
     e.placeOrder({ orderId: "s", userId: "alice", symbol: "X1", side: "sell", orderType: "limit", quantity: 10, price: 100, ts: 1 });

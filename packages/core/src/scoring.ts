@@ -1,5 +1,18 @@
 import type { ScoringConfig } from "@qtp/shared";
 
+/**
+ * Mark-to-market profit versus the cash the trader started with.
+ * Borrowed money is not wealth (`loanDebt`).
+ */
+export function profitPnl(
+  cash: number,
+  marketValue: number,
+  startingCash: number,
+  loanDebt = 0,
+): number {
+  return cash + marketValue - loanDebt - startingCash;
+}
+
 export interface ScorablePortfolio {
   userId: string;
   pnl: number;

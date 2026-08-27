@@ -1,7 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { bondHoldings, challenges } from "@qtp/db";
-import { getEtfWindows, getPrice, publishCommand } from "@qtp/bus";
+import {
+  getEtfWindows,
+  getPrice,
+  isEtfWindowOpen,
+  publishCommand,
+} from "@qtp/bus";
 import { etfNav } from "@qtp/core";
 import {
   zEtfTradeInput,
@@ -70,6 +75,24 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
       if (challenge.status !== "live") {
         return reply.code(409).send({ error: "challenge_not_live" });
       }
+      const tpl = (challenge.config.eden?.bonds ?? []).find(
+        (b) => b.id === input.bondId,
+      );
+      if (!tpl) return reply.code(400).send({ error: "unknown_bond" });
+      const existing = await app.db
+        .select()
+        .from(bondHoldings)
+        .where(
+          and(
+            eq(bondHoldings.challengeId, input.challengeId),
+            eq(bondHoldings.userId, req.user.sub),
+            eq(bondHoldings.bondId, input.bondId),
+          ),
+        );
+      const held = existing[0]?.quantity ?? 0;
+      if (held + input.quantity > tpl.maxPerUser) {
+        return reply.code(409).send({ error: "bond_limit" });
+      }
       const cmd: EngineCommand = {
         type: "purchase_bond",
         challengeId: input.challengeId,
@@ -128,6 +151,15 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
       if (!challenge) return reply.code(404).send({ error: "challenge_not_found" });
       if (challenge.status !== "live") {
         return reply.code(409).send({ error: "challenge_not_live" });
+      }
+      const listed = (challenge.config.eden?.etfs ?? []).some(
+        (e) => e.symbol === input.etfSymbol,
+      );
+      if (!listed) return reply.code(400).send({ error: "unknown_etf" });
+      if (
+        !(await isEtfWindowOpen(app.redis, input.challengeId, input.etfSymbol))
+      ) {
+        return reply.code(409).send({ error: "window_closed" });
       }
       const cmd: EngineCommand = {
         type: "etf_trade",

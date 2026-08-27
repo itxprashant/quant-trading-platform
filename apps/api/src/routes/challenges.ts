@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { challengeNews, challenges, participants, users } from "@qtp/db";
 import {
   defaultScoringFor,
+  isNewsEmbargoed,
   zChallengeStatus,
   zCreateChallengeInput,
   zNewsFeed,
@@ -10,6 +11,7 @@ import {
 } from "@qtp/shared";
 import {
   getNewsFeed,
+  hasPremiumAccess,
   listActiveChallenges,
   markChallengeActive,
   markChallengeInactive,
@@ -41,25 +43,32 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Fetch by id or slug.
-  app.get("/:idOrSlug", async (req, reply) => {
-    const { idOrSlug } = req.params as { idOrSlug: string };
-    const isUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        idOrSlug,
-      );
-    const row = await app.db.query.challenges.findFirst({
-      where: isUuid
-        ? eq(challenges.id, idOrSlug)
-        : eq(challenges.slug, idOrSlug),
-    });
-    if (!row) return reply.code(404).send({ error: "not_found" });
-    const countRows = await app.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(participants)
-      .where(eq(participants.challengeId, row.id));
-    return serializeChallenge(row, countRows[0]?.count ?? 0);
-  });
+  // Fetch by id or slug. Drafts are admin-only (same visibility as the list).
+  app.get(
+    "/:idOrSlug",
+    { preHandler: [app.optionalAuth] },
+    async (req, reply) => {
+      const { idOrSlug } = req.params as { idOrSlug: string };
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          idOrSlug,
+        );
+      const row = await app.db.query.challenges.findFirst({
+        where: isUuid
+          ? eq(challenges.id, idOrSlug)
+          : eq(challenges.slug, idOrSlug),
+      });
+      if (!row) return reply.code(404).send({ error: "not_found" });
+      if (row.status === "draft" && req.user?.role !== "admin") {
+        return reply.code(404).send({ error: "not_found" });
+      }
+      const countRows = await app.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(participants)
+        .where(eq(participants.challengeId, row.id));
+      return serializeChallenge(row, countRows[0]?.count ?? 0);
+    },
+  );
 
   // Recent news feed for a challenge (REST bootstrap before WS connects).
   app.get(
@@ -100,6 +109,7 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
             level: challengeNews.level,
             feed: challengeNews.feed,
             createdAt: challengeNews.createdAt,
+            embargoUntil: challengeNews.embargoUntil,
             authorDisplayName: users.displayName,
           })
           .from(challengeNews)
@@ -123,6 +133,16 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
       }
 
       if (query.feed) items = items.filter((i) => i.feed === query.feed);
+
+      const isAdmin = req.user?.role === "admin";
+      const premium =
+        !isAdmin && req.user
+          ? await hasPremiumAccess(app.redis, id, req.user.sub)
+          : false;
+      if (!isAdmin && !premium) {
+        items = items.filter((i) => !isNewsEmbargoed(i));
+      }
+
       return { items: items.slice(0, query.limit) };
     },
   );

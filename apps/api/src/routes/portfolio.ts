@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { bondHoldings, challenges, loans, participants, positions } from "@qtp/db";
 import { getPrice, getTraderMetrics } from "@qtp/bus";
-import { computeScore, type ScorablePortfolio } from "@qtp/core";
+import { computeScore, profitPnl, type ScorablePortfolio } from "@qtp/core";
 import { redisKeys, type BondHolding, type Loan, type Portfolio } from "@qtp/shared";
 
 export async function portfolioRoutes(app: FastifyInstance): Promise<void> {
@@ -35,8 +35,12 @@ export async function portfolioRoutes(app: FastifyInstance): Promise<void> {
           eq(participants.userId, req.user.sub),
         ),
       });
+      if (!participant) {
+        reply.code(404).send({ error: "not_enrolled" });
+        return;
+      }
 
-      let cash = participant?.cash ?? challenge.config.startingCash;
+      let cash = participant.cash;
       let marketValue = 0;
       let absInventory = 0;
       const positionsOut: Portfolio["positions"] = [];
@@ -61,8 +65,13 @@ export async function portfolioRoutes(app: FastifyInstance): Promise<void> {
         undefined;
 
       const isEden = challenge.type === "new_eden";
-      const loanDebt = isEden ? (participant?.loanDebt ?? 0) : 0;
-      const pnl = cash + marketValue - loanDebt;
+      const loanDebt = isEden ? participant.loanDebt : 0;
+      const pnl = profitPnl(
+        cash,
+        marketValue,
+        participant.startingCash,
+        loanDebt,
+      );
       const score = computeScore(
         {
           userId: req.user.sub,

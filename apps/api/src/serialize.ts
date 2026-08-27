@@ -30,7 +30,10 @@ export function serializeNewsItem(
   row: Pick<
     typeof challengeNews.$inferSelect,
     "id" | "challengeId" | "message" | "level" | "feed" | "createdAt"
-  > & { authorDisplayName?: string | null },
+  > & {
+    authorDisplayName?: string | null;
+    embargoUntil?: Date | null;
+  },
 ): NewsItem {
   return {
     id: row.id,
@@ -39,6 +42,7 @@ export function serializeNewsItem(
     level: row.level,
     feed: row.feed,
     createdAt: row.createdAt.toISOString(),
+    embargoUntil: row.embargoUntil ? row.embargoUntil.toISOString() : null,
     ...(row.authorDisplayName
       ? { authorDisplayName: row.authorDisplayName }
       : {}),

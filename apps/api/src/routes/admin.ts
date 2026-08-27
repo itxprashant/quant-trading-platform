@@ -706,6 +706,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     await app.redis.del(redisKeys.listedSymbols(challengeId));
     await app.redis.del(redisKeys.etfWindows(challengeId));
     await app.redis.del(redisKeys.optionContracts(challengeId));
+    await app.redis.del(redisKeys.commandStream(challengeId));
+    await app.redis.del(redisKeys.commandCursor(challengeId));
+    await app.redis.del(redisKeys.eventStream(challengeId));
     await clearNewsFeed(app.redis, challengeId);
     await clearTraderMetrics(app.redis, challengeId);
     // New Eden: clear outstanding loan debt on the participant ledger.

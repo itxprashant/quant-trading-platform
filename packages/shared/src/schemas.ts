@@ -456,6 +456,14 @@ export const zNewsItem = z.object({
 });
 export type NewsItem = z.infer<typeof zNewsItem>;
 
+/** True while a premium-feed embargo is still in force. */
+export function isNewsEmbargoed(
+  item: Pick<NewsItem, "embargoUntil">,
+  now = Date.now(),
+): boolean {
+  return item.embargoUntil != null && new Date(item.embargoUntil).getTime() > now;
+}
+
 export const zPostNewsInput = z.object({
   message: z.string().min(1).max(500),
   level: zNewsLevel.default("info"),

@@ -12,7 +12,7 @@ import {
   getPrice,
   hasPremiumAccess,
 } from "@qtp/bus";
-import type { NewsItem } from "@qtp/shared";
+import { isNewsEmbargoed, type NewsItem } from "@qtp/shared";
 import { challenges, getDb } from "@qtp/db";
 import type {
   BroadcastEnvelope,
@@ -67,7 +67,7 @@ function dispatch(challengeId: string, envelopes: BroadcastEnvelope[]): void {
 }
 
 function isEmbargoed(item: NewsItem, now: number): boolean {
-  return item.embargoUntil != null && new Date(item.embargoUntil).getTime() > now;
+  return isNewsEmbargoed(item, now);
 }
 
 async function dispatchEmbargoedNews(

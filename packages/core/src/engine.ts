@@ -6,6 +6,7 @@ import {
   type SymbolConfig,
 } from "@qtp/shared";
 import { OrderBook, type RestingOrder } from "./order-book.js";
+import { profitPnl } from "./scoring.js";
 import { carryCharge, freeCash, liquidationLegs } from "./margin.js";
 import { intrinsicValue, proRataAssign, type OptionType } from "./options.js";
 
@@ -369,8 +370,13 @@ export class ChallengeEngine {
       if (p.qty !== 0)
         positions.push({ symbol, quantity: p.qty, avgPrice: p.avgCost });
     }
-    // PnL nets out loan debt — borrowed cash is not wealth (comp_desc S1).
-    const pnl = acct.cash + marketValue - acct.loanDebt;
+    // Profit vs starting cash; borrowed money is not wealth (comp_desc S1).
+    const pnl = profitPnl(
+      acct.cash,
+      marketValue,
+      this.cfg.startingCash,
+      acct.loanDebt,
+    );
     return {
       cash: acct.cash,
       positions,

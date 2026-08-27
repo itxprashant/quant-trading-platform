@@ -32,6 +32,7 @@ import {
 } from "@qtp/db";
 import {
   midFromBook,
+  redisKeys,
   zEdenOptionsConfig,
   zEdenRules,
   type BroadcastEnvelope,
@@ -65,7 +66,8 @@ export class ChallengeRunner {
   private minuteCount = 0;
   private readonly cmdRedis: Redis;
   private running = false;
-  private lastId = "$";
+  /** Stream cursor. See `loadCommandCursor`. */
+  private lastId = "0-0";
   private tickTimer?: NodeJS.Timeout;
   private flushTimer?: NodeJS.Timeout;
   private botTimer?: NodeJS.Timeout;
@@ -192,6 +194,8 @@ export class ChallengeRunner {
     if (this.options) await this.options.start();
     if (this.markets) await this.markets.start();
 
+    this.lastId = await this.loadCommandCursor();
+
     void this.commandLoop();
     if (this.challenge.config.autonomousPrice) {
       this.tickTimer = setInterval(() => void this.tick(), env.tickMs);
@@ -256,6 +260,10 @@ export class ChallengeRunner {
           events.push(...this.process(m.data));
         }
         await this.emit(events);
+        await this.redis.set(
+          redisKeys.commandCursor(this.challenge.id),
+          this.lastId,
+        );
       } catch (err) {
         if (this.running) {
           console.error(`[${this.challenge.slug}] command loop error`, err);
@@ -359,6 +367,28 @@ export class ChallengeRunner {
   }
 
   /**
+   * Resume the command stream without dropping the go-live backlog or
+   * replaying a live challenge's history after a deploy.
+   *
+   * - Stored cursor: always win (normal restart).
+   * - No cursor + no event stream: first runner for this challenge — read
+   *   from the beginning so place_order / issue_loan in the reconcile window
+   *   are not skipped (`$` would drop them).
+   * - No cursor + existing events: a prior runner already processed the
+   *   stream. Start at the tip so we do not re-apply fills against empty books.
+   */
+  private async loadCommandCursor(): Promise<string> {
+    const stored = await this.redis.get(
+      redisKeys.commandCursor(this.challenge.id),
+    );
+    if (stored && stored.length > 0) return stored;
+    const priorEvents = await this.redis.xlen(
+      redisKeys.eventStream(this.challenge.id),
+    );
+    return priorEvents > 0 ? "$" : "0-0";
+  }
+
+  /**
    * Publish scheduled news whose publish time has arrived. Atomically claims
    * due rows by stamping `publishedAt`, then caches + broadcasts each item and
    * applies its signal/momentum side effects (derived from stored fvEffects).
@@ -389,6 +419,7 @@ export class ChallengeRunner {
         level: row.level,
         feed: row.feed,
         createdAt: row.createdAt.toISOString(),
+        embargoUntil: row.embargoUntil ? row.embargoUntil.toISOString() : null,
       };
       await pushNews(this.redis, this.challenge.id, item);
       await publishBroadcast(this.redis, this.challenge.id, [

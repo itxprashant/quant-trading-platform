@@ -7,7 +7,7 @@ import {
   publishBroadcast,
   setLeaderboard,
 } from "@qtp/bus";
-import { computeScore } from "@qtp/core";
+import { computeScore, profitPnl } from "@qtp/core";
 import {
   challenges,
   getDb,
@@ -41,6 +41,7 @@ async function scoreChallenge(challengeId: string): Promise<void> {
     .select({
       userId: participants.userId,
       cash: participants.cash,
+      startingCash: participants.startingCash,
       loanDebt: participants.loanDebt,
       username: users.username,
       displayName: users.displayName,
@@ -75,8 +76,12 @@ async function scoreChallenge(challengeId: string): Promise<void> {
       marketValue += p.quantity * (priceMap.get(p.symbol) ?? 0);
       absInventory += Math.abs(p.quantity);
     }
-    // New Eden nets borrowed money out of wealth (comp_desc Section 1).
-    const pnl = part.cash + marketValue - (isEden ? part.loanDebt : 0);
+    const pnl = profitPnl(
+      part.cash,
+      marketValue,
+      part.startingCash,
+      isEden ? part.loanDebt : 0,
+    );
     const metrics = metricsMap.get(part.userId);
     const score = computeScore(
       {

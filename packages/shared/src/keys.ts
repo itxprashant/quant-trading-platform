@@ -9,6 +9,8 @@
 export const redisKeys = {
   /** Command stream consumed by the matching engine for a challenge. */
   commandStream: (challengeId: string) => `qtp:cmd:${challengeId}`,
+  /** Last processed command-stream id so a runner restart does not replay. */
+  commandCursor: (challengeId: string) => `qtp:cmd:cursor:${challengeId}`,
   /** Event stream produced by the engine (durable replay/scoring). */
   eventStream: (challengeId: string) => `qtp:evt:${challengeId}`,
   /** Pub/sub channel the gateway subscribes to for real-time fan-out. */
