@@ -900,56 +900,25 @@ export class ChallengeRunner {
     const now = Date.now();
     const envelopes: BroadcastEnvelope[] = [];
     const affectedUsers = new Set<string>();
+    // Bot cancel-replace emits a book_update per cancel and per place. Only
+    // the last snapshot per symbol is hot-cached and broadcast so clients do
+    // not paint the empty intermediate book.
+    const lastPrice = new Map<
+      string,
+      Extract<EngineEvent, { type: "price_update" }>
+    >();
+    const lastBook = new Map<
+      string,
+      Extract<EngineEvent, { type: "book_update" }>
+    >();
 
     for (const e of events) {
       switch (e.type) {
         case "price_update":
-          await setPrice(this.redis, this.challenge.id, e.symbol, e.price, now);
-          {
-            const snap = this.engine.snapshot(e.symbol);
-            const mid = midFromBook(snap.bids, snap.asks) ?? e.price;
-            await setMidPrice(this.redis, this.challenge.id, e.symbol, mid, now);
-          }
-          envelopes.push({
-            target: "all",
-            msg: {
-              type: "price",
-              challengeId: this.challenge.id,
-              data: {
-                symbol: e.symbol,
-                price: e.price,
-                change: e.change,
-                timestamp: e.ts,
-              },
-            },
-          });
+          lastPrice.set(e.symbol, e);
           break;
         case "book_update":
-          await setBookSnapshot(this.redis, this.challenge.id, {
-            symbol: e.symbol,
-            bids: e.bids,
-            asks: e.asks,
-            sequence: e.sequence,
-          });
-          {
-            const mid = midFromBook(e.bids, e.asks);
-            if (mid != null) {
-              await setMidPrice(this.redis, this.challenge.id, e.symbol, mid, now);
-            }
-          }
-          envelopes.push({
-            target: "all",
-            msg: {
-              type: "book",
-              challengeId: this.challenge.id,
-              data: {
-                symbol: e.symbol,
-                bids: e.bids,
-                asks: e.asks,
-                sequence: e.sequence,
-              },
-            },
-          });
+          lastBook.set(e.symbol, e);
           break;
         case "trade":
           affectedUsers.add(e.buyerId);
@@ -1035,6 +1004,55 @@ export class ChallengeRunner {
           });
           break;
       }
+    }
+
+    for (const e of lastPrice.values()) {
+      await setPrice(this.redis, this.challenge.id, e.symbol, e.price, now);
+      {
+        const snap = this.engine.snapshot(e.symbol);
+        const mid = midFromBook(snap.bids, snap.asks) ?? e.price;
+        await setMidPrice(this.redis, this.challenge.id, e.symbol, mid, now);
+      }
+      envelopes.push({
+        target: "all",
+        msg: {
+          type: "price",
+          challengeId: this.challenge.id,
+          data: {
+            symbol: e.symbol,
+            price: e.price,
+            change: e.change,
+            timestamp: e.ts,
+          },
+        },
+      });
+    }
+    for (const e of lastBook.values()) {
+      await setBookSnapshot(this.redis, this.challenge.id, {
+        symbol: e.symbol,
+        bids: e.bids,
+        asks: e.asks,
+        sequence: e.sequence,
+      });
+      {
+        const mid = midFromBook(e.bids, e.asks);
+        if (mid != null) {
+          await setMidPrice(this.redis, this.challenge.id, e.symbol, mid, now);
+        }
+      }
+      envelopes.push({
+        target: "all",
+        msg: {
+          type: "book",
+          challengeId: this.challenge.id,
+          data: {
+            symbol: e.symbol,
+            bids: e.bids,
+            asks: e.asks,
+            sequence: e.sequence,
+          },
+        },
+      });
     }
 
     // Push fresh portfolio snapshots to affected users.

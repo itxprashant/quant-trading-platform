@@ -5,6 +5,9 @@ import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { money } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
+/** Matches engine `snapshot(12)` so the ladder height never collapses. */
+const BOOK_DEPTH = 12;
+
 function cumulative(levels: PriceLevel[]): { level: PriceLevel; total: number }[] {
   let running = 0;
   return levels.map((level) => {
@@ -25,6 +28,8 @@ function Side({
   onPick?: (price: number) => void;
 }) {
   const isBid = side === "bid";
+  const slots = Array.from({ length: BOOK_DEPTH }, (_, i) => rows[i] ?? null);
+
   return (
     <div className="flex-1">
       <div className="grid grid-cols-2 px-2 pb-1 text-[10px] uppercase tracking-wide text-faint">
@@ -41,36 +46,52 @@ function Side({
         )}
       </div>
       <div>
-        {rows.length === 0 && (
-          <div className="px-2 py-6 text-center text-xs text-faint">No orders</div>
-        )}
-        {rows.map(({ level, total }) => (
-          <button
-            key={level.price}
-            onClick={() => onPick?.(level.price)}
-            className="relative grid w-full grid-cols-2 px-2 py-[3px] text-xs hover:bg-surface-2"
-          >
-            <span
+        {slots.map((row, i) => {
+          const level = row?.level;
+          const total = row?.total ?? 0;
+          return (
+            <button
+              key={`${side}-${i}`}
+              type="button"
+              disabled={!level}
+              onClick={() => level && onPick?.(level.price)}
               className={cn(
-                "absolute inset-y-0",
-                isBid ? "right-0 bg-up-subtle" : "left-0 bg-down-subtle",
+                "relative grid w-full grid-cols-2 px-2 py-[3px] text-xs",
+                level ? "hover:bg-surface-2" : "cursor-default",
               )}
-              style={{ width: `${(total / max) * 100}%`, opacity: 0.5 }}
-              aria-hidden
-            />
-            {isBid ? (
-              <>
-                <span className="relative z-10 mono text-up">{money(level.price)}</span>
-                <span className="relative z-10 mono text-right text-muted">{level.quantity}</span>
-              </>
-            ) : (
-              <>
-                <span className="relative z-10 mono text-muted">{level.quantity}</span>
-                <span className="relative z-10 mono text-right text-down">{money(level.price)}</span>
-              </>
-            )}
-          </button>
-        ))}
+            >
+              {level && (
+                <span
+                  className={cn(
+                    "absolute inset-y-0",
+                    isBid ? "right-0 bg-up-subtle" : "left-0 bg-down-subtle",
+                  )}
+                  style={{ width: `${(total / max) * 100}%`, opacity: 0.5 }}
+                  aria-hidden
+                />
+              )}
+              {isBid ? (
+                <>
+                  <span className={cn("relative z-10 mono", level ? "text-up" : "text-faint/40")}>
+                    {level ? money(level.price) : "—"}
+                  </span>
+                  <span className={cn("relative z-10 mono text-right", level ? "text-muted" : "text-faint/40")}>
+                    {level ? level.quantity : "—"}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className={cn("relative z-10 mono", level ? "text-muted" : "text-faint/40")}>
+                    {level ? level.quantity : "—"}
+                  </span>
+                  <span className={cn("relative z-10 mono text-right", level ? "text-down" : "text-faint/40")}>
+                    {level ? money(level.price) : "—"}
+                  </span>
+                </>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

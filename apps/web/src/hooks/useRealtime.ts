@@ -211,6 +211,14 @@ export function useRealtime(challengeId: string | null): RealtimeState {
     let attempts = 0;
     let pingTimer: ReturnType<typeof setInterval> | undefined;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let bookFlush: ReturnType<typeof setTimeout> | undefined;
+    const pendingBooks = new Map<string, ServerMessage>();
+
+    function flushBooks() {
+      bookFlush = undefined;
+      for (const m of pendingBooks.values()) dispatch({ t: "msg", v: m });
+      pendingBooks.clear();
+    }
 
     function connect() {
       const token =
@@ -235,6 +243,13 @@ export function useRealtime(challengeId: string | null): RealtimeState {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data as string) as ServerMessage;
+          // Bot cancel-replace can emit many book snapshots in one tick.
+          // Keep only the latest per symbol and paint once the burst settles.
+          if (msg.type === "book") {
+            pendingBooks.set(msg.data.symbol, msg);
+            if (!bookFlush) bookFlush = setTimeout(flushBooks, 0);
+            return;
+          }
           dispatch({ t: "msg", v: msg });
         } catch {
           /* ignore */
@@ -261,6 +276,8 @@ export function useRealtime(challengeId: string | null): RealtimeState {
       closed = true;
       if (pingTimer) clearInterval(pingTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (bookFlush) clearTimeout(bookFlush);
+      pendingBooks.clear();
       wsRef.current?.close();
     };
   }, [challengeId]);
