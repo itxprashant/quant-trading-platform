@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft } from "lucide-react";
+import { ArrowUpRight, ChevronLeft } from "lucide-react";
 import type {
   Challenge,
   NewsFeed,
@@ -20,29 +20,55 @@ import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { StatusBadge } from "@/components/ui/Badge";
 
 function LiveControls({ challenge }: { challenge: Challenge }) {
-  const [symbol, setSymbol] = useState(challenge.config.symbols[0]?.symbol ?? "");
+  const [symbol, setSymbol] = useState(
+    challenge.config.symbols[0]?.symbol ?? "",
+  );
   const [target, setTarget] = useState("100");
   const [speed, setSpeed] = useState("5");
   const [price, setPrice] = useState("100");
   const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"drift" | "price" | null>(null);
 
   async function drift() {
-    await post(`/api/admin/${challenge.id}/drift`, {
-      symbol,
-      target: Number(target),
-      speed: Number(speed),
-    });
-    setMsg(`Drifting ${symbol} → ${target}`);
+    setBusy("drift");
+    setError(null);
+    setMsg(null);
+    try {
+      await post(`/api/admin/${challenge.id}/drift`, {
+        symbol,
+        target: Number(target),
+        speed: Number(speed),
+      });
+      setMsg(`Drifting ${symbol} → ${target}`);
+    } catch {
+      setError("Could not set price drift. Check the symbol and try again.");
+    } finally {
+      setBusy(null);
+    }
   }
   async function setHard() {
-    await post(`/api/admin/${challenge.id}/price`, { symbol, price: Number(price) });
-    setMsg(`Set ${symbol} = ${price}`);
+    setBusy("price");
+    setError(null);
+    setMsg(null);
+    try {
+      await post(`/api/admin/${challenge.id}/price`, {
+        symbol,
+        price: Number(price),
+      });
+      setMsg(`Set ${symbol} = ${price}`);
+    } catch {
+      setError("Could not set the price. Check the symbol and try again.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
-    <Panel>
+    <Panel className="min-w-0 rounded-md backdrop-blur-none">
       <PanelHeader title="Live price controls" />
       <div className="space-y-4 p-4">
         <Field label="Symbol">
@@ -54,22 +80,64 @@ function LiveControls({ challenge }: { challenge: Challenge }) {
             ))}
           </Select>
         </Field>
-        <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+        <div className="grid grid-cols-2 items-end gap-2 sm:grid-cols-[1fr_1fr_auto]">
           <Field label="Drift target">
-            <Input type="number" step="0.01" value={target} onChange={(e) => setTarget(e.target.value)} className="mono" />
+            <Input
+              type="number"
+              step="0.01"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              className="mono"
+            />
           </Field>
           <Field label="Speed (1-10)">
-            <Input type="number" min={1} max={10} value={speed} onChange={(e) => setSpeed(e.target.value)} className="mono" />
+            <Input
+              type="number"
+              min={1}
+              max={10}
+              value={speed}
+              onChange={(e) => setSpeed(e.target.value)}
+              className="mono"
+            />
           </Field>
-          <Button variant="secondary" onClick={drift}>Drift</Button>
+          <Button
+            variant="secondary"
+            onClick={drift}
+            disabled={busy !== null || !symbol}
+            loading={busy === "drift"}
+          >
+            Drift
+          </Button>
         </div>
         <div className="grid grid-cols-[1fr_auto] items-end gap-2">
           <Field label="Hard set price">
-            <Input type="number" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} className="mono" />
+            <Input
+              type="number"
+              step="0.01"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              className="mono"
+            />
           </Field>
-          <Button variant="secondary" onClick={setHard}>Set</Button>
+          <Button
+            variant="secondary"
+            onClick={setHard}
+            disabled={busy !== null || !symbol}
+            loading={busy === "price"}
+          >
+            Set price
+          </Button>
         </div>
-        {msg && <p className="text-xs text-up">{msg}</p>}
+        {msg && (
+          <p role="status" className="text-xs text-up">
+            {msg}
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="text-xs text-down">
+            {error}
+          </p>
+        )}
       </div>
     </Panel>
   );
@@ -138,7 +206,10 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
         name: etfName.trim() || undefined,
         basket: basket
           .filter((b) => b.symbol.trim())
-          .map((b) => ({ symbol: b.symbol.trim().toUpperCase(), weight: Number(b.weight) })),
+          .map((b) => ({
+            symbol: b.symbol.trim().toUpperCase(),
+            weight: Number(b.weight),
+          })),
       });
       const s = etfSymbol.trim().toUpperCase();
       setEtfSymbol("");
@@ -153,18 +224,23 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
     });
 
   return (
-    <Panel>
-      <PanelHeader title="Introduce instrument (live)" />
+    <Panel className="min-w-0 rounded-md backdrop-blur-none">
+      <PanelHeader title="Instrument listings" />
       <div className="space-y-4 p-4">
-        <div className="flex gap-2">
+        <div
+          className="flex gap-1 border-b border-border pb-3"
+          role="group"
+          aria-label="Instrument type"
+        >
           {(["spot", "etf", "option"] as const).map((t) => (
             <button
               key={t}
               type="button"
               onClick={() => setTab(t)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
+              aria-pressed={tab === t}
+              className={`rounded-sm px-3 py-1.5 text-xs font-medium capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
                 tab === t
-                  ? "bg-accent-subtle/40 text-text"
+                  ? "bg-accent-subtle text-accent"
                   : "text-muted hover:bg-surface-2 hover:text-text"
               }`}
             >
@@ -188,13 +264,31 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
                 <Input value={name} onChange={(e) => setName(e.target.value)} />
               </Field>
               <Field label="Initial price">
-                <Input type="number" step="0.01" value={initialPrice} onChange={(e) => setInitialPrice(e.target.value)} className="mono" />
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={initialPrice}
+                  onChange={(e) => setInitialPrice(e.target.value)}
+                  className="mono"
+                />
               </Field>
               <Field label="Tick size">
-                <Input type="number" step="0.01" value={tickSize} onChange={(e) => setTickSize(e.target.value)} className="mono" />
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={tickSize}
+                  onChange={(e) => setTickSize(e.target.value)}
+                  className="mono"
+                />
               </Field>
               <Field label="Volatility">
-                <Input type="number" step="0.1" value={volatility} onChange={(e) => setVolatility(e.target.value)} className="mono" />
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={volatility}
+                  onChange={(e) => setVolatility(e.target.value)}
+                  className="mono"
+                />
               </Field>
               <label className="flex items-end gap-2 pb-2 text-xs text-muted">
                 <input
@@ -224,19 +318,27 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
                 />
               </Field>
               <Field label="Name (optional)">
-                <Input value={etfName} onChange={(e) => setEtfName(e.target.value)} />
+                <Input
+                  value={etfName}
+                  onChange={(e) => setEtfName(e.target.value)}
+                />
               </Field>
             </div>
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted">Basket</p>
               {basket.map((row, i) => (
-                <div key={i} className="grid grid-cols-[1fr_100px_auto] items-end gap-2">
+                <div
+                  key={i}
+                  className="grid grid-cols-[1fr_100px_auto] items-end gap-2"
+                >
                   <Field label="Component">
                     <Select
                       value={row.symbol}
                       onChange={(e) =>
                         setBasket((b) =>
-                          b.map((r, j) => (j === i ? { ...r, symbol: e.target.value } : r)),
+                          b.map((r, j) =>
+                            j === i ? { ...r, symbol: e.target.value } : r,
+                          ),
                         )
                       }
                     >
@@ -254,7 +356,9 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
                       value={row.weight}
                       onChange={(e) =>
                         setBasket((b) =>
-                          b.map((r, j) => (j === i ? { ...r, weight: e.target.value } : r)),
+                          b.map((r, j) =>
+                            j === i ? { ...r, weight: e.target.value } : r,
+                          ),
                         )
                       }
                       className="mono"
@@ -262,7 +366,10 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
                   </Field>
                   <Button
                     variant="secondary"
-                    onClick={() => setBasket((b) => b.filter((_, j) => j !== i))}
+                    aria-label={`Remove basket component ${i + 1}`}
+                    onClick={() =>
+                      setBasket((b) => b.filter((_, j) => j !== i))
+                    }
                     disabled={basket.length <= 1}
                   >
                     ×
@@ -274,7 +381,10 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
                 onClick={() =>
                   setBasket((b) => [
                     ...b,
-                    { symbol: challenge.config.symbols[0]?.symbol ?? "", weight: "1" },
+                    {
+                      symbol: challenge.config.symbols[0]?.symbol ?? "",
+                      weight: "1",
+                    },
                   ])
                 }
               >
@@ -290,7 +400,10 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
         {tab === "option" && (
           <div className="space-y-3">
             <Field label="Underlying">
-              <Select value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
+              <Select
+                value={underlying}
+                onChange={(e) => setUnderlying(e.target.value)}
+              >
                 {challenge.config.symbols.map((s) => (
                   <option key={s.symbol} value={s.symbol}>
                     {s.symbol}
@@ -307,8 +420,16 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
           </div>
         )}
 
-        {msg && <p className="text-xs text-up">{msg}</p>}
-        {error && <p className="text-xs text-down">{error}</p>}
+        {msg && (
+          <p role="status" className="text-xs text-up">
+            {msg}
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="text-xs text-down">
+            {error}
+          </p>
+        )}
       </div>
     </Panel>
   );
@@ -320,7 +441,9 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
   const [feed, setFeed] = useState<NewsFeed>("announcement");
   const [level, setLevel] = useState<NewsLevel>("info");
   const [kind, setKind] = useState<NewsKind>("neutral");
-  const [fvSymbol, setFvSymbol] = useState(challenge.config.symbols[0]?.symbol ?? "");
+  const [fvSymbol, setFvSymbol] = useState(
+    challenge.config.symbols[0]?.symbol ?? "",
+  );
   const [fvDelta, setFvDelta] = useState("0");
   const [volEvent, setVolEvent] = useState(false);
   const [publishAt, setPublishAt] = useState("");
@@ -376,8 +499,8 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
   }
 
   return (
-    <Panel>
-      <PanelHeader title="Live news" />
+    <Panel className="min-w-0 rounded-md backdrop-blur-none">
+      <PanelHeader title="News & announcements" />
       <div className="space-y-4 p-4">
         <Field label={feed === "news" ? "Market news" : "Announcement"}>
           <textarea
@@ -390,7 +513,7 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
                 ? "Market/flavor headline for traders…"
                 : "Operational announcement for traders…"
             }
-            className="w-full resize-y rounded-lg border border-border bg-surface-3 px-3 py-2 text-sm text-text placeholder:text-faint outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="w-full resize-y rounded-md border border-border bg-surface-3 px-3 py-2 text-sm text-text placeholder:text-faint outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
           />
         </Field>
         <div className="flex flex-wrap items-end gap-3">
@@ -443,7 +566,10 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
             {kind === "signal" && (
               <>
                 <Field label="FV symbol">
-                  <Select value={fvSymbol} onChange={(e) => setFvSymbol(e.target.value)}>
+                  <Select
+                    value={fvSymbol}
+                    onChange={(e) => setFvSymbol(e.target.value)}
+                  >
                     {challenge.config.symbols.map((s) => (
                       <option key={s.symbol} value={s.symbol}>
                         {s.symbol}
@@ -473,7 +599,11 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
             </label>
           </div>
         )}
-        {error && <p className="text-xs text-down">{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs text-down">
+            {error}
+          </p>
+        )}
         {recent.length > 0 && (
           <div className="space-y-2 border-t border-border pt-3">
             <p className="text-xs font-medium text-muted">Recent</p>
@@ -481,7 +611,7 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
               {recent.map((item) => (
                 <li
                   key={item.id}
-                  className="rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs"
+                  className="break-words border-b border-border py-2 text-xs last:border-0"
                 >
                   <span className="mono text-faint">
                     {new Date(item.createdAt).toLocaleTimeString([], {
@@ -504,37 +634,159 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
 function EditInner() {
   const { id } = useParams<{ id: string }>();
   const [challenge, setChallenge] = useState<Challenge | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      setChallenge(await get<Challenge>(`/api/challenges/${id}`));
+    } catch {
+      setError(
+        "Could not load this challenge. Check your connection and try again.",
+      );
+    }
+  }, [id]);
 
   useEffect(() => {
-    get<Challenge>(`/api/challenges/${id}`).then(setChallenge).catch(() => {});
-  }, [id]);
+    setChallenge(null);
+    load();
+  }, [load]);
 
   return (
     <div className="min-h-dvh">
       <TopBar />
-      <main className="mx-auto max-w-3xl px-4 py-8">
-        <Link href="/admin" className="mb-4 flex items-center gap-1 text-sm text-muted hover:text-text">
-          <ChevronLeft className="size-4" /> Admin
+      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+        <Link
+          href="/admin"
+          className="mb-6 inline-flex items-center gap-1 rounded-sm text-xs text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <ChevronLeft className="size-3.5" /> Event register
         </Link>
-        {!challenge ? (
-          <div className="space-y-4">
+        {error ? (
+          <div
+            role="alert"
+            className="space-y-3 rounded-md border border-down/30 bg-surface p-5"
+          >
+            <h1 className="text-lg font-semibold">Challenge unavailable</h1>
+            <p className="text-sm text-muted">{error}</p>
+            <Button variant="secondary" onClick={load}>
+              Retry
+            </Button>
+          </div>
+        ) : !challenge ? (
+          <div
+            className="space-y-4"
+            role="status"
+            aria-label="Loading challenge"
+          >
             <Skeleton className="h-8 w-64" />
             <Skeleton className="h-64" />
           </div>
         ) : (
           <>
-            <h1 className="mb-6 text-xl font-semibold tracking-tight">{challenge.name}</h1>
+            <header className="mb-6 border-b border-border pb-5">
+              <p className="mono mb-2 text-[11px] uppercase tracking-[0.16em] text-muted">
+                Event operations /{" "}
+                {challenge.type === "new_eden"
+                  ? "New Eden Exchange"
+                  : challenge.type === "market_making"
+                    ? "Market making"
+                    : "Directional"}
+              </p>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex min-w-0 flex-wrap items-center gap-3">
+                  <h1 className="min-w-0 max-w-full break-words text-2xl font-semibold tracking-tight">
+                    {challenge.name}
+                  </h1>
+                  <StatusBadge status={challenge.status} />
+                </div>
+                <Link
+                  href={`/challenges/${challenge.id}`}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-medium hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  Open trading view <ArrowUpRight className="size-3.5" />
+                </Link>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted">
+                <span>
+                  <span className="mono text-text">
+                    {challenge.config.symbols.length}
+                  </span>{" "}
+                  instruments
+                </span>
+                <span>
+                  <span className="mono text-text">
+                    {challenge.participantCount ?? 0}
+                  </span>{" "}
+                  traders
+                </span>
+                <nav
+                  aria-label="Editor sections"
+                  className="flex gap-4 sm:ml-auto"
+                >
+                  {(challenge.status === "live" ||
+                    challenge.status === "paused") && (
+                    <a
+                      href="#live-operations"
+                      className="rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      Live operations
+                    </a>
+                  )}
+                  <a
+                    href="#configuration"
+                    className="rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Configuration
+                  </a>
+                </nav>
+              </div>
+            </header>
             {(challenge.status === "live" || challenge.status === "paused") && (
-              <div className="mb-4 space-y-4">
-                <LiveControls challenge={challenge} />
-                <AddInstrumentControls challenge={challenge} />
+              <section
+                id="live-operations"
+                aria-labelledby="live-heading"
+                className="mb-8 scroll-mt-20 space-y-4"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h2
+                    id="live-heading"
+                    className="text-lg font-semibold tracking-tight"
+                  >
+                    Live operations
+                  </h2>
+                  <p className="text-xs text-muted">
+                    These controls send commands directly to this session.
+                  </p>
+                </div>
+                <div className="grid items-start gap-4 lg:grid-cols-2">
+                  <LiveControls challenge={challenge} />
+                  <AddInstrumentControls challenge={challenge} />
+                </div>
                 {challenge.type === "new_eden" && (
                   <EdenHostConsole challenge={challenge} />
                 )}
                 <NewsControls challenge={challenge} />
-              </div>
+              </section>
             )}
-            <ChallengeForm existing={challenge} />
+            <section
+              id="configuration"
+              aria-labelledby="config-heading"
+              className="scroll-mt-20"
+            >
+              <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+                <h2
+                  id="config-heading"
+                  className="text-lg font-semibold tracking-tight"
+                >
+                  Configuration
+                </h2>
+                <p className="text-xs text-muted">
+                  Review the settings below, then save your changes.
+                </p>
+              </div>
+              <ChallengeForm key={challenge.id} existing={challenge} />
+            </section>
           </>
         )}
       </main>

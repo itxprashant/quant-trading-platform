@@ -30,6 +30,9 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
   const [contracts, setContracts] = useState<OptionContract[]>([]);
   const [etfs, setEtfs] = useState<EtfView[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -39,8 +42,11 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
       ]);
       setContracts(opt.contracts);
       setEtfs(mk.etfs);
+      setRefreshError(null);
     } catch {
-      /* ignore */
+      setRefreshError(
+        "Could not refresh options and ETF windows. Retrying automatically; displayed state may be outdated.",
+      );
     }
   }, [challengeId]);
 
@@ -55,37 +61,89 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
   );
 
   async function openCycle() {
-    await post(`/api/admin/${challengeId}/options/open`);
-    setMsg("Opened a fresh option cycle");
-    setTimeout(refresh, 500);
+    setBusy("open");
+    setError(null);
+    setMsg(null);
+    try {
+      await post(`/api/admin/${challengeId}/options/open`);
+      setMsg("Opened a fresh option cycle");
+      setTimeout(refresh, 500);
+    } catch {
+      setError(
+        "Could not open an option cycle. Check the current cycles before retrying.",
+      );
+    } finally {
+      setBusy(null);
+    }
   }
   async function closeCycle(cycleId: string) {
-    await post(`/api/admin/${challengeId}/options/close`, { cycleId });
-    setMsg("Closed cycle — exercise window open");
-    setTimeout(refresh, 500);
+    setBusy(cycleId);
+    setError(null);
+    setMsg(null);
+    try {
+      await post(`/api/admin/${challengeId}/options/close`, { cycleId });
+      setMsg("Closed cycle; exercise window open");
+      setTimeout(refresh, 500);
+    } catch {
+      setError(
+        "Could not close the option cycle. Check its current state before retrying.",
+      );
+    } finally {
+      setBusy(null);
+    }
   }
   async function toggleWindow(symbol: string, open: boolean) {
-    await post(`/api/admin/${challengeId}/etf-window`, { etfSymbol: symbol, open });
-    setMsg(`${symbol} window ${open ? "opened" : "closed"}`);
-    setTimeout(refresh, 500);
+    setBusy(symbol);
+    setError(null);
+    setMsg(null);
+    try {
+      await post(`/api/admin/${challengeId}/etf-window`, {
+        etfSymbol: symbol,
+        open,
+      });
+      setMsg(`${symbol} window ${open ? "opened" : "closed"}`);
+      setTimeout(refresh, 500);
+    } catch {
+      setError(
+        "Could not update the ETF window. Check its current state before retrying.",
+      );
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
-    <Panel>
-      <PanelHeader title="Eden host console" />
-      <div className="space-y-5 p-4">
+    <Panel className="min-w-0 rounded-md backdrop-blur-none">
+      <PanelHeader title="New Eden / Host desk" />
+      {refreshError && (
+        <p
+          role="alert"
+          className="border-b border-border px-4 py-3 text-xs text-down"
+        >
+          {refreshError}
+        </p>
+      )}
+      <div className="grid gap-6 p-4 sm:p-5 lg:grid-cols-2">
         {/* Options cycle */}
-        <section className="space-y-2">
+        <section className="min-w-0 space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               Options
             </p>
-            <Button size="sm" variant="secondary" onClick={openCycle}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={openCycle}
+              loading={busy === "open"}
+              disabled={busy !== null}
+            >
               Open cycle
             </Button>
           </div>
           {cycles.length === 0 ? (
-            <p className="text-xs text-faint">No open cycle.</p>
+            <p className="py-2 text-xs text-muted">
+              No open option cycles. Open a cycle to begin trading.
+            </p>
           ) : (
             <ul className="space-y-1.5">
               {cycles.map((id) => {
@@ -93,7 +151,7 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
                 return (
                   <li
                     key={id}
-                    className="flex items-center justify-between rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs"
+                    className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-xs"
                   >
                     <span className="mono text-faint">
                       {id.slice(0, 8)} · {n} contracts
@@ -101,6 +159,8 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
                     <Button
                       size="sm"
                       variant="danger"
+                      disabled={busy !== null}
+                      loading={busy === id}
                       onClick={() => closeCycle(id)}
                     >
                       Close
@@ -113,46 +173,69 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
         </section>
 
         {/* ETF windows */}
-        {etfs.length > 0 && (
-          <section className="space-y-2 border-t border-border pt-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-              ETF windows
+        <section className="min-w-0 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+            ETF windows
+          </p>
+          {etfs.length === 0 && (
+            <p className="py-2 text-xs text-muted">
+              No ETFs listed. Add one from Instrument listings to manage its
+              create/redeem window.
             </p>
-            <ul className="space-y-1.5">
-              {etfs.map((etf) => (
-                <li
-                  key={etf.symbol}
-                  className="flex items-center justify-between rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs"
-                >
-                  <span>
-                    <span className="font-medium">{etf.symbol}</span>{" "}
-                    <span className="mono text-faint">NAV {etf.nav.toFixed(2)}</span>
+          )}
+          <ul className="space-y-1.5">
+            {etfs.map((etf) => (
+              <li
+                key={etf.symbol}
+                className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-xs"
+              >
+                <span>
+                  <span className="font-medium">{etf.symbol}</span>{" "}
+                  <span className="mono text-faint">
+                    NAV {etf.nav.toFixed(2)}
                   </span>
-                  <Button
-                    size="sm"
-                    variant={etf.windowOpen ? "danger" : "secondary"}
-                    onClick={() => toggleWindow(etf.symbol, !etf.windowOpen)}
-                  >
-                    {etf.windowOpen ? "Close window" : "Open window"}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+                </span>
+                <Button
+                  size="sm"
+                  variant={etf.windowOpen ? "danger" : "secondary"}
+                  disabled={busy !== null}
+                  loading={busy === etf.symbol}
+                  onClick={() => toggleWindow(etf.symbol, !etf.windowOpen)}
+                >
+                  {etf.windowOpen ? "Close window" : "Open window"}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
 
         {/* Deal Desk */}
-        <section className="border-t border-border pt-4">
-          <OtcBuilder challenge={challenge} onSent={() => setMsg("OTC offer sent")} />
+        <section className="min-w-0 border-t border-border pt-5">
+          <OtcBuilder
+            challenge={challenge}
+            onSent={() => setMsg("OTC offer sent")}
+          />
         </section>
 
         {/* Premium auction / policy vote / grant */}
-        <section className="border-t border-border pt-4">
+        <section className="min-w-0 border-t border-border pt-5">
           <OpsControls challenge={challenge} onMsg={setMsg} />
         </section>
-
-        {msg && <p className="text-xs text-up">{msg}</p>}
       </div>
+      {(msg || error) && (
+        <div className="border-t border-border px-4 py-3">
+          {msg && (
+            <p role="status" className="text-xs text-up">
+              {msg}
+            </p>
+          )}
+          {error && (
+            <p role="alert" className="text-xs text-down">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
     </Panel>
   );
 }
@@ -183,7 +266,9 @@ function OtcBuilder({
         setTraders(rows);
         if (rows[0]) setUserId(rows[0].userId);
       })
-      .catch(() => {});
+      .catch(() =>
+        setError("Could not load traders. Reload the page to try again."),
+      );
   }, [challengeId]);
 
   function updateLeg(i: number, patch: Partial<OtcLeg>) {
@@ -226,6 +311,9 @@ function OtcBuilder({
       <div className="grid grid-cols-2 gap-2">
         <Field label="Trader">
           <Select value={userId} onChange={(e) => setUserId(e.target.value)}>
+            {traders.length === 0 && (
+              <option value="">No traders available</option>
+            )}
             {traders.map((t) => (
               <option key={t.userId} value={t.userId}>
                 {t.displayName || t.username}
@@ -251,45 +339,76 @@ function OtcBuilder({
         />
       </Field>
 
-      <div className="space-y-1.5">
-        <span className="text-xs font-medium text-muted">Legs</span>
-        {legs.map((leg, i) => (
-          <div key={i} className="grid grid-cols-[1fr_70px_80px_auto] items-center gap-1.5">
-            <Select
-              value={leg.symbol}
-              onChange={(e) => updateLeg(i, { symbol: e.target.value })}
-            >
-              {symbols.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </Select>
-            <Input
-              type="number"
-              value={leg.quantity}
-              onChange={(e) => updateLeg(i, { quantity: Number(e.target.value) })}
-              className="mono"
-              title="Signed: + trader receives, − trader delivers"
-            />
-            <Input
-              type="number"
-              step="0.01"
-              value={leg.price}
-              onChange={(e) => updateLeg(i, { price: Number(e.target.value) })}
-              className="mono"
-            />
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setLegs((ls) => ls.filter((_, j) => j !== i))}
-              disabled={legs.length <= 1}
-              aria-label="Remove leg"
-            >
-              <Trash2 className="size-3.5" />
-            </Button>
+      <div
+        className="space-y-1.5 overflow-x-auto"
+        tabIndex={0}
+        role="region"
+        aria-label="Deal legs"
+      >
+        <p className="text-xs font-medium text-muted">
+          Legs{" "}
+          <span className="font-normal">
+            (positive quantity receives; negative delivers)
+          </span>
+        </p>
+        <div className="min-w-[360px] space-y-2">
+          <div
+            aria-hidden="true"
+            className="grid grid-cols-[1fr_70px_80px_34px] gap-1.5 text-[11px] text-muted"
+          >
+            <span>Symbol</span>
+            <span>Quantity</span>
+            <span>Price</span>
+            <span />
           </div>
-        ))}
+          {legs.map((leg, i) => (
+            <div
+              key={i}
+              className="grid grid-cols-[1fr_70px_80px_34px] items-center gap-1.5"
+            >
+              <Select
+                aria-label={`Leg ${i + 1} symbol`}
+                value={leg.symbol}
+                onChange={(e) => updateLeg(i, { symbol: e.target.value })}
+              >
+                {symbols.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                aria-label={`Leg ${i + 1} signed quantity`}
+                type="number"
+                value={leg.quantity}
+                onChange={(e) =>
+                  updateLeg(i, { quantity: Number(e.target.value) })
+                }
+                className="mono"
+                title="Signed: + trader receives, − trader delivers"
+              />
+              <Input
+                aria-label={`Leg ${i + 1} price`}
+                type="number"
+                step="0.01"
+                value={leg.price}
+                onChange={(e) =>
+                  updateLeg(i, { price: Number(e.target.value) })
+                }
+                className="mono"
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setLegs((ls) => ls.filter((_, j) => j !== i))}
+                disabled={legs.length <= 1}
+                aria-label="Remove leg"
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
         {legs.length < 6 && (
           <Button
             size="sm"
@@ -317,11 +436,19 @@ function OtcBuilder({
             className="mono"
           />
         </Field>
-        <Button onClick={send} loading={busy}>
+        <Button
+          onClick={send}
+          loading={busy}
+          disabled={!userId || !description.trim()}
+        >
           Send offer
         </Button>
       </div>
-      {error && <p className="text-xs text-down">{error}</p>}
+      {error && (
+        <p role="alert" className="text-xs text-down">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -349,20 +476,27 @@ function OpsControls({
   const [grantPrize, setGrantPrize] = useState("5000");
   const [grantSec, setGrantSec] = useState("120");
   const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function openAuction() {
     setBusy("auction");
+    setError(null);
     try {
       await post(`/api/admin/${challengeId}/auction`, {
         durationSec: Number(auctionSec),
       });
       onMsg("Auction round opened");
+    } catch {
+      setError(
+        "Could not open the auction. Check the session state before retrying.",
+      );
     } finally {
       setBusy(null);
     }
   }
   async function openVote() {
     setBusy("vote");
+    setError(null);
     try {
       await post(`/api/admin/${challengeId}/vote`, {
         title: voteTitle.trim(),
@@ -370,12 +504,17 @@ function OpsControls({
         durationSec: Number(voteSec),
       });
       onMsg("Policy vote opened");
+    } catch {
+      setError(
+        "Could not open the policy vote. Check the session state before retrying.",
+      );
     } finally {
       setBusy(null);
     }
   }
   async function openGrant() {
     setBusy("grant");
+    setError(null);
     try {
       await post(`/api/admin/${challengeId}/grant`, {
         symbol: grantSymbol,
@@ -384,6 +523,10 @@ function OpsControls({
         durationSec: Number(grantSec),
       });
       onMsg("Grant mission opened");
+    } catch {
+      setError(
+        "Could not open the grant. Check the session state before retrying.",
+      );
     } finally {
       setBusy(null);
     }
@@ -407,22 +550,33 @@ function OpsControls({
               className="mono"
             />
           </Field>
-          <Button variant="secondary" loading={busy === "auction"} onClick={openAuction}>
+          <Button
+            variant="secondary"
+            disabled={busy !== null}
+            loading={busy === "auction"}
+            onClick={openAuction}
+          >
             Open auction
           </Button>
         </div>
       </div>
 
       {/* Policy vote */}
-      <div className="space-y-1.5">
+      <div className="space-y-1.5 border-t border-border pt-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted">
           Policy vote
         </p>
         <Field label="Title">
-          <Input value={voteTitle} onChange={(e) => setVoteTitle(e.target.value)} />
+          <Input
+            value={voteTitle}
+            onChange={(e) => setVoteTitle(e.target.value)}
+          />
         </Field>
         <Field label="Description">
-          <Input value={voteDesc} onChange={(e) => setVoteDesc(e.target.value)} />
+          <Input
+            value={voteDesc}
+            onChange={(e) => setVoteDesc(e.target.value)}
+          />
         </Field>
         <div className="grid grid-cols-[100px_1fr] items-end gap-2">
           <Field label="Duration (s)">
@@ -435,20 +589,28 @@ function OpsControls({
               className="mono"
             />
           </Field>
-          <Button variant="secondary" loading={busy === "vote"} onClick={openVote}>
+          <Button
+            variant="secondary"
+            disabled={busy !== null}
+            loading={busy === "vote"}
+            onClick={openVote}
+          >
             Open vote
           </Button>
         </div>
       </div>
 
       {/* Government grant */}
-      <div className="space-y-1.5">
+      <div className="space-y-1.5 border-t border-border pt-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted">
           Government grant
         </p>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Symbol">
-            <Select value={grantSymbol} onChange={(e) => setGrantSymbol(e.target.value)}>
+            <Select
+              value={grantSymbol}
+              onChange={(e) => setGrantSymbol(e.target.value)}
+            >
               {symbols.map((s) => (
                 <option key={s} value={s}>
                   {s}
@@ -467,7 +629,10 @@ function OpsControls({
           </Field>
         </div>
         <Field label="Description">
-          <Input value={grantDesc} onChange={(e) => setGrantDesc(e.target.value)} />
+          <Input
+            value={grantDesc}
+            onChange={(e) => setGrantDesc(e.target.value)}
+          />
         </Field>
         <div className="grid grid-cols-[100px_1fr] items-end gap-2">
           <Field label="Duration (s)">
@@ -480,11 +645,21 @@ function OpsControls({
               className="mono"
             />
           </Field>
-          <Button variant="secondary" loading={busy === "grant"} onClick={openGrant}>
+          <Button
+            variant="secondary"
+            disabled={busy !== null}
+            loading={busy === "grant"}
+            onClick={openGrant}
+          >
             Open grant
           </Button>
         </div>
       </div>
+      {error && (
+        <p role="alert" className="text-xs text-down">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

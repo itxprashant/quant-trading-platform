@@ -9,7 +9,7 @@ export function Panel({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border bg-surface backdrop-blur-xl",
+        "min-w-0 rounded-lg border border-border bg-surface",
         className,
       )}
       {...props}
@@ -31,13 +31,11 @@ export function PanelHeader({
   return (
     <div
       className={cn(
-        "flex h-10 items-center justify-between border-b border-border px-3.5",
+        "flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5",
         className,
       )}
     >
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
-        {title}
-      </h2>
+      <h2 className="text-xs font-medium tracking-wide text-muted">{title}</h2>
       {children}
     </div>
   );

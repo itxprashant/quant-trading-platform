@@ -7,7 +7,10 @@ import { money } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
 function secsLeft(expiresAt: string): number {
-  return Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  return Math.max(
+    0,
+    Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000),
+  );
 }
 
 /**
@@ -29,18 +32,18 @@ export function GrantBanner({ grant }: { grant: GrantMission | null }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-3 border-b px-4 py-2 text-sm",
+        "flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-2 text-sm",
         open
           ? "border-accent/30 bg-accent-subtle/40 text-text"
           : "border-border bg-surface-2 text-muted",
       )}
     >
       <Landmark className="size-4 shrink-0 text-accent" />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-[1_1_240px] break-words">
         <span className="font-medium">Government grant</span>{" "}
         <span className="text-muted">{grant.description}</span>
       </div>
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <span className="mono text-xs">
           <span className="text-faint">prize </span>
           <span className="text-up">{money(grant.prize)}</span>
@@ -49,7 +52,12 @@ export function GrantBanner({ grant }: { grant: GrantMission | null }) {
           {grant.symbol}
         </span>
         {open ? (
-          <span className={cn("mono text-xs", left <= 10 ? "text-down" : "text-warning")}>
+          <span
+            className={cn(
+              "mono text-xs",
+              left <= 10 ? "text-down" : "text-warning",
+            )}
+          >
             {left}s
           </span>
         ) : (

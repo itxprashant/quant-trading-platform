@@ -11,7 +11,7 @@ import type {
   Portfolio,
   SymbolConfig,
 } from "@qtp/shared";
-import { get } from "@/lib/api";
+import { ApiError, get } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useRealtime } from "@/hooks/useRealtime";
 import { TopBar } from "@/components/TopBar";
@@ -19,6 +19,7 @@ import { Countdown } from "@/components/Countdown";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Panel } from "@/components/ui/Panel";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { Button } from "@/components/ui/Button";
 import { PriceChart } from "@/components/trade/PriceChart";
 import { OrderBook } from "@/components/trade/OrderBook";
 import { TradeTicket } from "@/components/trade/TradeTicket";
@@ -44,24 +45,41 @@ export default function TradePage() {
   const user = useAuth((s) => s.user);
 
   const [challenge, setChallenge] = useState<Challenge | null>(null);
-  const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const [activeSymbol, setActiveSymbol] = useState<string>("");
   const [limitPrice, setLimitPrice] = useState("");
   const [restPortfolio, setRestPortfolio] = useState<Portfolio | null>(null);
-  const [restLeaderboard, setRestLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [restLeaderboard, setRestLeaderboard] = useState<LeaderboardEntry[]>(
+    [],
+  );
   const [restNews, setRestNews] = useState<NewsItem[]>([]);
   const [orderRefresh, setOrderRefresh] = useState(0);
 
   const rt = useRealtime(challengeId);
 
   useEffect(() => {
+    let cancelled = false;
+    setChallenge(null);
+    setLoadError(null);
     get<Challenge>(`/api/challenges/${challengeId}`)
       .then((c) => {
+        if (cancelled) return;
         setChallenge(c);
         setActiveSymbol(c.config.symbols[0]?.symbol ?? "");
       })
-      .catch(() => setNotFound(true));
-  }, [challengeId]);
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(
+          err instanceof ApiError && err.status === 404
+            ? "Challenge not found"
+            : "Unable to load this challenge",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [challengeId, retry]);
 
   // Initial / refreshed portfolio via REST (WS pushes live updates after).
   useEffect(() => {
@@ -124,8 +142,7 @@ export default function TradePage() {
   const metric = challenge?.type === "market_making" ? "score" : "pnl";
   const isEden = challenge?.type === "new_eden";
   const hasOptions = isEden || rt.optionContracts.length > 0;
-  const hasEtfs =
-    isEden || rt.listedSymbols.some((s) => s.kind === "etf");
+  const hasEtfs = isEden || rt.listedSymbols.some((s) => s.kind === "etf");
 
   const symbolStrip = useMemo(
     () =>
@@ -137,37 +154,63 @@ export default function TradePage() {
     [tradableSymbols, rt.prices],
   );
 
-  if (notFound) {
+  if (loadError) {
     return (
       <div className="min-h-dvh">
         <TopBar />
-        <div className="mx-auto max-w-md px-4 py-24 text-center">
-          <h1 className="text-lg font-semibold">Challenge not found</h1>
-          <Link href="/challenges" className="mt-2 inline-block text-sm text-accent hover:underline">
+        <main id="main" className="mx-auto max-w-md px-4 py-24 text-center">
+          <h1 className="text-xl font-semibold">{loadError}</h1>
+          <p role="alert" className="mt-2 text-sm text-muted">
+            {loadError === "Challenge not found"
+              ? "This challenge may have been removed. Choose another market to continue."
+              : "Check your connection and try again. Your orders have not been changed."}
+          </p>
+          <Button className="mt-6" onClick={() => setRetry((n) => n + 1)}>
+            Try again
+          </Button>
+          <Link
+            href="/challenges"
+            className="mt-4 block text-sm text-accent hover:underline"
+          >
             Back to challenges
           </Link>
-        </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!challenge) {
+    return (
+      <div className="min-h-dvh">
+        <TopBar />
+        <main
+          id="main"
+          aria-busy="true"
+          aria-label="Loading trading workbench"
+          className="mx-auto max-w-[1600px] space-y-4 p-3 sm:p-5"
+        >
+          <span role="status" className="sr-only">
+            Loading challenge and market data
+          </span>
+          <Skeleton className="h-16 w-64 max-w-full" />
+          <Skeleton className="h-20 w-full" />
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_340px]">
+            <Skeleton className="h-[440px]" />
+            <Skeleton className="h-[440px]" />
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-64" />
+            ))}
+          </div>
+        </main>
       </div>
     );
   }
 
   return (
     <div className="min-h-dvh">
-      <TopBar
-        center={
-          challenge && (
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-medium">{challenge.name}</span>
-              <StatusBadge status={challenge.status} />
-              {challenge.endsAt && challenge.status === "live" && (
-                <span className="hidden lg:block">
-                  <Countdown target={challenge.endsAt} />
-                </span>
-              )}
-            </div>
-          )
-        }
-      />
+      <TopBar />
 
       {announcements.length > 0 && <NewsTicker items={announcements} />}
 
@@ -175,97 +218,159 @@ export default function TradePage() {
 
       <AlertStack alerts={rt.alerts} />
 
-      <main id="main" className="mx-auto max-w-[1600px] space-y-3 p-3">
-        <div className="flex items-center justify-between">
-          <Link
-            href="/challenges"
-            className="flex items-center gap-1 text-sm text-muted hover:text-text"
-          >
-            <ChevronLeft className="size-4" /> Challenges
-          </Link>
-          <span
-            className={cn(
-              "flex items-center gap-1.5 text-xs",
-              rt.status === "open" ? "text-up" : "text-faint",
-            )}
-          >
-            {rt.status === "open" ? <Wifi className="size-3.5" /> : <WifiOff className="size-3.5" />}
-            {rt.status === "open" ? "Live" : rt.status === "connecting" ? "Connecting…" : "Reconnecting…"}
-          </span>
-        </div>
-
-        {/* Symbol strip */}
-        {!challenge ? (
-          <Skeleton className="h-14 w-full" />
-        ) : (
-          <div className="flex gap-2 overflow-x-auto">
-            {symbolStrip.map((s) => (
-              <button
-                key={s.symbol}
-                onClick={() => {
-                  setActiveSymbol(s.symbol);
-                  setLimitPrice(s.price.toFixed(2));
-                }}
-                className={cn(
-                  "flex min-w-[140px] flex-col items-start rounded-lg border px-3 py-2 transition-colors",
-                  activeSymbol === s.symbol
-                    ? "border-accent bg-accent-subtle/30"
-                    : "border-border bg-surface backdrop-blur-xl hover:border-accent/40",
-                )}
-              >
-                <span className="text-xs font-medium">{s.symbol}</span>
-                <div className="flex items-baseline gap-2">
-                  <span className="mono text-sm">{money(s.price)}</span>
-                  <span className={cn("mono text-xs", dirClass(s.change))}>
-                    {signed(s.change * 100)}%
-                  </span>
-                </div>
-              </button>
-            ))}
+      <main
+        id="main"
+        className="mx-auto min-w-0 max-w-[1600px] space-y-3 p-3 sm:p-5"
+      >
+        <header className="flex flex-wrap items-end justify-between gap-3 pb-2">
+          <div className="min-w-0">
+            <Link
+              href="/challenges"
+              className="mb-2 inline-flex items-center gap-1 text-xs text-muted hover:text-text"
+            >
+              <ChevronLeft className="size-3.5" aria-hidden /> All challenges
+            </Link>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <h1 className="break-words text-xl font-semibold tracking-tight sm:text-2xl">
+                {challenge.name}
+              </h1>
+              <StatusBadge status={challenge.status} />
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              {isEden
+                ? "New Eden"
+                : challenge.type === "market_making"
+                  ? "Market making"
+                  : "Directional trading"}
+              <span className="mx-2 text-faint" aria-hidden>
+                /
+              </span>
+              {tradableSymbols.length} instruments
+            </p>
           </div>
+          <div className="flex flex-wrap items-center gap-4 text-xs">
+            {challenge.endsAt && challenge.status === "live" && (
+              <div className="flex items-center gap-2 text-muted">
+                <span>Time left</span>
+                <Countdown target={challenge.endsAt} />
+              </div>
+            )}
+            <span
+              role="status"
+              className={cn(
+                "flex items-center gap-1.5",
+                rt.status === "open" ? "text-up" : "text-warning",
+              )}
+            >
+              {rt.status === "open" ? (
+                <Wifi className="size-3.5" aria-hidden />
+              ) : (
+                <WifiOff className="size-3.5" aria-hidden />
+              )}
+              {rt.status === "open"
+                ? "Feed connected"
+                : rt.status === "connecting"
+                  ? "Connecting..."
+                  : "Reconnecting..."}
+            </span>
+          </div>
+        </header>
+        {rt.status !== "open" && (
+          <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted">
+            Live prices may be delayed until the feed reconnects.
+          </p>
         )}
 
-        {/* Chart — full width, fixed height (do not stretch to match sidebar) */}
-        <Panel>
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <div className="flex items-baseline gap-2">
-              <span className="text-sm font-semibold">{activeSymbol || "—"}</span>
-              {activeCfg?.name && (
-                <span className="text-xs text-muted">{activeCfg.name}</span>
+        {/* Symbol strip */}
+        <div
+          role="group"
+          aria-label="Select trading instrument"
+          className="flex min-w-0 gap-1 overflow-x-auto rounded-lg border border-border bg-surface p-1"
+        >
+          {symbolStrip.map((s) => (
+            <button
+              type="button"
+              key={s.symbol}
+              aria-pressed={activeSymbol === s.symbol}
+              aria-label={`${s.symbol}, ${s.name}, ${money(s.price)}, ${signed(s.change * 100)} percent since start`}
+              onClick={() => {
+                setActiveSymbol(s.symbol);
+                setLimitPrice(s.price.toFixed(2));
+              }}
+              className={cn(
+                "flex min-w-[164px] shrink-0 flex-col items-start gap-1 rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent",
+                activeSymbol === s.symbol
+                  ? "border-accent/40 bg-accent-subtle"
+                  : "border-transparent hover:bg-surface-2",
               )}
-            </div>
-            <div className="flex items-baseline gap-3">
-              {isEden && rt.fairValues.get(activeSymbol) != null && (
-                <span className="flex items-baseline gap-1 text-xs text-muted">
-                  <span className="text-[10px] uppercase tracking-wide text-faint">FV</span>
-                  <span className="mono">{money(rt.fairValues.get(activeSymbol)!)}</span>
+            >
+              <span
+                className={cn(
+                  "text-xs font-semibold",
+                  activeSymbol === s.symbol && "text-accent",
+                )}
+              >
+                {s.symbol}
+              </span>
+              <div className="flex w-full items-baseline justify-between gap-3">
+                <span className="mono text-sm">{money(s.price)}</span>
+                <span className={cn("mono text-xs", dirClass(s.change))}>
+                  {signed(s.change * 100)}%
                 </span>
-              )}
-              {livePrice && (
-                <span className="mono text-sm font-semibold">{money(livePrice.price)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Keep market context and order entry together at laptop widths. */}
+        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px]">
+          <Panel className="flex min-w-0 flex-col overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold">
+                  {activeSymbol || "No instrument selected"}
+                </h2>
+                {activeCfg?.name && (
+                  <span className="block truncate text-xs text-muted">
+                    {activeCfg.name}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-baseline gap-4">
+                {isEden && rt.fairValues.get(activeSymbol) != null && (
+                  <span className="flex items-baseline gap-1 text-xs text-muted">
+                    <span className="text-[10px] uppercase tracking-wide text-faint">
+                      Fair value
+                    </span>
+                    <span className="mono">
+                      {money(rt.fairValues.get(activeSymbol)!)}
+                    </span>
+                  </span>
+                )}
+                {livePrice && (
+                  <span className="mono text-xl font-medium">
+                    {money(livePrice.price)}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="h-[320px] min-w-0 p-1 sm:h-[380px] lg:min-h-[400px] lg:flex-1">
+              {activeSymbol ? (
+                <PriceChart
+                  challengeId={challengeId}
+                  symbol={activeSymbol}
+                  lastPrice={livePrice}
+                  book={book}
+                />
+              ) : (
+                <p className="grid h-full place-items-center text-sm text-muted">
+                  No instruments are listed yet.
+                </p>
               )}
             </div>
-          </div>
-          <div className="h-[300px] p-1 sm:h-[340px] lg:h-[380px]">
-            {activeSymbol && (
-              <PriceChart
-                challengeId={challengeId}
-                symbol={activeSymbol}
-                lastPrice={livePrice}
-                book={book}
-              />
-            )}
-          </div>
-        </Panel>
+          </Panel>
 
-        {/* Portfolio + trade ticket (+ bank for New Eden) */}
-        <div className={cn("grid gap-3", isEden ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
-          <PortfolioPanel
-            portfolio={portfolio}
-            prices={rt.prices}
-            mm={challenge?.type === "market_making"}
-          />
-          {activeCfg && (
+          {activeCfg ? (
             <TradeTicket
               challengeId={challengeId}
               symbol={activeSymbol}
@@ -274,29 +379,40 @@ export default function TradePage() {
               onPriceChange={setLimitPrice}
               refPrice={livePrice?.price}
             />
-          )}
-          {isEden && (
-            <BankPanel
-              challengeId={challengeId}
-              portfolio={portfolio}
-              multiplier={challenge?.config.eden?.rules.loanRepayMultiplier ?? 2}
-              onChange={() => setOrderRefresh((n) => n + 1)}
-            />
+          ) : (
+            <Panel className="grid min-h-48 place-items-center p-6 text-sm text-muted">
+              Order entry opens when an instrument is listed.
+            </Panel>
           )}
         </div>
 
-        {/* Order book, open orders, leaderboard */}
-        <div className="grid gap-3 xl:grid-cols-12">
-          <div className="xl:col-span-4">
+        {/* Working market and account state stay directly below the ticket. */}
+        <div className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-12">
+          <div className="min-w-0 xl:col-span-4">
             <OrderBook
               snapshot={book}
               onPick={(p) => setLimitPrice(p.toFixed(2))}
             />
           </div>
-          <div className="xl:col-span-4">
+          <div className="min-w-0 xl:col-span-4">
+            <PortfolioPanel
+              portfolio={portfolio}
+              prices={rt.prices}
+              mm={challenge.type === "market_making"}
+            />
+          </div>
+          <div className="min-w-0 md:col-span-2 xl:col-span-4">
             <OpenOrders challengeId={challengeId} refreshKey={orderRefresh} />
           </div>
-          <div className="xl:col-span-4">
+        </div>
+
+        <div
+          className={cn(
+            "grid min-w-0 gap-3 md:grid-cols-2",
+            isEden && marketNews.length > 0 && "xl:grid-cols-3",
+          )}
+        >
+          <div className="min-w-0">
             <Leaderboard
               entries={rt.leaderboard.length ? rt.leaderboard : restLeaderboard}
               meId={user?.id}
@@ -304,10 +420,16 @@ export default function TradePage() {
               mm={challenge?.type === "market_making"}
             />
           </div>
+          {isEden && (
+            <BankPanel
+              challengeId={challengeId}
+              portfolio={portfolio}
+              multiplier={challenge.config.eden?.rules.loanRepayMultiplier ?? 2}
+              onChange={() => setOrderRefresh((n) => n + 1)}
+            />
+          )}
+          {marketNews.length > 0 && <NewsPanel items={marketNews} />}
         </div>
-
-        {/* Market news feed (separate from the announcements ticker) */}
-        {marketNews.length > 0 && <NewsPanel items={marketNews} />}
 
         {/* Derivatives & structured products (options/ETFs can be introduced
             live into any challenge type; auctions/votes stay New Eden). */}

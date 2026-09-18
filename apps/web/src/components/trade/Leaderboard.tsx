@@ -46,11 +46,13 @@ function Row({
       className={cn(
         "grid items-center gap-3 px-3 py-1.5 text-xs",
         cols,
-        highlight ? "bg-accent-subtle/40" : "hover:bg-surface-2",
+        highlight ? "bg-accent-subtle" : "hover:bg-surface-2",
       )}
     >
       <Rank rank={e.rank} />
-      <span className={cn("truncate", highlight ? "font-semibold text-accent" : "")}>
+      <span
+        className={cn("truncate", highlight ? "font-semibold text-accent" : "")}
+      >
         {e.displayName}
         {highlight && <span className="ml-1 text-faint">(you)</span>}
       </span>
@@ -59,7 +61,12 @@ function Row({
           {money(e.metrics?.spreadCapture ?? 0)}
         </span>
       )}
-      <span className={cn("mono text-right", dirClass(metric === "pnl" ? e.pnl : e.score))}>
+      <span
+        className={cn(
+          "mono text-right",
+          dirClass(metric === "pnl" ? e.pnl : e.score),
+        )}
+      >
         {signed(metric === "pnl" ? e.pnl : e.score)}
       </span>
     </div>
@@ -80,39 +87,62 @@ export function Leaderboard({
   const me = entries.find((e) => e.userId === meId);
   const top = entries.slice(0, 12);
   const cols = mm
-    ? "grid-cols-[auto_1fr_auto_auto]"
-    : "grid-cols-[auto_1fr_auto]";
+    ? "grid-cols-[24px_minmax(80px,1fr)_96px_96px]"
+    : "grid-cols-[24px_minmax(80px,1fr)_104px]";
 
   return (
-    <Panel className="flex h-full flex-col">
-      <PanelHeader title="Leaderboard" />
-      <div className="flex-1 overflow-y-auto">
-        <div className={cn("grid gap-3 px-3 py-1.5 text-[10px] uppercase tracking-wide text-faint", cols)}>
-          <span className="w-6 text-center">#</span>
-          <span>Trader</span>
-          {mm && <span className="text-right">Spread</span>}
-          <span className="text-right">{metric === "pnl" ? "PnL" : "Score"}</span>
-        </div>
-        {top.length === 0 ? (
-          <div className="px-3 py-6 text-center text-xs text-faint">
-            No rankings yet
+    <Panel className="flex h-full min-w-0 flex-col overflow-hidden">
+      <PanelHeader title="Leaderboard">
+        <span className="text-[11px] text-muted">{entries.length} traders</span>
+      </PanelHeader>
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Trader rankings"
+        className="max-h-[320px] flex-1 overflow-auto focus-visible:outline-offset-[-2px]"
+      >
+        <div className={cn(mm ? "min-w-[360px]" : "min-w-[280px]")}>
+          <div
+            className={cn(
+              "sticky top-0 z-10 grid gap-3 bg-surface-2 px-3 py-2 text-[10px] uppercase tracking-wide text-muted",
+              cols,
+            )}
+          >
+            <span className="w-6 text-center">#</span>
+            <span>Trader</span>
+            {mm && <span className="text-right">Spread</span>}
+            <span className="text-right">
+              {metric === "pnl" ? "PnL" : "Score"}
+            </span>
           </div>
-        ) : (
-          top.map((e) => (
-            <Row
-              key={e.userId}
-              e={e}
-              highlight={e.userId === meId}
-              cols={cols}
-              metric={metric}
-              mm={mm}
-            />
-          ))
-        )}
+          {top.length === 0 ? (
+            <div className="px-3 py-6 text-center text-xs text-faint">
+              Rankings appear once scoring begins.
+            </div>
+          ) : (
+            top.map((e) => (
+              <Row
+                key={e.userId}
+                e={e}
+                highlight={e.userId === meId}
+                cols={cols}
+                metric={metric}
+                mm={mm}
+              />
+            ))
+          )}
+        </div>
       </div>
       {me && me.rank > 12 && (
-        <div className="border-t border-border">
-          <Row e={me} highlight cols={cols} metric={metric} mm={mm} />
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="Your ranking"
+          className="overflow-x-auto border-t border-border focus-visible:outline-offset-[-2px]"
+        >
+          <div className={mm ? "min-w-[360px]" : "min-w-[280px]"}>
+            <Row e={me} highlight cols={cols} metric={metric} mm={mm} />
+          </div>
         </div>
       )}
     </Panel>

@@ -17,7 +17,10 @@ interface AuctionView {
 }
 
 function secsLeft(expiresAt: string): number {
-  return Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  return Math.max(
+    0,
+    Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000),
+  );
 }
 
 /**
@@ -70,7 +73,7 @@ export function AuctionPanel({
 
   if (!auction) {
     return (
-      <Panel className="flex flex-col">
+      <Panel className="flex min-w-0 flex-col overflow-hidden">
         <PanelHeader
           title={
             <span className="flex items-center gap-1.5">
@@ -113,7 +116,7 @@ export function AuctionPanel({
   }
 
   return (
-    <Panel className="flex flex-col">
+    <Panel className="flex min-w-0 flex-col overflow-hidden">
       <PanelHeader
         title={
           <span className="flex items-center gap-1.5">
@@ -139,7 +142,8 @@ export function AuctionPanel({
             </p>
             {myBid && (
               <p className="text-xs text-faint">
-                Your standing bid: <span className="mono">{money(myBid.amount)}</span>
+                Your standing bid:{" "}
+                <span className="mono">{money(myBid.amount)}</span>
               </p>
             )}
             <div className="flex gap-2">
@@ -150,7 +154,8 @@ export function AuctionPanel({
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="Bid amount"
-                className="mono"
+                aria-label="Sealed bid amount"
+                className="mono min-w-0"
               />
               <Button loading={busy} onClick={bid}>
                 {myBid ? "Update" : "Bid"}
@@ -184,7 +189,11 @@ export function AuctionPanel({
             )}
           </div>
         )}
-        {error && <p className="text-xs text-down">{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs text-down">
+            {error}
+          </p>
+        )}
       </div>
     </Panel>
   );

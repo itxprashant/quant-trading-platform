@@ -99,7 +99,7 @@ export function MarketsPanel({
   if (templates.length === 0 && etfs.length === 0) return null;
 
   return (
-    <Panel className="flex flex-col">
+    <Panel className="flex min-w-0 flex-col overflow-hidden">
       <PanelHeader
         title={
           <span className="flex items-center gap-1.5">
@@ -124,12 +124,13 @@ export function MarketsPanel({
               return (
                 <div
                   key={t.id}
-                  className="flex items-center justify-between rounded-lg border border-border bg-surface-2 px-3 py-2"
+                  className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-3 last:border-0"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium">{t.name}</p>
-                    <p className="mono text-[11px] text-faint">
-                      {money(t.price)} → face {money(t.faceValue)} · cpn {coupon}
+                    <p className="mono break-words text-[11px] text-faint">
+                      {money(t.price)} → face {money(t.faceValue)} · cpn{" "}
+                      {coupon}
                       {held ? ` · held ${held.quantity}` : ""}
                     </p>
                   </div>
@@ -159,9 +160,9 @@ export function MarketsPanel({
               return (
                 <div
                   key={etf.symbol}
-                  className="rounded-lg border border-border bg-surface-2 px-3 py-2"
+                  className="border-b border-border py-3 last:border-0"
                 >
-                  <div className="mb-1.5 flex items-center justify-between">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <span className="text-xs font-medium">{etf.symbol}</span>
                       <span
@@ -181,7 +182,11 @@ export function MarketsPanel({
                         <p
                           className={cn(
                             "mono text-[10px]",
-                            premium > 0 ? "text-up" : premium < 0 ? "text-down" : "text-faint",
+                            premium > 0
+                              ? "text-up"
+                              : premium < 0
+                                ? "text-down"
+                                : "text-faint",
                           )}
                         >
                           {premium >= 0 ? "+" : ""}
@@ -190,14 +195,18 @@ export function MarketsPanel({
                       )}
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <Input
                       type="number"
                       min={1}
                       placeholder="1"
+                      aria-label={`${etf.symbol} quantity`}
                       value={etfQty[etf.symbol] ?? ""}
                       onChange={(e) =>
-                        setEtfQty((q) => ({ ...q, [etf.symbol]: e.target.value }))
+                        setEtfQty((q) => ({
+                          ...q,
+                          [etf.symbol]: e.target.value,
+                        }))
                       }
                       className="mono h-7 w-16 px-2 text-xs"
                     />
@@ -226,7 +235,11 @@ export function MarketsPanel({
           </div>
         )}
 
-        {error && <p className="text-xs text-down">{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs text-down">
+            {error}
+          </p>
+        )}
       </div>
     </Panel>
   );

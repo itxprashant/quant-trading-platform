@@ -34,12 +34,12 @@ export function AlertStack({ alerts }: { alerts: AlertMsg[] }) {
           key={a.id}
           role="status"
           className={cn(
-            "pointer-events-auto flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm shadow-lg backdrop-blur-xl",
+            "pointer-events-auto flex items-start gap-2.5 rounded-lg border bg-surface px-3 py-2.5 text-sm shadow-sm",
             a.level === "urgent"
-              ? "border-down/40 bg-down-subtle text-down"
+              ? "border-down/40 text-down"
               : a.level === "warning"
-                ? "border-warning/40 bg-surface-2 text-warning"
-                : "border-border bg-surface-2 text-text",
+                ? "border-warning/40 text-warning"
+                : "border-border text-text",
           )}
         >
           {a.level === "info" ? (
@@ -47,7 +47,7 @@ export function AlertStack({ alerts }: { alerts: AlertMsg[] }) {
           ) : (
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           )}
-          <p className="flex-1 leading-snug">{a.message}</p>
+          <p className="min-w-0 flex-1 break-words leading-snug">{a.message}</p>
           <button
             onClick={() => setDismissed((d) => new Set(d).add(a.id))}
             className="shrink-0 text-faint hover:text-text"

@@ -22,7 +22,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
+        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-sm border px-2 py-0.5 text-[11px] font-medium",
         tones[tone],
         className,
       )}
@@ -33,7 +33,14 @@ export function Badge({
 }
 
 export function StatusBadge({ status }: { status: ChallengeStatus }) {
-  const map: Record<ChallengeStatus, { tone: "neutral" | "up" | "warning" | "info" | "accent"; label: string; dot?: boolean }> = {
+  const map: Record<
+    ChallengeStatus,
+    {
+      tone: "neutral" | "up" | "warning" | "info" | "accent";
+      label: string;
+      dot?: boolean;
+    }
+  > = {
     draft: { tone: "neutral", label: "Draft" },
     scheduled: { tone: "info", label: "Scheduled" },
     live: { tone: "up", label: "Live", dot: true },
@@ -43,7 +50,7 @@ export function StatusBadge({ status }: { status: ChallengeStatus }) {
   const s = map[status];
   return (
     <Badge tone={s.tone}>
-      {s.dot && <span className="size-1.5 rounded-full bg-up animate-pulse" />}
+      {s.dot && <span className="size-1.5 rounded-full bg-up" />}
       {s.label}
     </Badge>
   );

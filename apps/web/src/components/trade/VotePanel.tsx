@@ -14,7 +14,10 @@ interface VoteView {
 }
 
 function secsLeft(expiresAt: string): number {
-  return Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  return Math.max(
+    0,
+    Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000),
+  );
 }
 
 /**
@@ -36,9 +39,10 @@ export function VotePanel({
 
   const load = useCallback(async () => {
     try {
-      const r = await get<{ proposal: VoteProposal | null; myVote: "yes" | "no" | null }>(
-        `/api/votes/${challengeId}`,
-      );
+      const r = await get<{
+        proposal: VoteProposal | null;
+        myVote: "yes" | "no" | null;
+      }>(`/api/votes/${challengeId}`);
       setView({ proposal: r.proposal, myVote: r.myVote });
     } catch {
       /* ignore */
@@ -86,7 +90,7 @@ export function VotePanel({
   }
 
   return (
-    <Panel className="flex flex-col">
+    <Panel className="flex min-w-0 flex-col overflow-hidden">
       <PanelHeader
         title={
           <span className="flex items-center gap-1.5">
@@ -135,6 +139,7 @@ export function VotePanel({
               className="flex-1"
               loading={busy}
               onClick={() => cast("yes")}
+              aria-pressed={myVote === "yes"}
             >
               Yes
             </Button>
@@ -143,6 +148,7 @@ export function VotePanel({
               className="flex-1"
               loading={busy}
               onClick={() => cast("no")}
+              aria-pressed={myVote === "no"}
             >
               No
             </Button>
@@ -158,7 +164,11 @@ export function VotePanel({
         {myVote && open && (
           <p className="text-[11px] text-faint">You voted {myVote}.</p>
         )}
-        {error && <p className="text-xs text-down">{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs text-down">
+            {error}
+          </p>
+        )}
       </div>
     </Panel>
   );

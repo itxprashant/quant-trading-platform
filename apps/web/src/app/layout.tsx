@@ -15,7 +15,7 @@ const mono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Quanta — Quant Trading Challenges",
+  title: "Quanta | Competitive Trading Exchange",
   description:
     "Competitive quantitative trading challenges: market making, directional, and more.",
 };

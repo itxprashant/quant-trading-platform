@@ -51,7 +51,7 @@ export function BankPanel({
   }
 
   return (
-    <Panel className="flex flex-col">
+    <Panel className="flex min-w-0 flex-col overflow-hidden">
       <PanelHeader
         title={
           <span className="flex items-center gap-1.5">
@@ -79,7 +79,7 @@ export function BankPanel({
         </div>
       </div>
 
-      {breach && (
+      {portfolio && breach && (
         <div className="border-t border-down/30 bg-down-subtle px-3 py-2 text-xs text-down">
           Free cash is exhausted. Borrow to avoid forced liquidation.
         </div>
@@ -100,15 +100,20 @@ export function BankPanel({
             type="number"
             min={1}
             step={100}
+            aria-label="Amount to borrow"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="mono"
+            className="mono min-w-0"
           />
           <Button onClick={borrow} loading={busy} disabled={principal <= 0}>
             Borrow
           </Button>
         </div>
-        {error && <p className="mt-2 text-xs text-down">{error}</p>}
+        {error && (
+          <p role="alert" className="mt-2 text-xs text-down">
+            {error}
+          </p>
+        )}
       </div>
     </Panel>
   );

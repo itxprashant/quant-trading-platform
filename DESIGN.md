@@ -1,152 +1,81 @@
-# DESIGN.md — Quanta Design System
+# Quanta Design System
 
-> Concrete design tokens and rules. The web app mirrors these as CSS variables
-> and a Tailwind v4 `@theme`. Register: product. Theme: dark-first.
->
-> Current system: **cyan-glass on near-black** (ported from `dashboard-ref`).
-> A near-black `#050505` canvas under a fixed cyan/sky radial-glow gradient,
-> translucent white "glass" surfaces (blur + hairline white borders), a single
-> **cyan** accent, and Geist Sans/Mono.
+Register: **product**, with a more expressive public overview page.
+Visual direction: **exchange workbench**.
 
-## Theme decision
+## Theme
 
-Scene: "a competitor at a desk during a timed, high-stakes challenge, scanning
-the order book and PnL and making fast decisions over a multi-hour session,
-sometimes in a dim hall." This forces a **dark** terminal-grade theme, lower
-ambient glare, numbers that pop without vibrating.
+A competitor on a laptop in a dim event hall spends hours scanning price,
+inventory, and rank, then makes decisions in short bursts. Dark, opaque warm
+graphite surfaces reduce glare; quiet separators and stable layouts keep the
+market readable. Vermilion marks actions without competing with buy/sell colors.
 
-Color strategy: a deep near-black canvas with a cyan/sky glow backdrop;
-surfaces are translucent glass (frosted via `backdrop-blur`). A single cyan
-accent marks primary actions, selection, focus, and active nav. Up/down is a
-separate semantic vocabulary (emerald / red).
+This replaces the previous cyan-glass theme. Do not add backdrop glows,
+decorative blur, neon borders, or gradient text.
 
 ## Color
 
-Canvas is near-black; surfaces are translucent white so panels read as frosted
-glass over the glow backdrop. Borders are low-opacity white hairlines.
+The source of truth is the Tailwind v4 `@theme` in
+`apps/web/src/app/globals.css`. Colors use OKLCH with warm-tinted neutrals.
 
-### Dark (default)
+| Token           | Value                   | Role                       |
+| --------------- | ----------------------- | -------------------------- |
+| `bg`            | `oklch(0.155 0.006 65)` | Canvas, inputs             |
+| `surface`       | `oklch(0.19 0.006 65)`  | Opaque panels              |
+| `surface-2`     | `oklch(0.225 0.006 65)` | Toolbar, hover             |
+| `surface-3`     | `oklch(0.265 0.006 65)` | Selected neutral           |
+| `border`        | `oklch(0.3 0.008 65)`   | Panel boundaries           |
+| `border-strong` | `oklch(0.41 0.008 65)`  | Controls, emphasis         |
+| `text`          | `oklch(0.945 0.009 80)` | Warm ivory primary         |
+| `muted`         | `oklch(0.72 0.01 75)`   | Supporting text            |
+| `faint`         | `oklch(0.62 0.01 75)`   | Tertiary text              |
+| `accent`        | `oklch(0.745 0.165 40)` | Vermilion action/selection |
+| `up`            | `oklch(0.78 0.115 164)` | Buy, gain                  |
+| `down`          | `oklch(0.74 0.145 20)`  | Sell, loss                 |
+| `warning`       | `oklch(0.82 0.12 85)`   | Paused, warning            |
+| `info`          | `oklch(0.77 0.08 245)`  | Scheduled, informational   |
 
-```
---bg:            #050505;                      /* app background (near-black) */
---surface:       rgba(255,255,255,0.04);       /* panels, cards (glass) */
---surface-2:     rgba(255,255,255,0.06);       /* raised / hover */
---surface-3:     rgba(255,255,255,0.09);       /* popovers, inputs */
---border:        rgba(255,255,255,0.10);       /* hairlines */
---border-strong: rgba(255,255,255,0.18);       /* emphasized dividers */
---text:          #ededed;                      /* primary text */
---text-muted:    #a1a1aa;                       /* secondary (zinc-400) */
---text-faint:    #71717a;                       /* tertiary, axis labels (zinc-500) */
-
---accent:        #22d3ee;   /* cyan-400 — primary action/selection/focus */
---accent-hover:  #67e8f9;   /* cyan-300 */
---accent-fg:     #050505;   /* text on solid accent */
---accent-subtle: rgba(34,211,238,0.12);  /* accent-tinted glass */
-
---up:            #34d399;                 /* gains — emerald-400 */
---up-subtle:     rgba(52,211,153,0.12);
---down:          #f87171;                 /* losses — red-400 */
---down-subtle:   rgba(248,113,113,0.12);
---warning:       #fbbf24;                 /* amber-400 */
---info:          #38bdf8;                 /* sky-400 */
-```
-
-### Backdrop
-
-The body sits on `--bg` with a fixed cyan/sky radial-glow:
-
-```
-background-image:
-  radial-gradient(circle at 50% 0%,  rgba(6,182,212,0.15) 0%, transparent 60%),
-  radial-gradient(circle at 50% -20%, rgba(56,189,248,0.2) 0%, transparent 70%);
-background-attachment: fixed;
-```
-
-Scrollbars are thin with a cyan hover thumb (`rgba(34,211,238,0.3)`).
-
-Usage rules:
-- Accent (cyan) only for primary actions, current selection, focus rings, active
-  nav, and hover affordances. Never as bulk decoration.
-- Up/down used for signed numbers, the buy/sell sides of the book, deltas. Always
-  pair color with a sign (+/-) or side label so it survives color-blindness.
-- Inactive/disabled states drop toward neutral glass; never full-saturation.
+Accent fills have dark foreground text. Selected controls use subtle tinted
+backgrounds. Financial signals always include signs or side labels, not color
+alone. The chart library uses RGB fallbacks because it cannot parse OKLCH.
 
 ## Typography
 
-- **UI sans:** Geist (variable), via `next/font`. Fallback: system-ui stack.
-- **Numeric/mono:** Geist Mono for all prices, sizes, PnL, order book,
-  leaderboard figures. Always `font-variant-numeric: tabular-nums`.
-- Base size **14px**; scale ratio ~1.2.
-
-```
---text-xs:   12px / 16px
---text-sm:   13px / 18px
---text-base: 14px / 20px
---text-md:   16px / 24px
---text-lg:   18px / 26px
---text-xl:   22px / 30px
---text-2xl:  28px / 36px   (page titles only)
-```
-
-Weights: 400 body, 500 labels/buttons, 600 headings/emphasis, 700 sparingly.
-Money and large stat readouts: mono, 500-600, tabular.
-
-## Spacing
-
-4px base grid: `2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64`. Use rhythm, not
-uniform padding. Panels: 16px internal; dense rows (book/ladder): 4-6px vertical.
-
-## Radius
-
-```
---radius-sm: 6px;   /* chips */
---radius-md: 8px;   /* small controls */
---radius-lg: 12px;  /* buttons, inputs */
---radius-xl: 16px;  /* panels, cards, modals */
-```
-
-Glass panels and cards are generously rounded (`rounded-xl`). Do not pill
-everything. Pills only for status badges.
-
-## Elevation
-
-Glass UI leans on `backdrop-blur` + a hairline white border over heavy shadows.
-
-```
---shadow-sm: 0 1px 2px oklch(0 0 0 / 0.30);
---shadow-md: 0 4px 12px oklch(0 0 0 / 0.35);
---shadow-pop: 0 8px 28px oklch(0 0 0 / 0.45);
-```
-
-## Motion
-
-- Durations: 120ms (hover/press), 180ms (panel/menu), 220ms (overlay).
-- Easing: `cubic-bezier(0.2, 0.8, 0.2, 1)` (ease-out-quart-ish). No bounce.
-- **Value flash:** when a number updates, flash its background to `--up-subtle`
-  or `--down-subtle` for 150ms, then fade. Never animate layout/position on tick.
-- Respect `prefers-reduced-motion`: disable flashes and non-essential transitions.
-
-## Components (vocabulary)
-
-- **Button:** cyan-glass accent (primary: `--accent-subtle` fill, `--accent`
-  text, cyan border), subtle surface-2 (secondary), ghost (tertiary). Buy =
-  `--up` tinted, Sell = `--down` tinted, with full borders, not side-stripes.
-- **Panel:** frosted glass — `--surface`, `backdrop-blur`, 1px `--border`,
-  `--radius-xl`, 16px padding, a compact header row (label + optional control).
-- **Order book row:** two-column ladder, depth bar as a low-opacity background
-  fill behind the row (up/down subtle), price in mono.
-- **Stat readout:** small uppercase `--text-faint` label + large mono value;
-  signed values colored.
-- **Table (leaderboard/orders):** dense rows, sticky header, zebra via subtle
-  surface tint, rank emphasized.
-- **Inputs:** `--surface-3`, 1px border, accent focus ring (2px).
-- States required on every interactive element: default, hover, focus-visible,
-  active, disabled, loading, error.
+Retain Geist Sans for its compact, instrument-panel clarity and Geist Mono for
+prices, quantities, times, and ranks. All financial values use tabular numerals.
+Body: 14px. Controls: 12-14px. Panel headings: 12px. Data: 12-14px.
+Page headings: 24-48px, depending on density. Landing display text alone uses a
+fluid 52-96px scale with tight tracking. No display fonts in controls.
 
 ## Layout
 
-- App shell: slim top bar (brand, challenge switcher, live clock, user menu) +
-  optional left rail for nav on wide screens; content is a responsive grid.
-- Trading view grid (desktop): chart (large) + portfolio/stats (right column);
-  below, order book + trade ticket + open orders. Collapses to stacked sections
-  on tablet/mobile. Real-time regions never reflow the grid.
+- Shared opaque top navigation with a geometric Q mark and mobile menu.
+- Overview: asymmetric introduction and clearly labeled illustrative terminal;
+  ruled workspace explanations and two market-discipline diagrams.
+- Arena: searchable, filterable event rows with real counts, dates, and status;
+  format guidance lives beside the list, not inside every event.
+- Trading: chart and ticket share the first desktop row; depth, portfolio, and
+  orders follow. Rankings and advanced New Eden instruments remain available.
+- Authentication: split introduction and form, stacked on small screens.
+- Organizer: filterable operations table; configuration and live controls are
+  separate groups, with a persistent save action.
+- Mobile tables scroll inside their own wrappers. Containers use `min-w-0`.
+
+## Components
+
+- Panels: opaque surface, 1px border, 8px corners. No nested decorative cards.
+- Primary buttons: solid vermilion; secondary neutral; buy/sell semantic tints.
+- Inputs: canvas fill, visible full border, native select affordance.
+- Corners: 4px chips, 6px controls, 8px panels, 10px larger containers.
+- Rows: subtle hover surface, stable numeric columns, full-width separators.
+- Status: compact rectangular badge with explicit text, optional static dot.
+- Errors: concise explanation and retry action; no fabricated market data.
+- Empty states: explain the next useful action. Loading uses stable skeletons.
+
+## Motion And Access
+
+Use 150-200ms color transitions; real-time value flashes last 400ms. No decorative
+loops or page-load choreography. Reduced-motion disables animations and
+transitions. Keyboard focus remains visible, selected toggles expose
+`aria-pressed`, and menus expose expansion state. Public preview data is explicitly
+illustrative. Auth and API behavior are independent of presentation.

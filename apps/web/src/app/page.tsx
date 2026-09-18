@@ -1,454 +1,217 @@
 import Link from "next/link";
 import {
+  ArrowDown,
   ArrowRight,
   ArrowUpRight,
-  Bot,
-  Gauge,
-  Layers,
-  LineChart,
-  Radio,
-  Settings2,
-  ShieldCheck,
-  Trophy,
-  TrendingUp,
+  Crosshair,
+  MoveUpRight,
 } from "lucide-react";
-import { TopBar } from "@/components/TopBar";
+import { Brand, TopBar } from "@/components/TopBar";
 
-const TICKER = [
-  { sym: "AER", px: "1,184.50", chg: "+2.41%", up: true },
-  { sym: "NRC", px: "642.18", chg: "+5.07%", up: true },
-  { sym: "ORB", px: "2,910.00", chg: "-1.18%", up: false },
-  { sym: "VOL", px: "88.42", chg: "+0.94%", up: true },
-  { sym: "CBT", px: "417.65", chg: "-3.22%", up: false },
-  { sym: "QSI", px: "73.10", chg: "+1.55%", up: true },
-  { sym: "HLX", px: "1,002.30", chg: "+4.10%", up: true },
-  { sym: "ZPE", px: "55.77", chg: "-2.64%", up: false },
+const candles: [number, number, number, number, number][] = [
+  [18, 163, 192, 148, 204],
+  [38, 158, 174, 150, 185],
+  [58, 165, 190, 158, 207],
+  [78, 171, 196, 163, 207],
+  [98, 144, 180, 129, 191],
+  [118, 134, 153, 119, 163],
+  [138, 144, 163, 132, 173],
+  [158, 118, 148, 104, 158],
+  [178, 110, 128, 98, 139],
+  [198, 122, 143, 112, 154],
+  [218, 111, 136, 101, 149],
+  [238, 86, 122, 76, 134],
+  [258, 81, 101, 66, 112],
+  [278, 88, 119, 78, 131],
+  [298, 91, 109, 79, 119],
+  [318, 69, 99, 57, 107],
+  [338, 56, 78, 42, 90],
+  [358, 61, 86, 49, 98],
+  [378, 47, 74, 33, 83],
+  [398, 40, 58, 28, 70],
+  [418, 49, 71, 37, 82],
+  [438, 38, 61, 24, 73],
 ];
 
-function TickerTape() {
-  const row = [...TICKER, ...TICKER];
+function ExchangePreview() {
   return (
-    <div className="lp-ticker border-y border-border bg-surface backdrop-blur-xl">
-      <div className="lp-ticker-track py-2.5">
-        {row.map((t, i) => (
-          <span
-            key={i}
-            className="mx-5 inline-flex items-center gap-2 text-sm tabular-nums"
-          >
-            <span className="font-semibold tracking-tight">{t.sym}</span>
-            <span className="mono text-muted">{t.px}</span>
-            <span className={t.up ? "mono text-up" : "mono text-down"}>
-              {t.chg}
-            </span>
-          </span>
-        ))}
+    <figure className="relative min-w-0 lg:-mr-3">
+      <div className="mb-3 flex items-center justify-between text-[10px] text-muted">
+        <span className="mono uppercase tracking-[0.14em]">
+          Inside the exchange
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="size-1.5 rounded-full bg-accent" /> Interface preview
+        </span>
       </div>
-    </div>
-  );
-}
-
-/** Static "trading terminal" mock used as hero imagery (product screenshot). */
-function TerminalMock() {
-  const bids = [
-    { p: "1,184.50", q: 42, w: 100 },
-    { p: "1,184.25", q: 31, w: 74 },
-    { p: "1,184.00", q: 18, w: 46 },
-  ];
-  const asks = [
-    { p: "1,184.75", q: 25, w: 60 },
-    { p: "1,185.00", q: 37, w: 88 },
-    { p: "1,185.25", q: 14, w: 38 },
-  ];
-  const board = [
-    { r: 1, n: "delta_one", v: "+48,210" },
-    { r: 2, n: "mm_kappa", v: "+39,884" },
-    { r: 3, n: "you", v: "+31,507", me: true },
-  ];
-  return (
-    <div className="rounded-xl border border-border bg-surface p-3 shadow-[0_24px_80px_-20px_rgba(6,182,212,0.25)] backdrop-blur-xl">
-      {/* header */}
-      <div className="flex items-center justify-between px-1 pb-3">
-        <div className="flex items-baseline gap-2">
-          <span className="text-sm font-semibold tracking-tight">AER</span>
-          <span className="text-xs text-muted">Aerium</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="mono text-sm font-semibold tabular-nums">1,184.50</span>
-          <span className="mono text-xs text-up">+2.41%</span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-up/30 bg-up-subtle px-1.5 py-0.5 text-[10px] font-medium text-up">
-            <span className="size-1.5 rounded-full bg-up motion-safe:animate-pulse" />
-            LIVE
-          </span>
-        </div>
-      </div>
-
-      {/* chart */}
-      <div className="relative h-28 overflow-hidden rounded-lg border border-border bg-bg/40">
-        <svg
-          viewBox="0 0 300 110"
-          preserveAspectRatio="none"
-          className="h-full w-full"
-          aria-hidden
-        >
-          <defs>
-            <linearGradient id="lp-area" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.35" />
-              <stop offset="100%" stopColor="#22d3ee" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          <path
-            d="M0,82 L30,76 L60,84 L90,60 L120,66 L150,44 L180,52 L210,30 L240,38 L270,18 L300,24 L300,110 L0,110 Z"
-            fill="url(#lp-area)"
-          />
-          <path
-            d="M0,82 L30,76 L60,84 L90,60 L120,66 L150,44 L180,52 L210,30 L240,38 L270,18 L300,24"
-            fill="none"
-            stroke="#22d3ee"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </div>
-
-      {/* book + board */}
-      <div className="mt-3 grid grid-cols-2 gap-3">
-        <div className="rounded-lg border border-border bg-bg/40 p-2">
-          <div className="px-1 pb-1.5 text-[10px] uppercase tracking-wide text-faint">
-            Order book
+      <div className="overflow-hidden rounded-lg border border-border-strong bg-surface shadow-[0_28px_70px_-24px_rgba(0,0,0,0.65)]">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Crosshair className="size-3.5 text-accent" />
+            <span className="text-xs font-medium">Trading desk</span>
           </div>
-          {asks.map((a) => (
-            <div key={a.p} className="relative grid grid-cols-2 px-1 py-[3px] text-xs">
-              <span
-                className="absolute inset-y-0 left-0 bg-down-subtle"
-                style={{ width: `${a.w}%`, opacity: 0.5 }}
-              />
-              <span className="relative z-10 mono text-muted">{a.q}</span>
-              <span className="relative z-10 mono text-right text-down">{a.p}</span>
+          <span className="mono text-[10px] text-muted">SESSION / 001</span>
+        </div>
+        <div className="flex items-center justify-between gap-3 px-4 pt-5">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold">AER</span>
+              <span className="text-xs text-muted">Aerium</span>
             </div>
-          ))}
-          {bids.map((b) => (
-            <div key={b.p} className="relative grid grid-cols-2 px-1 py-[3px] text-xs">
-              <span
-                className="absolute inset-y-0 right-0 bg-up-subtle"
-                style={{ width: `${b.w}%`, opacity: 0.5 }}
-              />
-              <span className="relative z-10 mono text-up">{b.p}</span>
-              <span className="relative z-10 mono text-right text-muted">{b.q}</span>
-            </div>
-          ))}
-        </div>
-
-        <div className="rounded-lg border border-border bg-bg/40 p-2">
-          <div className="px-1 pb-1.5 text-[10px] uppercase tracking-wide text-faint">
-            Leaderboard
+            <p className="mono mt-1 text-[10px] text-faint">SYNTHETIC / SPOT</p>
           </div>
-          {board.map((e) => (
-            <div
-              key={e.r}
-              className={
-                "flex items-center justify-between rounded px-1 py-[5px] text-xs " +
-                (e.me ? "bg-accent-subtle/50" : "")
-              }
-            >
-              <span className="flex items-center gap-2">
-                <span className="mono w-4 text-center text-faint">{e.r}</span>
-                <span className={e.me ? "font-semibold text-accent" : ""}>{e.n}</span>
-              </span>
-              <span className="mono text-up">{e.v}</span>
-            </div>
-          ))}
-          <div className="mt-1.5 border-t border-border px-1 pt-1.5 text-[10px] text-faint">
-            312 traders · scoring live
+          <div className="text-right">
+            <p className="mono text-2xl tracking-tight">1,184.50</p>
+            <p className="mono text-[11px] text-up">+27.90 (+2.41%)</p>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function Hero() {
-  return (
-    <section className="relative mx-auto max-w-6xl px-4 pt-16 pb-12 sm:pt-24">
-      <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr]">
-        <div>
-          <span
-            className="lp-reveal inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent-subtle px-3 py-1 text-xs font-medium text-accent"
-            style={{ animationDelay: "40ms" }}
+        <div className="relative mt-5 px-4">
+          <svg
+            viewBox="0 0 510 265"
+            className="h-auto w-full"
+            role="img"
+            aria-label="Illustrative candlestick chart showing Aerium rising during a session"
           >
-            <Radio className="size-3.5" />
-            Competitive quant trading, in real time
-          </span>
-
-          <h1
-            className="lp-reveal mt-6 text-[clamp(2.6rem,7vw,5rem)] font-semibold leading-[0.98] tracking-tight"
-            style={{ animationDelay: "120ms" }}
-          >
-            Trade the move.
-            <br />
-            <span className="text-accent">Own the board.</span>
-          </h1>
-
-          <p
-            className="lp-reveal mt-6 max-w-xl text-base leading-relaxed text-muted sm:text-lg"
-            style={{ animationDelay: "200ms" }}
-          >
-            Quanta runs live market-making duels and directional PnL races on
-            synthetic instruments. Read the book, fade the noise, hunt
-            mispricings, and climb a leaderboard that updates on every fill.
-          </p>
-
-          <div
-            className="lp-reveal mt-8 flex flex-wrap items-center gap-3"
-            style={{ animationDelay: "280ms" }}
-          >
-            <Link
-              href="/challenges"
-              className="inline-flex h-11 items-center gap-2 rounded-lg bg-accent px-5 text-sm font-semibold text-accent-fg transition-colors hover:bg-accent-hover"
+            {[40, 95, 150, 205].map((y, i) => (
+              <g key={y}>
+                <path
+                  d={`M0 ${y}H452`}
+                  className="stroke-border"
+                  strokeDasharray="2 5"
+                />
+                <text
+                  x="462"
+                  y={y + 3}
+                  fill="currentColor"
+                  className="mono text-[9px] text-faint"
+                >
+                  {(1190 - i * 15).toFixed(0)}
+                </text>
+              </g>
+            ))}
+            {candles.map(([x, top, bottom, high, low], i) => (
+              <g
+                key={x}
+                className={i % 4 === 2 || i % 5 === 3 ? "text-down" : "text-up"}
+              >
+                <path d={`M${x} ${high}V${low}`} stroke="currentColor" />
+                <rect
+                  x={x - 4}
+                  y={top}
+                  width="8"
+                  height={bottom - top}
+                  fill="currentColor"
+                  rx="0.8"
+                />
+                <rect
+                  x={x - 4}
+                  y={249 - (bottom - top) * 0.7}
+                  width="8"
+                  height={(bottom - top) * 0.7}
+                  fill="currentColor"
+                  opacity="0.23"
+                />
+              </g>
+            ))}
+            <path
+              d="M0 50H452"
+              className="stroke-accent"
+              strokeDasharray="4 4"
+              opacity="0.65"
+            />
+            <rect
+              x="455"
+              y="42"
+              width="53"
+              height="16"
+              rx="2"
+              className="fill-accent"
+            />
+            <text x="458" y="53" className="mono fill-accent-fg text-[8px]">
+              1,184.50
+            </text>
+            <text
+              x="12"
+              y="263"
+              fill="currentColor"
+              className="mono text-[9px] text-faint"
             >
-              Browse challenges
-              <ArrowRight className="size-4" />
-            </Link>
-            <Link
-              href="#how"
-              className="inline-flex h-11 items-center gap-2 rounded-lg border border-border bg-surface-2 px-5 text-sm font-medium text-text transition-colors hover:border-accent/40"
+              09:30
+            </text>
+            <text
+              x="207"
+              y="263"
+              fill="currentColor"
+              className="mono text-[9px] text-faint"
             >
-              How it works
-            </Link>
-          </div>
-
-          <dl className="lp-reveal mt-10 flex gap-8" style={{ animationDelay: "360ms" }}>
+              10:00
+            </text>
+            <text
+              x="416"
+              y="263"
+              fill="currentColor"
+              className="mono text-[9px] text-faint"
+            >
+              10:30
+            </text>
+          </svg>
+        </div>
+        <div className="mt-4 grid grid-cols-2 divide-x divide-border border-t border-border">
+          <div className="min-w-0 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-[11px] text-muted">Market depth</h3>
+              <span className="mono text-[9px] text-faint">QTY / PX</span>
+            </div>
             {[
-              { k: "Sub-second", v: "fills + book" },
-              { k: "2", v: "contest formats" },
-              { k: "Live", v: "leaderboard" },
-            ].map((s) => (
-              <div key={s.k}>
-                <dt className="mono text-xl font-semibold tabular-nums">{s.k}</dt>
-                <dd className="text-xs text-faint">{s.v}</dd>
+              ["1,184.75", "25", false],
+              ["1,184.50", "42", true],
+              ["1,184.25", "31", true],
+            ].map(([price, qty, up], i) => (
+              <div
+                key={String(price)}
+                className="relative mb-1 flex justify-between px-1.5 py-1 text-[10px] sm:text-xs"
+              >
+                <span
+                  className={`absolute inset-y-0 right-0 ${up ? "bg-up-subtle" : "bg-down-subtle"}`}
+                  style={{ width: `${60 + i * 15}%` }}
+                />
+                <span
+                  className={`mono relative ${up ? "text-up" : "text-down"}`}
+                >
+                  {price}
+                </span>
+                <span className="mono relative text-muted">{qty}</span>
               </div>
             ))}
-          </dl>
-        </div>
-
-        <div className="lp-reveal" style={{ animationDelay: "240ms" }}>
-          <TerminalMock />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Formats() {
-  return (
-    <section className="mx-auto max-w-6xl px-4 py-20">
-      <div className="max-w-2xl">
-        <h2 className="text-[clamp(1.8rem,4vw,2.6rem)] font-semibold tracking-tight">
-          Two ways to compete
-        </h2>
-        <p className="mt-3 text-muted">
-          Every event picks a discipline. Organizers tune the symbols, limits,
-          and scoring; you bring the edge.
-        </p>
-      </div>
-
-      <div className="mt-10 grid gap-4 md:grid-cols-2">
-        <div className="rounded-xl border border-border bg-surface p-6 backdrop-blur-xl transition-colors hover:border-accent/40">
-          <span className="grid size-10 place-items-center rounded-lg border border-info/30 bg-info/10 text-info">
-            <Layers className="size-5" />
-          </span>
-          <h3 className="mt-4 text-lg font-semibold">Market making</h3>
-          <p className="mt-2 text-sm leading-relaxed text-muted">
-            Quote both sides, capture the spread, and manage inventory while bots
-            and humans hit your orders. Scored on spread capture, quote uptime,
-            and risk.
-          </p>
-          <ul className="mt-4 space-y-2 text-sm text-muted">
-            {["Two-sided quoting", "Inventory + risk limits", "Spread-capture scoring"].map(
-              (f) => (
-                <li key={f} className="flex items-center gap-2">
-                  <span className="size-1.5 rounded-full bg-info" />
-                  {f}
-                </li>
-              ),
-            )}
-          </ul>
-        </div>
-
-        <div className="rounded-xl border border-border bg-surface p-6 backdrop-blur-xl transition-colors hover:border-accent/40">
-          <span className="grid size-10 place-items-center rounded-lg border border-accent/30 bg-accent-subtle text-accent">
-            <TrendingUp className="size-5" />
-          </span>
-          <h3 className="mt-4 text-lg font-semibold">Directional</h3>
-          <p className="mt-2 text-sm leading-relaxed text-muted">
-            Take a view and trade it. Parse the news feed for signal versus noise,
-            time your entries, and let realized PnL decide the ranking.
-          </p>
-          <ul className="mt-4 space-y-2 text-sm text-muted">
-            {["Signal vs noise feed", "Long / short freely", "Pure PnL leaderboard"].map(
-              (f) => (
-                <li key={f} className="flex items-center gap-2">
-                  <span className="size-1.5 rounded-full bg-accent" />
-                  {f}
-                </li>
-              ),
-            )}
-          </ul>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function HowItWorks() {
-  const steps = [
-    { n: "01", t: "Enroll", d: "Pick a live or scheduled event and join with one click. You start with a fresh cash balance." },
-    { n: "02", t: "Trade live", d: "Place limit and market orders against a real matching engine, bots, and other competitors." },
-    { n: "03", t: "Get scored", d: "A worker recomputes PnL and market-making metrics continuously from your positions." },
-    { n: "04", t: "Climb", d: "Watch your rank move on every fill. Hold your edge to the close to take the board." },
-  ];
-  return (
-    <section id="how" className="border-y border-border bg-surface/60 backdrop-blur-xl">
-      <div className="mx-auto max-w-6xl px-4 py-20">
-        <h2 className="text-[clamp(1.8rem,4vw,2.6rem)] font-semibold tracking-tight">
-          How a challenge runs
-        </h2>
-        <div className="mt-10 grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
-          {steps.map((s) => (
-            <div key={s.n} className="bg-bg p-6">
-              <div className="mono text-3xl font-semibold text-accent tabular-nums">
-                {s.n}
-              </div>
-              <h3 className="mt-3 font-semibold">{s.t}</h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-muted">{s.d}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Features() {
-  const items = [
-    {
-      icon: Gauge,
-      t: "Real matching engine",
-      d: "Price-time priority order books with sub-second fills, per-challenge isolation, and a single authoritative writer.",
-      wide: true,
-    },
-    { icon: Trophy, t: "Live leaderboard", d: "Rankings recompute continuously and stream to every client." },
-    { icon: Bot, t: "Liquidity bots", d: "Market makers and noise traders keep markets alive to trade against." },
-    { icon: LineChart, t: "Charts + depth", d: "Candles, line, and a live order-book ladder built for speed." },
-    { icon: ShieldCheck, t: "Risk + rate limits", d: "Position caps, order throttles, and margin rules keep it fair." },
-    {
-      icon: Settings2,
-      t: "Organizer console",
-      d: "Spin up an event in minutes: symbols, limits, scoring, schedule, and live price + news controls.",
-      wide: true,
-    },
-  ];
-  return (
-    <section className="mx-auto max-w-6xl px-4 py-20">
-      <div className="max-w-2xl">
-        <h2 className="text-[clamp(1.8rem,4vw,2.6rem)] font-semibold tracking-tight">
-          Built like a real exchange
-        </h2>
-        <p className="mt-3 text-muted">
-          The same primitives a trading desk relies on, packaged for a timed
-          contest.
-        </p>
-      </div>
-
-      <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map(({ icon: Icon, t, d, wide }) => (
-          <div
-            key={t}
-            className={
-              "rounded-xl border border-border bg-surface p-5 backdrop-blur-xl transition-colors hover:border-accent/40 " +
-              (wide ? "sm:col-span-2 lg:col-span-2" : "")
-            }
-          >
-            <span className="grid size-9 place-items-center rounded-lg border border-border bg-surface-2 text-accent">
-              <Icon className="size-4.5" />
-            </span>
-            <h3 className="mt-3 font-semibold">{t}</h3>
-            <p className="mt-1.5 text-sm leading-relaxed text-muted">{d}</p>
           </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function FinalCta() {
-  return (
-    <section className="relative overflow-hidden border-t border-border">
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{
-          backgroundImage:
-            "radial-gradient(circle at 50% 120%, rgba(34,211,238,0.22) 0%, transparent 60%)",
-        }}
-        aria-hidden
-      />
-      <div className="relative mx-auto max-w-3xl px-4 py-24 text-center">
-        <h2 className="text-[clamp(2rem,5vw,3.4rem)] font-semibold leading-tight tracking-tight">
-          Ready to make markets?
-        </h2>
-        <p className="mx-auto mt-4 max-w-xl text-muted">
-          Join a live challenge or warm up on a scheduled one. Bring the edge,
-          the board does the rest.
-        </p>
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <Link
-            href="/challenges"
-            className="inline-flex h-11 items-center gap-2 rounded-lg bg-accent px-5 text-sm font-semibold text-accent-fg transition-colors hover:bg-accent-hover"
-          >
-            Browse live challenges
-            <ArrowRight className="size-4" />
-          </Link>
-          <Link
-            href="/login"
-            className="inline-flex h-11 items-center gap-2 rounded-lg border border-border bg-surface-2 px-5 text-sm font-medium text-text transition-colors hover:border-accent/40"
-          >
-            Sign in
-          </Link>
+          <div className="min-w-0 p-4">
+            <h3 className="mb-3 text-[11px] text-muted">Session standings</h3>
+            {[
+              ["01", "delta_one", "+8.42%"],
+              ["02", "mm_kappa", "+6.18%"],
+              ["03", "you", "+5.73%"],
+            ].map(([rank, name, pnl]) => (
+              <div
+                key={rank}
+                className={`mb-1 flex items-center gap-2 py-1 text-[10px] sm:text-xs ${name === "you" ? "text-accent" : "text-muted"}`}
+              >
+                <span className="mono text-faint">{rank}</span>
+                <span className="truncate">{name}</span>
+                <span className="mono ml-auto text-up">{pnl}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center justify-between border-t border-border bg-surface-2 px-4 py-2 text-[9px] text-muted">
+          <span className="mono">PRICE-TIME PRIORITY</span>
+          <span>Synthetic instruments. Illustrated data.</span>
         </div>
       </div>
-    </section>
-  );
-}
-
-function Footer() {
-  return (
-    <footer className="border-t border-border">
-      <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <span className="grid size-6 place-items-center rounded-md border border-accent/30 bg-accent-subtle text-accent">
-            <TrendingUp className="size-3.5" />
-          </span>
-          <span className="font-semibold text-text">Quanta</span>
-          <span className="text-faint">· competitive quant trading</span>
-        </div>
-        <nav className="flex items-center gap-5">
-          <Link href="/challenges" className="hover:text-accent">
-            Challenges
-          </Link>
-          <Link href="/login" className="hover:text-accent">
-            Sign in
-          </Link>
-          <a
-            href="https://github.com/itxprashant/quant-trading-platform"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 hover:text-accent"
-          >
-            GitHub <ArrowUpRight className="size-3.5" />
-          </a>
-        </nav>
-      </div>
-    </footer>
+      <figcaption className="mt-4 flex items-center gap-2 text-xs text-muted">
+        <span className="h-px w-6 bg-border-strong" />
+        The book, the market, and your next move. One workspace.
+      </figcaption>
+    </figure>
   );
 }
 
@@ -457,14 +220,265 @@ export default function LandingPage() {
     <div className="min-h-dvh">
       <TopBar />
       <main id="main">
-        <Hero />
-        <TickerTape />
-        <Formats />
-        <HowItWorks />
-        <Features />
-        <FinalCta />
+        <section className="mx-auto max-w-[1440px] px-5 pb-14 pt-12 sm:px-10 lg:pb-20 lg:pt-18">
+          <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_1fr] lg:gap-14">
+            <div>
+              <div className="mb-7 flex items-center gap-3">
+                <span className="h-px w-8 bg-accent" />
+                <p className="mono text-[10px] uppercase tracking-[0.18em] text-muted">
+                  The competitive trading exchange
+                </p>
+              </div>
+              <h1 className="landing-title">
+                Find your edge.
+                <br />
+                <span className="text-muted">Trade it.</span>
+              </h1>
+              <p className="mt-7 max-w-[380px] text-base leading-relaxed text-muted">
+                A live market. A level playing field. Put your strategy to the
+                test against traders, not a backtest.
+              </p>
+              <div className="mt-8 flex flex-wrap gap-3">
+                <Link href="/challenges" className="action-link">
+                  Enter the arena <ArrowUpRight className="size-4" />
+                </Link>
+                <Link
+                  href="#the-desk"
+                  className="action-link action-link-secondary"
+                >
+                  Explore the desk <ArrowDown className="size-3.5" />
+                </Link>
+              </div>
+              <p className="mt-6 text-xs text-faint">
+                Synthetic capital. Real competition. No deposit required.
+              </p>
+              <div className="mt-12 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-5 text-[10px] text-muted">
+                <span className="mono uppercase tracking-wider">
+                  Built for the session
+                </span>
+                <span>Live order books</span>
+                <span>Continuous rankings</span>
+              </div>
+            </div>
+            <ExchangePreview />
+          </div>
+        </section>
+
+        <section id="the-desk" className="border-y border-border bg-surface">
+          <div className="mx-auto grid max-w-[1440px] gap-10 px-5 py-14 sm:px-10 lg:grid-cols-[0.8fr_1.2fr] lg:gap-24 lg:py-20">
+            <div>
+              <span className="mono text-xs text-accent">
+                01 / THE WORKSPACE
+              </span>
+              <h2 className="landing-section-title mt-5">
+                Less noise.
+                <br />
+                More signal.
+              </h2>
+              <p className="mt-5 max-w-sm text-sm leading-relaxed text-muted">
+                Everything you need to read the market and act. Nothing between
+                the decision and the order.
+              </p>
+              <Link
+                href="/challenges"
+                className="mt-7 inline-flex min-h-11 items-center gap-3 text-sm font-medium hover:text-accent"
+              >
+                Find a challenge <ArrowRight className="size-4" />
+              </Link>
+            </div>
+            <div className="divide-y divide-border border-y border-border">
+              {[
+                [
+                  "Read the market",
+                  "Live charts, two-sided depth, and a news feed. See the information that moves your next trade.",
+                  "01",
+                ],
+                [
+                  "Make your move",
+                  "Market and limit orders against a price-time priority matching engine. Every order has its place.",
+                  "02",
+                ],
+                [
+                  "Know where you stand",
+                  "Positions, exposure, and PnL alongside the live leaderboard. Keep your performance in perspective.",
+                  "03",
+                ],
+              ].map(([title, text, number]) => (
+                <div
+                  key={title}
+                  className="grid grid-cols-[32px_1fr] gap-4 py-6 sm:grid-cols-[32px_170px_1fr]"
+                >
+                  <span className="mono pt-1 text-[10px] text-faint">
+                    {number}
+                  </span>
+                  <h3 className="text-base font-medium">{title}</h3>
+                  <p className="col-start-2 max-w-md text-sm leading-relaxed text-muted sm:col-start-auto">
+                    {text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="mx-auto max-w-[1440px] px-5 py-16 sm:px-10 lg:py-24">
+          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+            <h2 className="landing-section-title">
+              Different markets.
+              <br />
+              Same conviction.
+            </h2>
+            <p className="max-w-xs text-sm leading-relaxed text-muted">
+              Choose your discipline. Each event brings its own instruments,
+              rules, and way to win.
+            </p>
+          </div>
+          <div className="mt-10 grid border-y border-border md:grid-cols-2">
+            <article className="relative overflow-hidden py-8 md:border-r md:pr-10">
+              <div className="mb-8 flex items-center justify-between">
+                <span className="mono text-[10px] uppercase tracking-wider text-faint">
+                  Discipline / 01
+                </span>
+                <span className="text-xs text-up">Two-sided thinking</span>
+              </div>
+              <svg
+                viewBox="0 0 420 110"
+                className="mb-8 h-28 w-full"
+                aria-hidden="true"
+              >
+                <path
+                  d="M0 90H420M210 0V110"
+                  className="stroke-border"
+                  strokeDasharray="3 5"
+                />
+                <path
+                  d="M0 12H35V25H76V41H120V58H156V76H190V90H205"
+                  fill="none"
+                  className="stroke-up"
+                  strokeWidth="2"
+                />
+                <path
+                  d="M215 90H231V76H265V57H302V40H345V24H387V10H420"
+                  fill="none"
+                  className="stroke-down"
+                  strokeWidth="2"
+                />
+              </svg>
+              <h3 className="text-2xl font-medium tracking-tight">
+                Make the market.
+              </h3>
+              <p className="mt-3 max-w-md text-sm leading-relaxed text-muted">
+                Quote both sides. Capture the spread. Balance your inventory as
+                the market trades against you.
+              </p>
+              <div className="mt-6 flex flex-wrap gap-3 text-[10px] text-muted">
+                <span className="rounded-sm border border-border px-2 py-1">
+                  Market making
+                </span>
+                <span className="py-1">
+                  Spread capture / Quote uptime / Risk
+                </span>
+              </div>
+            </article>
+            <article className="border-t border-border py-8 md:border-t-0 md:pl-10">
+              <div className="mb-8 flex items-center justify-between">
+                <span className="mono text-[10px] uppercase tracking-wider text-faint">
+                  Discipline / 02
+                </span>
+                <span className="text-xs text-accent">A view worth taking</span>
+              </div>
+              <svg
+                viewBox="0 0 420 110"
+                className="mb-8 h-28 w-full"
+                aria-hidden="true"
+              >
+                <path
+                  d="M0 90H420M210 0V110"
+                  className="stroke-border"
+                  strokeDasharray="3 5"
+                />
+                <path
+                  d="M0 86L25 77L46 85L72 60L98 69L119 55L142 64L166 33L190 41L215 55L239 40L263 47L289 20L313 28L337 13L361 26L388 9L420 15"
+                  fill="none"
+                  className="stroke-accent"
+                  strokeWidth="2"
+                />
+              </svg>
+              <h3 className="text-2xl font-medium tracking-tight">
+                Trade your thesis.
+              </h3>
+              <p className="mt-3 max-w-md text-sm leading-relaxed text-muted">
+                Separate signal from noise. Build a position, time your exit,
+                and let your profit and loss speak.
+              </p>
+              <div className="mt-6 flex flex-wrap gap-3 text-[10px] text-muted">
+                <span className="rounded-sm border border-border px-2 py-1">
+                  Directional
+                </span>
+                <span className="py-1">Price action / Positions / PnL</span>
+              </div>
+            </article>
+          </div>
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-4 text-xs text-muted">
+            <p>
+              And evolving economies in New Eden, with options, auctions, and
+              live events.
+            </p>
+            <Link
+              href="/challenges"
+              className="inline-flex min-h-11 items-center gap-2 text-text hover:text-accent"
+            >
+              Explore all events <ArrowUpRight className="size-3.5" />
+            </Link>
+          </div>
+        </section>
+
+        <section className="border-y border-border bg-surface">
+          <div className="mx-auto flex max-w-[1440px] flex-col justify-between gap-8 px-5 py-14 sm:px-10 lg:flex-row lg:items-center lg:py-18">
+            <div className="flex items-start gap-5">
+              <MoveUpRight className="mt-2 hidden size-12 text-accent sm:block" />
+              <div>
+                <h2 className="landing-section-title">
+                  Your next move is live.
+                </h2>
+                <p className="mt-4 text-sm text-muted">
+                  Find an event. Take a seat. See what your strategy can do.
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/challenges"
+              className="action-link self-start lg:self-auto"
+            >
+              Browse challenges <ArrowUpRight className="size-4" />
+            </Link>
+          </div>
+        </section>
       </main>
-      <Footer />
+      <footer className="mx-auto flex max-w-[1440px] flex-col justify-between gap-6 px-5 py-8 sm:flex-row sm:items-center sm:px-10">
+        <div className="flex items-center gap-5">
+          <Brand />
+          <span className="text-xs text-faint">
+            Synthetic markets. Real decisions.
+          </span>
+        </div>
+        <nav aria-label="Footer" className="flex gap-6 text-xs text-muted">
+          <Link href="/challenges" className="hover:text-text">
+            Arena
+          </Link>
+          <Link href="/login" className="hover:text-text">
+            Sign in
+          </Link>
+          <a
+            href="https://github.com/itxprashant/quant-trading-platform"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 hover:text-text"
+          >
+            GitHub <ArrowUpRight className="size-3" />
+          </a>
+        </nav>
+      </footer>
     </div>
   );
 }

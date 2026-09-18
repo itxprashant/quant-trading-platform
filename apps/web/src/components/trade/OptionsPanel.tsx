@@ -80,7 +80,7 @@ export function OptionsPanel({
   }
 
   return (
-    <Panel className="flex flex-col">
+    <Panel className="flex min-w-0 flex-col overflow-hidden">
       <PanelHeader
         title={
           <span className="flex items-center gap-1.5">
@@ -100,14 +100,19 @@ export function OptionsPanel({
           No option cycle is open right now.
         </div>
       ) : (
-        <div className="max-h-72 overflow-y-auto">
-          <table className="w-full text-xs">
+        <div className="max-h-72 overflow-auto">
+          <table className="w-full min-w-[380px] text-xs">
+            <caption className="sr-only">
+              Option contracts. Select a series to trade or exercise.
+            </caption>
             <thead className="sticky top-0 bg-surface-2 text-faint">
               <tr>
                 <th className="px-2.5 py-1.5 text-left font-medium">Series</th>
                 <th className="px-2.5 py-1.5 text-right font-medium">Strike</th>
                 <th className="px-2.5 py-1.5 text-right font-medium">Mark</th>
-                <th className="px-2.5 py-1.5 text-right font-medium">Intrinsic</th>
+                <th className="px-2.5 py-1.5 text-right font-medium">
+                  Intrinsic
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -128,19 +133,29 @@ export function OptionsPanel({
                     )}
                   >
                     <td className="px-2.5 py-1.5">
-                      <span
-                        className={cn(
-                          "mr-1 rounded px-1 text-[10px] font-semibold uppercase",
-                          c.optionType === "call"
-                            ? "bg-up-subtle text-up"
-                            : "bg-down-subtle text-down",
-                        )}
+                      <button
+                        type="button"
+                        aria-pressed={isSel}
+                        aria-label={`Select ${c.symbol}`}
+                        onClick={() => setSelected(c.symbol)}
+                        className="inline-flex items-center rounded py-1 text-left focus-visible:outline-2 focus-visible:outline-accent"
                       >
-                        {c.optionType === "call" ? "C" : "P"}
-                      </span>
-                      <span className="text-muted">{c.underlying}</span>
+                        <span
+                          className={cn(
+                            "mr-1 rounded px-1 text-[10px] font-semibold uppercase",
+                            c.optionType === "call"
+                              ? "bg-up-subtle text-up"
+                              : "bg-down-subtle text-down",
+                          )}
+                        >
+                          {c.optionType === "call" ? "C" : "P"}
+                        </span>
+                        <span className="text-muted">{c.underlying}</span>
+                      </button>
                     </td>
-                    <td className="px-2.5 py-1.5 text-right mono">{c.strike}</td>
+                    <td className="px-2.5 py-1.5 text-right mono">
+                      {c.strike}
+                    </td>
                     <td className="px-2.5 py-1.5 text-right mono">
                       {mark != null ? money(mark) : "—"}
                     </td>
@@ -163,12 +178,13 @@ export function OptionsPanel({
       {selected && (
         <div className="border-t border-border p-3">
           <div className="mb-2 flex items-center justify-between text-[11px] text-faint">
-            <span className="mono text-muted">{selected}</span>
+            <span className="mono break-all text-muted">{selected}</span>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Input
               type="number"
               min={1}
+              aria-label="Option quantity"
               value={qty}
               onChange={(e) => setQty(e.target.value)}
               className="mono w-20"
@@ -202,7 +218,11 @@ export function OptionsPanel({
               Exercise
             </Button>
           </div>
-          {error && <p className="mt-2 text-xs text-down">{error}</p>}
+          {error && (
+            <p role="alert" className="mt-2 text-xs text-down">
+              {error}
+            </p>
+          )}
         </div>
       )}
     </Panel>

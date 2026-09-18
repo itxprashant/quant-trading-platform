@@ -33,7 +33,7 @@ function levelDot(level: NewsLevel): string {
  */
 export function NewsPanel({ items }: { items: NewsItem[] }) {
   return (
-    <Panel>
+    <Panel className="min-w-0 overflow-hidden">
       <PanelHeader
         title={
           <span className="flex items-center gap-1.5">
@@ -58,7 +58,9 @@ export function NewsPanel({ items }: { items: NewsItem[] }) {
                 aria-hidden
               />
               <div className="min-w-0 flex-1">
-                <p className="text-sm leading-snug text-text">{item.message}</p>
+                <p className="break-words text-sm leading-snug text-text">
+                  {item.message}
+                </p>
                 <div className="mt-0.5 flex items-center gap-2 text-[11px] text-faint">
                   <span className="mono tabular-nums">
                     {formatTime(item.createdAt)}

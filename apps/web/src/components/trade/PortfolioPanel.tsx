@@ -16,8 +16,8 @@ function Stat({
   tone?: string;
 }) {
   return (
-    <div className="flex items-center justify-between px-3 py-2">
-      <span className="text-sm text-muted">{label}</span>
+    <div className="min-w-0 space-y-1 px-3 py-2.5">
+      <div className="text-[11px] text-muted">{label}</div>
       <span className={cn("mono text-sm font-medium", tone)}>{value}</span>
     </div>
   );
@@ -34,7 +34,9 @@ function Metric({
 }) {
   return (
     <div className="bg-surface px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-faint">{label}</div>
+      <div className="text-[10px] uppercase tracking-wide text-faint">
+        {label}
+      </div>
       <div className={cn("mono mt-0.5 text-sm font-medium", tone)}>{value}</div>
     </div>
   );
@@ -59,120 +61,207 @@ export function PortfolioPanel({
 }) {
   const metrics = portfolio?.metrics;
   return (
-    <Panel className="flex flex-col">
-      <PanelHeader title="Portfolio" />
-      {!portfolio ? (
-        <div className="px-3 py-6 text-center text-sm text-faint">
-          Place a trade to start your book.
-        </div>
-      ) : (
-        <>
-          <div className="divide-y divide-border">
-            <Stat label="Cash" value={money(portfolio.cash)} />
-            <Stat label="Market value" value={money(portfolio.marketValue)} />
-            <div className="flex items-center justify-between px-3 py-2">
-              <span className="text-sm text-muted">PnL</span>
-              <FlashValue
-                value={portfolio.pnl}
-                format={(n) => signed(n)}
-                className={cn("text-sm font-semibold", dirClass(portfolio.pnl))}
-              />
-            </div>
-            {portfolio.freeCash !== undefined && (
-              <div className="flex items-center justify-between px-3 py-2">
-                <span className="text-sm text-muted">Free cash</span>
+    <Panel className="flex h-full min-w-0 flex-col overflow-hidden">
+      <PanelHeader title="Portfolio">
+        {portfolio && (
+          <span className="text-[11px] text-muted">
+            {portfolio.positions.length} positions
+          </span>
+        )}
+      </PanelHeader>
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Portfolio balances and holdings"
+        className="max-h-[360px] flex-1 overflow-y-auto focus-visible:outline-offset-[-2px]"
+      >
+        {!portfolio ? (
+          <div className="px-4 py-8 text-center text-xs text-muted">
+            <p>Portfolio not available yet.</p>
+            <p className="mt-1 text-faint">
+              Sign in and join this challenge to track your cash and positions.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 border-b border-border">
+              <Stat label="Cash" value={money(portfolio.cash)} />
+              <Stat label="Market value" value={money(portfolio.marketValue)} />
+              <div className="min-w-0 space-y-1 px-3 py-2.5">
+                <div className="text-[11px] text-muted">Total PnL</div>
                 <FlashValue
-                  value={portfolio.freeCash}
-                  format={(n) => money(n)}
+                  value={portfolio.pnl}
+                  format={(n) => signed(n)}
                   className={cn(
                     "text-sm font-semibold",
-                    portfolio.freeCash <= 0 ? "text-down" : "text-text",
+                    dirClass(portfolio.pnl),
                   )}
                 />
               </div>
-            )}
-            {portfolio.loanDebt !== undefined && portfolio.loanDebt > 0 && (
-              <Stat
-                label="Loan debt"
-                value={money(portfolio.loanDebt)}
-                tone="text-down"
-              />
-            )}
-            <div className="flex items-center justify-between px-3 py-2">
-              <span className="text-sm text-muted">Score</span>
-              <FlashValue
-                value={portfolio.score}
-                format={(n) => money(n)}
-                className="text-sm font-semibold text-accent"
-              />
-            </div>
-          </div>
-
-          {portfolio.bonds && portfolio.bonds.length > 0 && (
-            <div className="border-t border-border">
-              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-faint">
-                Bonds
-              </div>
-              {portfolio.bonds.map((b) => (
-                <div
-                  key={b.bondId}
-                  className="grid grid-cols-[1fr_auto_auto] gap-2 px-3 py-1.5 text-xs"
-                >
-                  <span>{b.name}</span>
-                  <span className="mono text-right text-muted">×{b.quantity}</span>
-                  <span className="mono text-right text-up">
-                    {money(b.couponsPaid)}
-                  </span>
+              {portfolio.freeCash !== undefined && (
+                <div className="min-w-0 space-y-1 px-3 py-2.5">
+                  <div className="text-[11px] text-muted">Free cash</div>
+                  <FlashValue
+                    value={portfolio.freeCash}
+                    format={(n) => money(n)}
+                    className={cn(
+                      "text-sm font-semibold",
+                      portfolio.freeCash <= 0 ? "text-down" : "text-text",
+                    )}
+                  />
                 </div>
-              ))}
+              )}
+              {portfolio.loanDebt !== undefined && portfolio.loanDebt > 0 && (
+                <Stat
+                  label="Loan debt"
+                  value={money(portfolio.loanDebt)}
+                  tone="text-down"
+                />
+              )}
+              <div className="min-w-0 space-y-1 px-3 py-2.5">
+                <div className="text-[11px] text-muted">Score</div>
+                <FlashValue
+                  value={portfolio.score}
+                  format={(n) => money(n)}
+                  className="text-sm font-semibold text-accent"
+                />
+              </div>
             </div>
-          )}
 
-          {metrics && (
-            <div className="grid grid-cols-2 gap-px border-t border-border bg-border">
-              <Metric label="Realized" value={signed(metrics.realizedPnl)} tone={dirClass(metrics.realizedPnl)} />
-              <Metric label="Volume" value={metrics.volume.toLocaleString("en-US")} />
-              {mm && (
-                <>
-                  <Metric label="Spread capt." value={money(metrics.spreadCapture)} tone="text-up" />
-                  <Metric label="Quote uptime" value={formatUptime(metrics.quoteUptime)} />
-                </>
+            {portfolio.bonds && portfolio.bonds.length > 0 && (
+              <div className="border-t border-border">
+                <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-faint">
+                  Bonds
+                </div>
+                {portfolio.bonds.map((b) => (
+                  <div
+                    key={b.bondId}
+                    className="grid grid-cols-[1fr_auto_auto] gap-2 px-3 py-1.5 text-xs"
+                  >
+                    <span className="min-w-0 break-words">{b.name}</span>
+                    <span className="mono text-right text-muted">
+                      ×{b.quantity}
+                    </span>
+                    <span className="mono text-right text-up">
+                      {money(b.couponsPaid)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {metrics && (
+              <div className="grid grid-cols-2 gap-px border-t border-border bg-border">
+                <Metric
+                  label="Realized"
+                  value={signed(metrics.realizedPnl)}
+                  tone={dirClass(metrics.realizedPnl)}
+                />
+                <Metric
+                  label="Volume"
+                  value={metrics.volume.toLocaleString("en-US")}
+                />
+                {mm && (
+                  <>
+                    <Metric
+                      label="Spread capture"
+                      value={money(metrics.spreadCapture)}
+                      tone="text-up"
+                    />
+                    <Metric
+                      label="Quote uptime"
+                      value={formatUptime(metrics.quoteUptime)}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+
+            <div
+              tabIndex={0}
+              role="region"
+              aria-label="Position details"
+              className="overflow-x-auto border-t border-border focus-visible:outline-offset-[-2px]"
+            >
+              {portfolio.positions.length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs text-muted">
+                  No open positions. Filled orders appear here.
+                </div>
+              ) : (
+                <table className="w-full min-w-[340px] whitespace-nowrap text-xs">
+                  <caption className="sr-only">
+                    Open positions and unrealized profit or loss
+                  </caption>
+                  <thead className="bg-surface-2 text-[10px] uppercase tracking-wide text-muted">
+                    <tr>
+                      <th
+                        scope="col"
+                        className="px-3 py-2 text-left font-medium"
+                      >
+                        Symbol
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-2 py-2 text-right font-medium"
+                      >
+                        Qty
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-2 py-2 text-right font-medium"
+                      >
+                        Avg price
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-3 py-2 text-right font-medium"
+                      >
+                        Unreal. PnL
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {portfolio.positions.map((p) => {
+                      const cur = prices.get(p.symbol)?.price ?? p.avgPrice;
+                      const upnl = p.quantity * (cur - p.avgPrice);
+                      return (
+                        <tr key={p.symbol} className="hover:bg-surface-2">
+                          <th
+                            scope="row"
+                            className="mono px-3 py-2 text-left font-medium"
+                          >
+                            {p.symbol}
+                          </th>
+                          <td
+                            className={cn(
+                              "mono px-2 py-2 text-right",
+                              dirClass(p.quantity),
+                            )}
+                          >
+                            {p.quantity > 0 ? "+" : ""}
+                            {p.quantity}
+                          </td>
+                          <td className="mono px-2 py-2 text-right text-muted">
+                            {money(p.avgPrice)}
+                          </td>
+                          <td
+                            className={cn(
+                              "mono px-3 py-2 text-right",
+                              dirClass(upnl),
+                            )}
+                          >
+                            {signed(upnl)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
-          )}
-
-          <div className="border-t border-border">
-            <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-1.5 text-[10px] uppercase tracking-wide text-faint">
-              <span>Symbol</span>
-              <span className="text-right">Qty</span>
-              <span className="text-right">Avg</span>
-              <span className="text-right">uPnL</span>
-            </div>
-            {portfolio.positions.length === 0 ? (
-              <div className="px-3 py-4 text-center text-xs text-faint">No open positions</div>
-            ) : (
-              portfolio.positions.map((p) => {
-                const cur = prices.get(p.symbol)?.price ?? p.avgPrice;
-                const upnl = p.quantity * (cur - p.avgPrice);
-                return (
-                  <div
-                    key={p.symbol}
-                    className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-1.5 text-xs"
-                  >
-                    <span className="mono">{p.symbol}</span>
-                    <span className={cn("mono text-right", dirClass(p.quantity))}>
-                      {p.quantity > 0 ? "+" : ""}
-                      {p.quantity}
-                    </span>
-                    <span className="mono text-right text-muted">{money(p.avgPrice)}</span>
-                    <span className={cn("mono text-right", dirClass(upnl))}>{signed(upnl)}</span>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </Panel>
   );
 }

@@ -10,7 +10,10 @@ import { money, signed } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
 function secsLeft(expiresAt: string): number {
-  return Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  return Math.max(
+    0,
+    Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000),
+  );
 }
 
 /**
@@ -34,7 +37,10 @@ export function DealDesk({ offers }: { offers: OtcOffer[] }) {
   // Surface the most recent live, non-dismissed offer.
   const live = offers
     .filter((o) => !dismissed.has(o.id) && secsLeft(o.expiresAt) > 0)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
   const offer = live[0];
   void now; // re-render each tick for the countdown
 
@@ -69,7 +75,10 @@ export function DealDesk({ offers }: { offers: OtcOffer[] }) {
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-50 flex justify-center p-4 sm:bottom-4">
-      <div className="w-full max-w-md rounded-xl border border-accent/40 bg-surface shadow-2xl shadow-black/40 backdrop-blur-xl">
+      <section
+        aria-label="OTC deal desk"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-lg border border-accent/40 bg-surface shadow-md"
+      >
         <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
           <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
             <Handshake className="size-3.5" /> Deal Desk
@@ -96,8 +105,8 @@ export function DealDesk({ offers }: { offers: OtcOffer[] }) {
         <div className="space-y-3 p-4">
           <p className="text-sm text-text">{offer.description}</p>
 
-          <div className="rounded-lg border border-border bg-surface-2 p-2.5">
-            <table className="w-full text-xs">
+          <div className="overflow-x-auto border-y border-border py-2.5">
+            <table className="w-full min-w-[260px] text-xs">
               <tbody className="divide-y divide-border">
                 {offer.legs.map((leg, i) => (
                   <tr key={i}>
@@ -147,7 +156,8 @@ export function DealDesk({ offers }: { offers: OtcOffer[] }) {
                   value={counter}
                   onChange={(e) => setCounter(e.target.value)}
                   placeholder={String(offer.cashToTrader)}
-                  className="mono"
+                  aria-label="Counteroffer cash amount"
+                  className="mono min-w-0"
                 />
                 <Button
                   size="md"
@@ -195,9 +205,13 @@ export function DealDesk({ offers }: { offers: OtcOffer[] }) {
             </div>
           )}
 
-          {error && <p className="text-xs text-down">{error}</p>}
+          {error && (
+            <p role="alert" className="text-xs text-down">
+              {error}
+            </p>
+          )}
         </div>
-      </div>
+      </section>
     </div>
   );
 }

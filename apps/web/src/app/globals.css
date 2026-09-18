@@ -1,146 +1,94 @@
 @import "tailwindcss";
 
 @theme {
-  /* Neutrals — near-black canvas with translucent white "glass" surfaces. */
-  --color-bg: #050505;
-  --color-surface: rgba(255, 255, 255, 0.04);
-  --color-surface-2: rgba(255, 255, 255, 0.06);
-  --color-surface-3: rgba(255, 255, 255, 0.09);
-  --color-border: rgba(255, 255, 255, 0.1);
-  --color-border-strong: rgba(255, 255, 255, 0.18);
-  --color-text: #ededed;
-  --color-muted: #a1a1aa;
-  --color-faint: #71717a;
-
-  /* Accent — cyan. Primary actions, selection, focus, active nav. */
-  --color-accent: #22d3ee;
-  --color-accent-hover: #67e8f9;
-  --color-accent-fg: #050505;
-  --color-accent-subtle: rgba(34, 211, 238, 0.12);
-
-  /* Semantic — gains/losses. */
-  --color-up: #34d399;
-  --color-up-subtle: rgba(52, 211, 153, 0.12);
-  --color-down: #f87171;
-  --color-down-subtle: rgba(248, 113, 113, 0.12);
-  --color-warning: #fbbf24;
-  --color-info: #38bdf8;
-
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-
+  --color-bg: oklch(0.155 0.006 65);
+  --color-surface: oklch(0.19 0.006 65);
+  --color-surface-2: oklch(0.225 0.006 65);
+  --color-surface-3: oklch(0.265 0.006 65);
+  --color-border: oklch(0.3 0.008 65);
+  --color-border-strong: oklch(0.41 0.008 65);
+  --color-text: oklch(0.945 0.009 80);
+  --color-muted: oklch(0.72 0.01 75);
+  --color-faint: oklch(0.62 0.01 75);
+  --color-accent: oklch(0.745 0.165 40);
+  --color-accent-hover: oklch(0.81 0.125 40);
+  --color-accent-fg: oklch(0.18 0.015 40);
+  --color-accent-subtle: oklch(0.745 0.165 40 / 0.12);
+  --color-up: oklch(0.78 0.115 164);
+  --color-up-subtle: oklch(0.78 0.115 164 / 0.1);
+  --color-down: oklch(0.74 0.145 20);
+  --color-down-subtle: oklch(0.74 0.145 20 / 0.1);
+  --color-warning: oklch(0.82 0.12 85);
+  --color-info: oklch(0.77 0.08 245);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
   --font-sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, "JetBrains Mono", monospace;
-
-  --ease-out-quart: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --ease-out-quart: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @layer base {
   * {
     border-color: var(--color-border);
   }
-
   html {
     color-scheme: dark;
+    scroll-padding-top: 100px;
   }
-
   body {
-    background-color: var(--color-bg);
+    background: var(--color-bg);
     color: var(--color-text);
     font-family: var(--font-sans);
     font-size: 14px;
-    line-height: 1.45;
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     min-height: 100dvh;
-    /* Cyan/sky radial glow backdrop, fixed so it never scrolls away. */
-    background-image:
-      radial-gradient(circle at 50% 0%, rgba(6, 182, 212, 0.15) 0%, transparent 60%),
-      radial-gradient(circle at 50% -20%, rgba(56, 189, 248, 0.2) 0%, transparent 70%);
-    background-attachment: fixed;
   }
-
+  button:not(:disabled),
+  select:not(:disabled) {
+    cursor: pointer;
+  }
   ::selection {
-    background: var(--color-accent-subtle);
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
   }
-
-  /* Native <select> popups inherit a light background from the translucent
-     control; force a solid dark list so it matches the glass theme. */
   select option {
-    background-color: #0e0e0e;
+    background: var(--color-surface-2);
     color: var(--color-text);
   }
-  select option:checked,
-  select option:hover {
-    background-color: #14333a;
-    color: var(--color-accent);
-  }
-
-  /* Consistent, visible keyboard focus across all interactive elements. */
   :focus-visible {
     outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
-    border-radius: var(--radius-sm);
+    outline-offset: 3px;
   }
-  /* Don't double-up rings on elements that draw their own. */
   :focus:not(:focus-visible) {
     outline: none;
   }
-
-  /* Skip link: hidden until focused. */
   .skip-link {
     position: fixed;
-    top: -100px;
+    top: 12px;
     left: 12px;
     z-index: 100;
-    padding: 8px 14px;
+    padding: 10px 16px;
     background: var(--color-accent);
     color: var(--color-accent-fg);
     border-radius: var(--radius-md);
-    transition: top 0.15s var(--ease-out-quart);
+    transform: translateY(-150%);
   }
   .skip-link:focus {
-    top: 12px;
+    transform: translateY(0);
   }
-
-  /* Tabular numerals everywhere money lives. */
-  .tnum {
+  .tnum,
+  .mono {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum";
   }
-
   .mono {
     font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
   }
-
-  /* Slim, themed scrollbars with cyan hover. */
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
-  }
-  ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 999px;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(34, 211, 238, 0.3);
-  }
-  ::-webkit-scrollbar-corner {
-    background: transparent;
-  }
-
   .scrollbar-hide {
-    -ms-overflow-style: none;
     scrollbar-width: none;
   }
   .scrollbar-hide::-webkit-scrollbar {
@@ -148,87 +96,86 @@
   }
 }
 
-/* Value flash on real-time update. */
+@layer components {
+  .action-link {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    border: 1px solid var(--color-accent);
+    border-radius: 6px;
+    padding: 0 20px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
+    transition:
+      background-color 160ms var(--ease-out-quart),
+      border-color 160ms var(--ease-out-quart);
+  }
+  .action-link:hover {
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+  }
+  .action-link-secondary {
+    background: transparent;
+    border-color: var(--color-border-strong);
+    color: var(--color-text);
+  }
+  .action-link-secondary:hover {
+    background: var(--color-surface-2);
+    border-color: var(--color-muted);
+  }
+  .market-grid {
+    background-image:
+      linear-gradient(var(--color-border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-border) 1px, transparent 1px);
+    background-size: 64px 64px;
+  }
+  .landing-title {
+    font-size: clamp(3.25rem, 6.6vw, 6rem);
+    line-height: 1.04;
+    letter-spacing: -0.065em;
+    font-weight: 500;
+  }
+  .landing-section-title {
+    font-size: clamp(2rem, 4vw, 3.5rem);
+    line-height: 1.1;
+    letter-spacing: -0.045em;
+    font-weight: 500;
+  }
+}
+
 @keyframes flash-up {
-  0% {
+  from {
     background-color: var(--color-up-subtle);
   }
-  100% {
+  to {
     background-color: transparent;
   }
 }
 @keyframes flash-down {
-  0% {
+  from {
     background-color: var(--color-down-subtle);
   }
-  100% {
+  to {
     background-color: transparent;
   }
 }
 .flash-up {
-  animation: flash-up 0.5s var(--ease-out-quart);
+  animation: flash-up 0.4s var(--ease-out-quart);
 }
 .flash-down {
-  animation: flash-down 0.5s var(--ease-out-quart);
-}
-
-/* Landing: horizontal ticker tape. */
-@keyframes lp-marquee {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-50%);
-  }
-}
-.lp-ticker {
-  overflow: hidden;
-  mask-image: linear-gradient(
-    to right,
-    transparent,
-    #000 8%,
-    #000 92%,
-    transparent
-  );
-}
-.lp-ticker-track {
-  display: inline-flex;
-  width: max-content;
-  animation: lp-marquee 42s linear infinite;
-}
-.lp-ticker:hover .lp-ticker-track {
-  animation-play-state: paused;
-}
-
-/* Landing: gentle on-load reveal. */
-@keyframes lp-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-.lp-reveal {
-  opacity: 0;
-  animation: lp-reveal 0.7s var(--ease-out-quart) forwards;
+  animation: flash-down 0.4s var(--ease-out-quart);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .flash-up,
-  .flash-down {
-    animation: none;
-  }
-  .lp-ticker-track {
-    animation: none;
-  }
-  .lp-reveal {
-    opacity: 1;
-    animation: none;
-  }
-  * {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

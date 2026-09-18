@@ -1,82 +1,169 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Activity, LogOut, Shield } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { ArrowUpRight, LogOut, Menu, X } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
-import type { ReactNode } from "react";
 
 export function Brand() {
   return (
-    <Link href="/" className="flex items-center gap-2 font-semibold">
-      <span className="grid size-7 place-items-center rounded-lg border border-accent/30 bg-accent-subtle text-accent">
-        <Activity className="size-4" />
+    <Link
+      href="/"
+      aria-label="Quanta home"
+      className="flex shrink-0 items-center gap-2.5"
+    >
+      <svg
+        viewBox="0 0 32 32"
+        fill="none"
+        className="size-8 text-accent"
+        aria-hidden="true"
+      >
+        <path d="M6 6H23V23H6V6Z" stroke="currentColor" strokeWidth="3" />
+        <path
+          d="M17 17L29 29M11 11H18V18H11Z"
+          stroke="currentColor"
+          strokeWidth="3"
+        />
+      </svg>
+      <span className="text-[21px] font-semibold tracking-[-0.06em]">
+        quanta<span className="text-accent">.</span>
       </span>
-      <span className="text-[15px] tracking-tight">Quanta</span>
     </Link>
   );
 }
 
-export function TopBar({ center, className }: { center?: ReactNode; className?: string }) {
+export function TopBar({
+  center,
+  className,
+}: {
+  center?: ReactNode;
+  className?: string;
+}) {
   const { user, logout } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const links = [
+    { href: "/challenges", label: "Arena" },
+    ...(user?.role === "admin"
+      ? [{ href: "/admin", label: "Event control" }]
+      : []),
+  ];
 
   return (
     <header
       className={cn(
-        "sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-border bg-bg/50 px-4 backdrop-blur-md",
+        "sticky top-0 z-30 border-b border-border bg-bg",
         className,
       )}
     >
-      <div className="flex items-center gap-6">
-        <Brand />
-        <nav className="hidden items-center gap-1 text-sm text-muted md:flex">
-          <Link href="/challenges" className="rounded-lg px-2.5 py-1.5 hover:bg-surface-2 hover:text-accent">
-            Challenges
-          </Link>
-          {user?.role === "admin" && (
+      <div className="mx-auto flex min-h-17 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-8">
+        <div className="flex shrink-0 items-center gap-10">
+          <Brand />
+          <nav
+            aria-label="Main navigation"
+            className="hidden items-center gap-6 md:flex"
+          >
             <Link
-              href="/admin"
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 hover:bg-surface-2 hover:text-accent"
+              href="/"
+              aria-current={pathname === "/" ? "page" : undefined}
+              className={cn(
+                "py-5 text-xs transition-colors hover:text-text",
+                pathname === "/" ? "text-text" : "text-muted",
+              )}
             >
-              <Shield className="size-3.5" /> Admin
+              Overview
+            </Link>
+            {links.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                aria-current={
+                  pathname.startsWith(link.href) ? "page" : undefined
+                }
+                className={cn(
+                  "flex items-center gap-2 py-5 text-xs transition-colors hover:text-text",
+                  pathname.startsWith(link.href) ? "text-accent" : "text-muted",
+                )}
+              >
+                {link.label}
+                {pathname.startsWith(link.href) && (
+                  <span className="size-1 rounded-full bg-accent" />
+                )}
+              </Link>
+            ))}
+          </nav>
+        </div>
+        {center && (
+          <div className="hidden min-w-0 flex-1 justify-center xl:flex">
+            {center}
+          </div>
+        )}
+        <div className="flex min-w-0 items-center gap-3">
+          {user ? (
+            <>
+              <div className="hidden min-w-0 text-right sm:block">
+                <div className="max-w-36 truncate text-xs font-medium">
+                  {user.displayName}
+                </div>
+                <div className="mt-0.5 text-[10px] capitalize text-muted">
+                  {user.role} account
+                </div>
+              </div>
+              <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border bg-surface-2 text-[10px] font-semibold text-muted">
+                {user.displayName.slice(0, 2).toUpperCase()}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="min-h-11 px-2"
+                aria-label="Log out"
+                onClick={() => {
+                  logout();
+                  router.push("/");
+                }}
+              >
+                <LogOut className="size-4" />
+              </Button>
+            </>
+          ) : (
+            <Link href="/login" className="action-link min-h-9 px-3 sm:px-4">
+              Sign in <ArrowUpRight className="size-3.5" aria-hidden="true" />
             </Link>
           )}
-        </nav>
+          <button
+            type="button"
+            aria-expanded={menuOpen}
+            aria-controls="mobile-navigation"
+            aria-label={menuOpen ? "Close navigation" : "Open navigation"}
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="grid size-11 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-2 md:hidden"
+          >
+            {menuOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+          </button>
+        </div>
       </div>
-
-      {center && <div className="flex flex-1 justify-center">{center}</div>}
-
-      <div className="flex items-center gap-3">
-        {user ? (
-          <>
-            <div className="hidden text-right sm:block">
-              <div className="text-sm font-medium leading-tight">{user.displayName}</div>
-              <div className="text-xs capitalize text-faint leading-tight">{user.role}</div>
-            </div>
-            <span className="grid size-8 place-items-center rounded-full border border-border bg-surface-2 text-xs font-semibold text-muted">
-              {user.displayName.slice(0, 2).toUpperCase()}
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label="Log out"
-              onClick={() => {
-                logout();
-                router.push("/");
-              }}
+      {menuOpen && (
+        <nav
+          id="mobile-navigation"
+          aria-label="Mobile navigation"
+          className="flex flex-wrap gap-2 border-t border-border px-4 py-3 md:hidden"
+        >
+          {[{ href: "/", label: "Overview" }, ...links].map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              onClick={() => setMenuOpen(false)}
+              className="rounded-md px-4 py-3 text-sm text-muted hover:bg-surface-2 hover:text-text"
             >
-              <LogOut className="size-4" />
-            </Button>
-          </>
-        ) : (
-          <Button size="sm" onClick={() => router.push("/login")}>
-            Sign in
-          </Button>
-        )}
-      </div>
+              {link.label}
+            </Link>
+          ))}
+        </nav>
+      )}
     </header>
   );
 }

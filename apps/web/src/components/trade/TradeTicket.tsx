@@ -30,7 +30,10 @@ export function TradeTicket({
   const [side, setSide] = useState<OrderSide>("buy");
   const [type, setType] = useState<OrderType>("limit");
   const [quantity, setQuantity] = useState("10");
-  const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+  const [status, setStatus] = useState<{
+    kind: "ok" | "err";
+    msg: string;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function submit() {
@@ -51,9 +54,15 @@ export function TradeTicket({
         ...(type === "limit" ? { price: parseFloat(price) } : {}),
       };
       await post("/api/orders", body);
-      setStatus({ kind: "ok", msg: `${side === "buy" ? "Buy" : "Sell"} ${qty} ${symbol} submitted.` });
+      setStatus({
+        kind: "ok",
+        msg: `${side === "buy" ? "Buy" : "Sell"} ${qty} ${symbol} submitted.`,
+      });
     } catch (err) {
-      const code = err instanceof ApiError ? (err.body as { error?: string })?.error : undefined;
+      const code =
+        err instanceof ApiError
+          ? (err.body as { error?: string })?.error
+          : undefined;
       setStatus({
         kind: "err",
         msg:
@@ -62,9 +71,9 @@ export function TradeTicket({
             : code === "quantity_exceeds_limit"
               ? `Max order size is ${maxQuantity}.`
               : code === "rate_limited"
-                ? "Too many orders — slow down and retry."
+                ? "Too many orders. Slow down and retry."
                 : code === "volume_limited"
-                  ? "Volume limit reached for this minute — wait and retry."
+                  ? "Volume limit reached for this minute. Wait and retry."
                   : code === "validation_error"
                     ? "Check your order details."
                     : "Order rejected.",
@@ -77,24 +86,38 @@ export function TradeTicket({
   const qtyNum = parseInt(quantity, 10) || 0;
 
   return (
-    <Panel className="flex flex-col">
-      <PanelHeader title="Trade Ticket" />
-      <div className="space-y-3 p-3">
-        <div className="grid grid-cols-2 gap-1.5 rounded-md bg-surface-2 p-1">
+    <Panel className="flex min-w-0 flex-col overflow-hidden">
+      <PanelHeader title="Order entry">
+        <span className="mono truncate text-xs text-text">{symbol}</span>
+      </PanelHeader>
+      <div className="flex flex-1 flex-col gap-3 p-4">
+        <div
+          role="group"
+          aria-label="Order side"
+          className="grid grid-cols-2 gap-1 rounded-md border border-border bg-surface-2 p-1"
+        >
           <button
+            type="button"
             onClick={() => setSide("buy")}
+            aria-pressed={side === "buy"}
             className={cn(
-              "h-8 rounded-sm text-sm font-medium transition-colors",
-              side === "buy" ? "bg-up-subtle text-up ring-1 ring-up/40" : "text-muted hover:text-text",
+              "h-9 rounded-sm text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+              side === "buy"
+                ? "bg-up-subtle text-up ring-1 ring-up/40"
+                : "text-muted hover:text-text",
             )}
           >
             Buy
           </button>
           <button
+            type="button"
             onClick={() => setSide("sell")}
+            aria-pressed={side === "sell"}
             className={cn(
-              "h-8 rounded-sm text-sm font-medium transition-colors",
-              side === "sell" ? "bg-down-subtle text-down ring-1 ring-down/40" : "text-muted hover:text-text",
+              "h-9 rounded-sm text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+              side === "sell"
+                ? "bg-down-subtle text-down ring-1 ring-down/40"
+                : "text-muted hover:text-text",
             )}
           >
             Sell
@@ -102,17 +125,21 @@ export function TradeTicket({
         </div>
 
         <Field label="Order type">
-          <Select value={type} onChange={(e) => setType(e.target.value as OrderType)}>
+          <Select
+            value={type}
+            onChange={(e) => setType(e.target.value as OrderType)}
+          >
             <option value="limit">Limit</option>
             <option value="market">Market</option>
           </Select>
         </Field>
 
-        <Field label={`Quantity (max ${maxQuantity})`}>
+        <Field label={`Quantity (maximum ${maxQuantity})`}>
           <Input
             type="number"
             min={1}
             max={maxQuantity}
+            step={1}
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
             className="mono"
@@ -123,8 +150,14 @@ export function TradeTicket({
           {[25, 50, 75, 100].map((p) => (
             <button
               key={p}
-              onClick={() => setQuantity(String(Math.max(1, Math.floor((maxQuantity * p) / 100))))}
-              className="h-7 rounded-sm border border-border bg-surface-2 text-xs text-muted hover:text-text"
+              type="button"
+              aria-label={`Set quantity to ${p}% of the ${maxQuantity} unit order limit`}
+              onClick={() =>
+                setQuantity(
+                  String(Math.max(1, Math.floor((maxQuantity * p) / 100))),
+                )
+              }
+              className="h-7 rounded-md border border-border bg-surface-2 text-xs text-muted transition-colors hover:border-border-strong hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
             >
               {p}%
             </button>
@@ -143,25 +176,43 @@ export function TradeTicket({
           </Field>
         )}
 
-        {type === "limit" && refPrice != null && qtyNum > 0 && parseFloat(price) > 0 && (
-          <div className="flex justify-between rounded-md bg-surface-2 px-3 py-2 text-xs text-muted">
-            <span>Est. value</span>
-            <span className="mono">{(qtyNum * parseFloat(price)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-          </div>
+        {type === "market" && (
+          <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs leading-relaxed text-muted">
+            Executes against available liquidity. The final price may differ
+            from the last trade.
+          </p>
         )}
+
+        {type === "limit" &&
+          refPrice != null &&
+          qtyNum > 0 &&
+          parseFloat(price) > 0 && (
+            <div className="flex flex-wrap justify-between gap-2 border-t border-border pt-3 text-xs text-muted">
+              <span>Estimated notional</span>
+              <span className="mono text-text">
+                {(qtyNum * parseFloat(price)).toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
+            </div>
+          )}
 
         <Button
           variant={side === "buy" ? "buy" : "sell"}
-          className="w-full"
+          className="mt-auto w-full"
           size="lg"
           loading={submitting}
           onClick={submit}
         >
-          {user ? `Place ${side} order` : "Sign in to trade"}
+          {user
+            ? `${side === "buy" ? "Buy" : "Sell"} ${symbol}`
+            : "Sign in to trade"}
         </Button>
 
         {status && (
           <div
+            role={status.kind === "err" ? "alert" : "status"}
             className={cn(
               "rounded-md px-3 py-2 text-xs",
               status.kind === "ok"

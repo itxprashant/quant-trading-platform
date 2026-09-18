@@ -22,7 +22,7 @@ function levelStyles(level: NewsLevel): string {
     case "urgent":
       return "border-down/40 bg-down-subtle/40 text-down";
     case "warning":
-      return "border-warning/30 bg-accent-subtle/50 text-warning";
+      return "border-warning/30 bg-surface-2 text-warning";
     default:
       return "border-border bg-surface-2 text-muted";
   }
@@ -32,7 +32,7 @@ function NewsRow({ item, prominent }: { item: NewsItem; prominent?: boolean }) {
   return (
     <div
       className={cn(
-        "flex min-w-0 items-start gap-2 rounded-md border px-2.5 py-1.5",
+        "flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 rounded-md border px-2.5 py-1.5",
         levelStyles(item.level),
         prominent ? "text-sm" : "text-xs",
       )}
@@ -40,9 +40,13 @@ function NewsRow({ item, prominent }: { item: NewsItem; prominent?: boolean }) {
       <span className="mono shrink-0 tabular-nums opacity-80">
         {formatTime(item.createdAt)}
       </span>
-      <span className="min-w-0 flex-1 leading-snug">{item.message}</span>
+      <span className="min-w-0 flex-[1_1_160px] break-words leading-snug">
+        {item.message}
+      </span>
       {item.authorDisplayName && (
-        <span className="shrink-0 text-faint">— {item.authorDisplayName}</span>
+        <span className="min-w-0 break-words text-faint">
+          {item.authorDisplayName}
+        </span>
       )}
     </div>
   );

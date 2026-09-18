@@ -11,19 +11,23 @@ import {
   type LineData,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { ChartPriceSeries, OrderBookSnapshot, PricePoint } from "@qtp/shared";
+import type {
+  ChartPriceSeries,
+  OrderBookSnapshot,
+  PricePoint,
+} from "@qtp/shared";
 import { midFromBook } from "@qtp/shared";
 import { get } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
-// Concrete colors mirroring the design tokens (lightweight-charts cannot parse css vars / rgba tokens).
+// RGB fallbacks for the workbench tokens: lightweight-charts cannot parse OKLCH or CSS variables.
 const CHART = {
-  muted: "#a1a1aa", // --color-muted (zinc-400)
-  grid: "rgba(255, 255, 255, 0.06)", // --color-surface-2
-  border: "rgba(255, 255, 255, 0.12)", // --color-border
-  up: "#34d399", // --color-up (emerald-400)
-  down: "#f87171", // --color-down (red-400)
-  line: "#22d3ee", // --color-accent (cyan-400)
+  muted: "#aaa49a",
+  grid: "rgba(239, 232, 221, 0.045)",
+  border: "rgba(239, 232, 221, 0.12)",
+  up: "#86b99a",
+  down: "#dd817b",
+  line: "#ff8058",
 } as const;
 
 /** Bucket width for OHLC candles (engine ticks ~1s apart). */
@@ -66,8 +70,7 @@ function ticksToCandles(points: PricePoint[], intervalSec: number): Ohlc[] {
   const buckets = new Map<number, Ohlc>();
 
   for (const p of points) {
-    const bucket =
-      Math.floor(p.timestamp / 1000 / intervalSec) * intervalSec;
+    const bucket = Math.floor(p.timestamp / 1000 / intervalSec) * intervalSec;
     const existing = buckets.get(bucket);
     if (!existing) {
       buckets.set(bucket, {
@@ -84,7 +87,9 @@ function ticksToCandles(points: PricePoint[], intervalSec: number): Ohlc[] {
     }
   }
 
-  return [...buckets.values()].sort((a, b) => (a.time as number) - (b.time as number));
+  return [...buckets.values()].sort(
+    (a, b) => (a.time as number) - (b.time as number),
+  );
 }
 
 function ticksToLine(points: PricePoint[]): LineData<UTCTimestamp>[] {
@@ -113,7 +118,12 @@ export function PriceChart({
   const [mode, setMode] = useState<ChartMode>("candle");
   const [priceSeries, setPriceSeries] = useState<ChartPriceSeries>("mid");
   const [hasData, setHasData] = useState(false);
+  const [historyStatus, setHistoryStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [retry, setRetry] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const colorsRef = useRef<Record<keyof typeof CHART, string>>(CHART);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<
     ISeriesApi<"Candlestick"> | ISeriesApi<"Line"> | null
@@ -138,27 +148,30 @@ export function PriceChart({
     };
   }, [priceSeries, lastPrice, book, symbol]);
 
-  const applyHistory = useCallback((points: PricePoint[], chartMode: ChartMode) => {
-    const session = latestSession(points);
-    historyRef.current = session;
-    if (session.length > 0) setHasData(true);
-    const series = seriesRef.current;
-    const chart = chartRef.current;
-    if (!series || !chart) return;
+  const applyHistory = useCallback(
+    (points: PricePoint[], chartMode: ChartMode) => {
+      const session = latestSession(points);
+      historyRef.current = session;
+      if (session.length > 0) setHasData(true);
+      const series = seriesRef.current;
+      const chart = chartRef.current;
+      if (!series || !chart) return;
 
-    if (chartMode === "candle") {
-      const candles = ticksToCandles(session, CANDLE_SEC);
-      (series as ISeriesApi<"Candlestick">).setData(candles);
-      const last = candles.at(-1);
-      currentCandleRef.current = last ? { ...last } : null;
-      focusRecentBars(chart, candles.length);
-    } else {
-      const line = ticksToLine(session);
-      (series as ISeriesApi<"Line">).setData(line);
-      currentCandleRef.current = null;
-      focusRecentBars(chart, line.length);
-    }
-  }, []);
+      if (chartMode === "candle") {
+        const candles = ticksToCandles(session, CANDLE_SEC);
+        (series as ISeriesApi<"Candlestick">).setData(candles);
+        const last = candles.at(-1);
+        currentCandleRef.current = last ? { ...last } : null;
+        focusRecentBars(chart, candles.length);
+      } else {
+        const line = ticksToLine(session);
+        (series as ISeriesApi<"Line">).setData(line);
+        currentCandleRef.current = null;
+        focusRecentBars(chart, line.length);
+      }
+    },
+    [],
+  );
 
   const mountSeries = useCallback(
     (chart: IChartApi, chartMode: ChartMode) => {
@@ -169,16 +182,16 @@ export function PriceChart({
 
       if (chartMode === "candle") {
         seriesRef.current = chart.addSeries(CandlestickSeries, {
-          upColor: CHART.up,
-          downColor: CHART.down,
+          upColor: colorsRef.current.up,
+          downColor: colorsRef.current.down,
           borderVisible: false,
-          wickUpColor: CHART.up,
-          wickDownColor: CHART.down,
+          wickUpColor: colorsRef.current.up,
+          wickDownColor: colorsRef.current.down,
           priceFormat: { type: "price", precision: 2, minMove: 0.01 },
         });
       } else {
         seriesRef.current = chart.addSeries(LineSeries, {
-          color: CHART.line,
+          color: colorsRef.current.line,
           lineWidth: 2,
           crosshairMarkerVisible: true,
           priceFormat: { type: "price", precision: 2, minMove: 0.01 },
@@ -197,20 +210,39 @@ export function PriceChart({
     const el = containerRef.current;
     if (!el) return;
 
+    const styles = getComputedStyle(el);
+    const tokens = {
+      muted: "--color-muted",
+      border: "--color-border",
+      up: "--color-up",
+      down: "--color-down",
+      line: "--color-accent",
+    } as const;
+    const colors = { ...CHART } as Record<keyof typeof CHART, string>;
+    for (const key of Object.keys(tokens) as Array<keyof typeof tokens>) {
+      const value = styles.getPropertyValue(tokens[key]).trim();
+      // Keep unsupported modern color syntax out of the library's color parser.
+      if (/^(#[\da-f]{3,8}|rgba?\([\d\s.,%]+\))$/i.test(value))
+        colors[key] = value;
+    }
+    colorsRef.current = colors;
+
     const chart = createChart(el, {
       layout: {
         background: { color: "transparent" },
-        textColor: CHART.muted,
-        fontFamily: "var(--font-geist-mono), monospace",
+        textColor: colors.muted,
+        fontFamily:
+          styles.getPropertyValue("--font-geist-mono").trim() || "monospace",
+        fontSize: 11,
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: CHART.grid },
-        horzLines: { color: CHART.grid },
+        vertLines: { color: colors.grid },
+        horzLines: { color: colors.grid },
       },
-      rightPriceScale: { borderColor: CHART.border },
+      rightPriceScale: { borderColor: colors.border },
       timeScale: {
-        borderColor: CHART.border,
+        borderColor: colors.border,
         timeVisible: true,
         secondsVisible: true,
         rightOffset: 8,
@@ -231,10 +263,11 @@ export function PriceChart({
     const ro = new ResizeObserver(syncSize);
     ro.observe(el);
     // Flex layout may settle after first paint; ensure the chart fills the panel.
-    requestAnimationFrame(syncSize);
+    const frame = requestAnimationFrame(syncSize);
 
     return () => {
       ro.disconnect();
+      cancelAnimationFrame(frame);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -253,6 +286,8 @@ export function PriceChart({
     historyRef.current = [];
     currentCandleRef.current = null;
     setHasData(false);
+    setHistoryStatus("loading");
+    seriesRef.current?.setData([]);
     let cancelled = false;
     get<PricePoint[]>(
       `/api/market/${challengeId}/${symbol}/history?limit=500&series=${priceSeries}`,
@@ -260,12 +295,15 @@ export function PriceChart({
       .then((points) => {
         if (cancelled) return;
         applyHistory(points, modeRef.current);
+        setHistoryStatus("ready");
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setHistoryStatus("error");
+      });
     return () => {
       cancelled = true;
     };
-  }, [challengeId, symbol, priceSeries, applyHistory]);
+  }, [challengeId, symbol, priceSeries, applyHistory, retry]);
 
   // Append live ticks.
   useEffect(() => {
@@ -317,77 +355,115 @@ export function PriceChart({
   }, [live, applyHistory]);
 
   return (
-    <div className="relative h-full w-full">
-      <div className="absolute right-2 top-2 z-10 flex gap-1.5">
-        <div
-          className="flex rounded-lg border border-border bg-bg/70 p-0.5 backdrop-blur-md"
-          role="group"
-          aria-label="Price series"
-        >
-          <button
-            type="button"
-            onClick={() => setPriceSeries("mid")}
-            className={cn(
-              "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
-              priceSeries === "mid"
-                ? "bg-accent-subtle text-text"
-                : "text-muted hover:text-text",
-            )}
+    <div className="flex h-full min-w-0 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-2 py-2">
+        <span className="text-[10px] uppercase tracking-wide text-faint">
+          {mode === "candle" ? "5s candles" : "Price history"}
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          <div
+            className="flex rounded-md border border-border bg-surface-2 p-0.5"
+            role="group"
+            aria-label="Price series"
           >
-            Mid
-          </button>
-          <button
-            type="button"
-            onClick={() => setPriceSeries("last")}
-            className={cn(
-              "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
-              priceSeries === "last"
-                ? "bg-accent-subtle text-text"
-                : "text-muted hover:text-text",
-            )}
+            <button
+              type="button"
+              onClick={() => setPriceSeries("mid")}
+              aria-pressed={priceSeries === "mid"}
+              className={cn(
+                "rounded px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+                priceSeries === "mid"
+                  ? "bg-accent-subtle text-text"
+                  : "text-muted hover:text-text",
+              )}
+            >
+              Mid price
+            </button>
+            <button
+              type="button"
+              onClick={() => setPriceSeries("last")}
+              aria-pressed={priceSeries === "last"}
+              className={cn(
+                "rounded px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+                priceSeries === "last"
+                  ? "bg-accent-subtle text-text"
+                  : "text-muted hover:text-text",
+              )}
+            >
+              Last trade
+            </button>
+          </div>
+          <div
+            className="flex rounded-md border border-border bg-surface-2 p-0.5"
+            role="group"
+            aria-label="Chart type"
           >
-            Last
-          </button>
-        </div>
-        <div
-          className="flex rounded-lg border border-border bg-bg/70 p-0.5 backdrop-blur-md"
-          role="group"
-          aria-label="Chart type"
-        >
-        <button
-          type="button"
-          onClick={() => setMode("candle")}
-          className={cn(
-            "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
-            mode === "candle"
-              ? "bg-accent-subtle text-text"
-              : "text-muted hover:text-text",
-          )}
-        >
-          Candles
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("line")}
-          className={cn(
-            "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
-            mode === "line"
-              ? "bg-accent-subtle text-text"
-              : "text-muted hover:text-text",
-          )}
-        >
-          Line
-        </button>
-        </div>
-      </div>
-      <div ref={containerRef} className="h-full w-full" />
-      {!hasData && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center">
-          <div className="flex items-center gap-2 text-xs text-faint">
-            <span className="size-3 animate-spin rounded-full border-2 border-current border-t-transparent motion-reduce:animate-none" />
-            Waiting for market data…
+            <button
+              type="button"
+              onClick={() => setMode("candle")}
+              aria-pressed={mode === "candle"}
+              className={cn(
+                "rounded px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+                mode === "candle"
+                  ? "bg-accent-subtle text-text"
+                  : "text-muted hover:text-text",
+              )}
+            >
+              Candles
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("line")}
+              aria-pressed={mode === "line"}
+              className={cn(
+                "rounded px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+                mode === "line"
+                  ? "bg-accent-subtle text-text"
+                  : "text-muted hover:text-text",
+              )}
+            >
+              Line
+            </button>
           </div>
         </div>
+      </div>
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={containerRef}
+          role="img"
+          aria-label={`${symbol} ${priceSeries === "mid" ? "mid-price" : "last-trade"} chart${live ? `, latest ${live.price.toFixed(2)}` : ""}`}
+          className="absolute inset-0"
+        />
+        {!hasData && (
+          <div className="absolute inset-0 grid place-items-center">
+            <div
+              role="status"
+              className="space-y-2 px-4 text-center text-xs text-muted"
+            >
+              <p>
+                {historyStatus === "loading"
+                  ? "Loading price history..."
+                  : historyStatus === "error"
+                    ? "Price history is unavailable."
+                    : "Waiting for the first market tick."}
+              </p>
+              {historyStatus === "error" && (
+                <button
+                  type="button"
+                  onClick={() => setRetry((n) => n + 1)}
+                  className="rounded px-2 py-1 text-accent hover:bg-accent-subtle focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  Retry history
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      {hasData && historyStatus === "error" && (
+        <p role="status" className="px-2 py-1 text-[11px] text-warning">
+          History unavailable. Showing live ticks only.
+        </p>
       )}
     </div>
   );

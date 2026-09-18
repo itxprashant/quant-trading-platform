@@ -31,15 +31,23 @@ export function OpenOrders({
   const [orders, setOrders] = useState<Order[]>([]);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(() => {
     if (!user) {
       setOrders([]);
+      setLoaded(true);
+      setLoadError(false);
       return;
     }
     get<Order[]>(`/api/orders?challengeId=${challengeId}&open=true`)
-      .then(setOrders)
-      .catch(() => {});
+      .then((next) => {
+        setOrders(next);
+        setLoadError(false);
+      })
+      .catch(() => setLoadError(true))
+      .finally(() => setLoaded(true));
   }, [challengeId, user]);
 
   useEffect(() => {
@@ -67,59 +75,124 @@ export function OpenOrders({
   }
 
   return (
-    <Panel className="flex h-full flex-col">
-      <PanelHeader title={`Open Orders (${orders.length})`} />
-      <div className="flex-1 overflow-y-auto">
+    <Panel className="flex h-full min-w-0 flex-col overflow-hidden">
+      <PanelHeader title="Open orders">
+        <span className="mono rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
+          {orders.length}
+        </span>
+      </PanelHeader>
+      <div className="max-h-[360px] flex-1 overflow-auto">
         {error && (
-          <p className="border-b border-border px-3 py-2 text-xs text-down">{error}</p>
+          <p
+            role="alert"
+            className="border-b border-border px-3 py-2 text-xs text-down"
+          >
+            {error}
+          </p>
         )}
-        <div className="grid grid-cols-[auto_auto_1fr_auto_auto_auto] gap-3 px-3 py-1.5 text-[10px] uppercase tracking-wide text-faint">
-          <span>Side</span>
-          <span>Type</span>
-          <span>Symbol</span>
-          <span className="text-right">Qty</span>
-          <span className="text-right">Price</span>
-          <span />
-        </div>
-        {orders.length === 0 ? (
-          <div className="px-3 py-6 text-center text-xs text-faint">
-            {user ? "No open orders" : "Sign in to see your orders"}
+        {loadError && (
+          <p
+            role="status"
+            className="border-b border-border px-3 py-2 text-xs text-warning"
+          >
+            Order updates unavailable.{" "}
+            <button
+              type="button"
+              onClick={load}
+              className="rounded underline underline-offset-2 hover:text-text"
+            >
+              Retry
+            </button>
+          </p>
+        )}
+        {!loaded ? (
+          <p role="status" className="px-3 py-8 text-center text-xs text-muted">
+            Loading open orders...
+          </p>
+        ) : orders.length === 0 ? (
+          <div className="px-4 py-8 text-center text-xs text-muted">
+            {loadError
+              ? "Your orders could not be retrieved."
+              : user
+                ? "No working orders. Unfilled orders will appear here."
+                : "Sign in to see and manage your orders."}
           </div>
         ) : (
-          orders.map((o) => (
-            <div
-              key={o.id}
-              className={cn(
-                "grid grid-cols-[auto_auto_1fr_auto_auto_auto] items-center gap-3 px-3 py-1.5 text-xs hover:bg-surface-2",
-                cancellingId === o.id && "opacity-60",
-              )}
-            >
-              <span className={cn("font-medium", o.side === "buy" ? "text-up" : "text-down")}>
-                {o.side === "buy" ? "Buy" : "Sell"}
-              </span>
-              <span className="capitalize text-muted">{o.type}</span>
-              <span className="mono">{o.symbol}</span>
-              <span className="mono text-right text-muted">
-                {o.remainingQuantity}/{o.quantity}
-              </span>
-              <span className="mono text-right">{o.price != null ? money(o.price) : "—"}</span>
-              <button
-                type="button"
-                onClick={() => cancel(o)}
-                disabled={cancellingId === o.id}
-                className="grid size-5 place-items-center rounded-sm text-faint hover:bg-down-subtle hover:text-down disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Cancel order"
-              >
-                {cancellingId === o.id ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <X className="size-3.5" />
-                )}
-              </button>
-            </div>
-          ))
+          <table className="w-full min-w-[400px] whitespace-nowrap text-xs">
+            <caption className="sr-only">
+              Working orders, remaining quantities, and cancellation actions
+            </caption>
+            <thead className="sticky top-0 bg-surface-2 text-[10px] uppercase tracking-wide text-muted">
+              <tr>
+                <th scope="col" className="px-3 py-2 text-left font-medium">
+                  Side
+                </th>
+                <th scope="col" className="px-2 py-2 text-left font-medium">
+                  Type
+                </th>
+                <th scope="col" className="px-2 py-2 text-left font-medium">
+                  Symbol
+                </th>
+                <th scope="col" className="px-2 py-2 text-right font-medium">
+                  Left / Qty
+                </th>
+                <th scope="col" className="px-2 py-2 text-right font-medium">
+                  Price
+                </th>
+                <th scope="col" className="px-2 py-2">
+                  <span className="sr-only">Cancel</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {orders.map((o) => (
+                <tr
+                  key={o.id}
+                  className={cn(
+                    "hover:bg-surface-2",
+                    cancellingId === o.id && "opacity-60",
+                  )}
+                >
+                  <td
+                    className={cn(
+                      "px-3 py-2 font-medium",
+                      o.side === "buy" ? "text-up" : "text-down",
+                    )}
+                  >
+                    {o.side === "buy" ? "Buy" : "Sell"}
+                  </td>
+                  <td className="px-2 py-2 capitalize text-muted">{o.type}</td>
+                  <td className="mono px-2 py-2">{o.symbol}</td>
+                  <td className="mono px-2 py-2 text-right text-muted">
+                    {o.remainingQuantity}/{o.quantity}
+                  </td>
+                  <td className="mono px-2 py-2 text-right">
+                    {o.price != null ? money(o.price) : "Market"}
+                  </td>
+                  <td className="px-2 py-1">
+                    <button
+                      type="button"
+                      onClick={() => cancel(o)}
+                      disabled={cancellingId === o.id}
+                      className="grid size-7 place-items-center rounded-md text-muted hover:bg-down-subtle hover:text-down focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label={`Cancel ${o.side} order for ${o.symbol}, ${o.remainingQuantity} remaining`}
+                    >
+                      {cancellingId === o.id ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <X className="size-3.5" />
+                      )}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
+      <p className="border-t border-border px-3 py-2 text-[11px] text-faint">
+        Quantities show remaining / original size.
+      </p>
     </Panel>
   );
 }
