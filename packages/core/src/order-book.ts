@@ -57,6 +57,15 @@ export class OrderBook {
     return n;
   }
 
+  /** Remaining quantity owned by a single trader on this book. */
+  remainingForUser(userId: string): number {
+    let qty = 0;
+    for (const o of this.index.values()) {
+      if (o.userId === userId) qty += o.remaining;
+    }
+    return qty;
+  }
+
   /** Insert an order as resting liquidity. */
   add(order: RestingOrder): void {
     const levels = order.side === "buy" ? this.bidLevels : this.askLevels;

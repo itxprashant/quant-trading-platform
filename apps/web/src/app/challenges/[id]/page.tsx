@@ -375,6 +375,8 @@ export default function TradePage() {
               challengeId={challengeId}
               symbol={activeSymbol}
               maxQuantity={challenge?.config.maxOrderQuantity ?? 50}
+              maxOpenOrders={challenge.config.maxOpenOrders ?? 25}
+              refreshKey={orderRefresh}
               price={limitPrice}
               onPriceChange={setLimitPrice}
               refPrice={livePrice?.price}

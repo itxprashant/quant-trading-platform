@@ -205,6 +205,32 @@ describe("ChallengeEngine matching", () => {
     expect(e.snapshot("X1").bids).toHaveLength(2);
   });
 
+  it("rejects a limit that would push working size past maxOrderQuantity", () => {
+    const e = makeEngine({ maxOrderQuantity: 50, maxOpenOrders: 10 });
+    e.placeOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 30,
+      price: 99,
+      ts: 1,
+    });
+    const evts = e.placeOrder({
+      orderId: "o2",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 30,
+      price: 98,
+      ts: 2,
+    });
+    expect(evts).toMatchObject([{ type: "order_update", status: "rejected" }]);
+    expect(e.openOrderQuantity("alice")).toBe(30);
+  });
+
   it("PnL subtracts starting cash so a funded book starts at zero", () => {
     const e = makeEngine({ startingCash: 10_000 });
     expect(e.portfolioOf("alice").cash).toBe(10_000);

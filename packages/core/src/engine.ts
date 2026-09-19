@@ -347,6 +347,13 @@ export class ChallengeEngine {
     return n;
   }
 
+  /** Remaining working size for a trader across every book. */
+  openOrderQuantity(userId: string): number {
+    let qty = 0;
+    for (const book of this.books.values()) qty += book.remainingForUser(userId);
+    return qty;
+  }
+
   getAccount(userId: string): { cash: number; positions: PositionState[] } {
     const acct = this.ensureAccount(userId);
     return {
@@ -513,12 +520,17 @@ export class ChallengeEngine {
       return [this.rejected(cmd, "invalid quantity")];
     }
     const maxOpen = this.cfg.maxOpenOrders ?? 25;
-    if (
-      !cmd.force &&
-      !cmd.userId.startsWith("bot:") &&
-      this.openOrderCount(cmd.userId) >= maxOpen
-    ) {
+    const human = !cmd.force && !cmd.userId.startsWith("bot:");
+    if (human && this.openOrderCount(cmd.userId) >= maxOpen) {
       return [this.rejected(cmd, "too many open orders")];
+    }
+    if (
+      human &&
+      cmd.orderType === "limit" &&
+      this.openOrderQuantity(cmd.userId) + cmd.quantity >
+        this.cfg.maxOrderQuantity
+    ) {
+      return [this.rejected(cmd, "too much open quantity")];
     }
     if (cmd.orderType === "limit" && (cmd.price == null || cmd.price <= 0)) {
       return [this.rejected(cmd, "limit order requires price")];
