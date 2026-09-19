@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { challenges, orders, participants } from "@qtp/db";
 import { zPlaceOrderInput, type EngineCommand } from "@qtp/shared";
@@ -43,6 +43,20 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       }
       if (input.quantity > challenge.config.maxOrderQuantity) {
         return reply.code(400).send({ error: "quantity_exceeds_limit" });
+      }
+      const maxOpenOrders = challenge.config.maxOpenOrders ?? 25;
+      const [openCount] = await app.db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.challengeId, input.challengeId),
+            eq(orders.userId, req.user.sub),
+            inArray(orders.status, ["open", "partially_filled"]),
+          ),
+        );
+      if ((openCount?.n ?? 0) >= maxOpenOrders) {
+        return reply.code(400).send({ error: "open_orders_exceeded" });
       }
 
       const maxOrdersPerSecond = challenge.config.maxOrdersPerSecond ?? 5;

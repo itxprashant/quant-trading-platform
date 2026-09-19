@@ -402,7 +402,11 @@ export default function TradePage() {
             />
           </div>
           <div className="min-w-0 md:col-span-2 xl:col-span-4">
-            <OpenOrders challengeId={challengeId} refreshKey={orderRefresh} />
+            <OpenOrders
+              challengeId={challengeId}
+              refreshKey={orderRefresh}
+              maxOpenOrders={challenge.config.maxOpenOrders ?? 25}
+            />
           </div>
         </div>
 

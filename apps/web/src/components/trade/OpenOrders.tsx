@@ -23,9 +23,11 @@ function cancelErrorMessage(err: unknown): string {
 export function OpenOrders({
   challengeId,
   refreshKey,
+  maxOpenOrders = 25,
 }: {
   challengeId: string;
   refreshKey: number;
+  maxOpenOrders?: number;
 }) {
   const user = useAuth((s) => s.user);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -75,13 +77,13 @@ export function OpenOrders({
   }
 
   return (
-    <Panel className="flex h-full min-w-0 flex-col overflow-hidden">
+    <Panel className="flex h-full max-h-[20rem] min-h-0 min-w-0 flex-col overflow-hidden">
       <PanelHeader title="Open orders">
         <span className="mono rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
-          {orders.length}
+          {orders.length}/{maxOpenOrders}
         </span>
       </PanelHeader>
-      <div className="max-h-[360px] flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto">
         {error && (
           <p
             role="alert"
@@ -191,7 +193,7 @@ export function OpenOrders({
         )}
       </div>
       <p className="border-t border-border px-3 py-2 text-[11px] text-faint">
-        Quantities show remaining / original size.
+        Remaining / original size. Cap {maxOpenOrders} working orders.
       </p>
     </Panel>
   );

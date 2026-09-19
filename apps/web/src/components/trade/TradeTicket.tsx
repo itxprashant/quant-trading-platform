@@ -70,7 +70,9 @@ export function TradeTicket({
             ? "Challenge is not live."
             : code === "quantity_exceeds_limit"
               ? `Max order size is ${maxQuantity}.`
-              : code === "rate_limited"
+              : code === "open_orders_exceeded"
+                ? "Too many open orders. Cancel one to place another."
+                : code === "rate_limited"
                 ? "Too many orders. Slow down and retry."
                 : code === "volume_limited"
                   ? "Volume limit reached for this minute. Wait and retry."

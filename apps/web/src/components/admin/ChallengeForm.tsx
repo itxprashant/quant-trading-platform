@@ -89,6 +89,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
     minPosition: existing?.config.minPosition ?? -50,
     maxPosition: existing?.config.maxPosition ?? 50,
     maxOrderQuantity: existing?.config.maxOrderQuantity ?? 50,
+    maxOpenOrders: existing?.config.maxOpenOrders ?? 25,
     maxOrdersPerSecond: existing?.config.maxOrdersPerSecond ?? 5,
     maxVolumePerMinute: existing?.config.maxVolumePerMinute ?? 500,
     allowMargin: existing?.config.allowMargin ?? true,
@@ -363,6 +364,14 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
           <Field label="Max order qty">
             {numField(cfg.maxOrderQuantity, (n) =>
               setCfg({ ...cfg, maxOrderQuantity: n }),
+            )}
+          </Field>
+          <Field label="Max open orders">
+            {numField(cfg.maxOpenOrders, (n) =>
+              setCfg({
+                ...cfg,
+                maxOpenOrders: Math.max(1, Math.round(n)),
+              }),
             )}
           </Field>
           <Field label="Max orders / sec">

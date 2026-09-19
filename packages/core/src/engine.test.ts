@@ -168,6 +168,43 @@ describe("ChallengeEngine matching", () => {
     expect(e.cancelOrder(cmd)).toHaveLength(0);
   });
 
+  it("rejects a new resting order once maxOpenOrders is reached", () => {
+    const e = makeEngine({ maxOpenOrders: 2 });
+    e.placeOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 99,
+      ts: 1,
+    });
+    e.placeOrder({
+      orderId: "o2",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 98,
+      ts: 2,
+    });
+    const evts = e.placeOrder({
+      orderId: "o3",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 97,
+      ts: 3,
+    });
+    expect(evts).toMatchObject([{ type: "order_update", status: "rejected" }]);
+    expect(e.openOrderCount("alice")).toBe(2);
+    expect(e.snapshot("X1").bids).toHaveLength(2);
+  });
+
   it("PnL subtracts starting cash so a funded book starts at zero", () => {
     const e = makeEngine({ startingCash: 10_000 });
     expect(e.portfolioOf("alice").cash).toBe(10_000);

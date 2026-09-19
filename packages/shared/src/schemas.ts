@@ -211,6 +211,8 @@ export const zChallengeConfig = z.object({
   minPosition: z.number().int().default(-50),
   maxPosition: z.number().int().default(50),
   maxOrderQuantity: z.number().int().positive().default(50),
+  /** Max resting / working orders per user per challenge. */
+  maxOpenOrders: z.number().int().positive().default(25),
   /** Max order requests per user per second (per challenge). */
   maxOrdersPerSecond: z.number().int().positive().default(5),
   /** Max sum of order quantities per user per minute (per challenge). */

@@ -45,6 +45,62 @@ export async function suiteTrading(t, ctx) {
     );
   });
 
+  await t.test("open order cap returns 400 open_orders_exceeded", async () => {
+    const created = await http.post(
+      "/api/challenges",
+      {
+        name: `E2E OpenCap ${Date.now().toString(36)}`,
+        type: "directional",
+        config: directionalConfig({
+          maxOpenOrders: 2,
+          maxOrdersPerSecond: 20,
+          symbols: [
+            { symbol: "OCX", name: "OpenCap", initialPrice: 10, volatility: 0, tickSize: 0.01 },
+          ],
+        }),
+      },
+      { token: ctx.admin.token },
+    );
+    ctx.createdIds.push(created.id);
+    await http.post(
+      `/api/challenges/${created.id}/status`,
+      { status: "live" },
+      { token: ctx.admin.token },
+    );
+    for (let i = 0; i < 2; i++) {
+      const ack = await http.request("POST", "/api/orders", {
+        token: ctx.t1.token,
+        body: {
+          challengeId: created.id,
+          symbol: "OCX",
+          side: "buy",
+          type: "limit",
+          quantity: 1,
+          price: 1 + i,
+        },
+      });
+      t.eq(ack.status, 202);
+    }
+    const third = await http.request("POST", "/api/orders", {
+      token: ctx.t1.token,
+      body: {
+        challengeId: created.id,
+        symbol: "OCX",
+        side: "buy",
+        type: "limit",
+        quantity: 1,
+        price: 4,
+      },
+    });
+    t.eq(third.status, 400);
+    t.eq(third.body.error, "open_orders_exceeded");
+    await http.post(
+      `/api/challenges/${created.id}/status`,
+      { status: "ended" },
+      { token: ctx.admin.token },
+    );
+  });
+
   await t.test("quantity above maxOrderQuantity is 400", async () => {
     await t.throws(
       () =>

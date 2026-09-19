@@ -38,6 +38,8 @@ export interface EngineConfig {
   minPosition: number;
   maxPosition: number;
   maxOrderQuantity: number;
+  /** Max resting orders per human trader. Bots are not counted. */
+  maxOpenOrders?: number;
   allowMargin: boolean;
 }
 
@@ -338,6 +340,13 @@ export class ChallengeEngine {
     return this.books.get(symbol)?.snapshot(depth) ?? { bids: [], asks: [] };
   }
 
+  /** Resting working orders for a trader across every book. */
+  openOrderCount(userId: string): number {
+    let n = 0;
+    for (const book of this.books.values()) n += book.countForUser(userId);
+    return n;
+  }
+
   getAccount(userId: string): { cash: number; positions: PositionState[] } {
     const acct = this.ensureAccount(userId);
     return {
@@ -502,6 +511,14 @@ export class ChallengeEngine {
     }
     if (!cmd.force && cmd.quantity > this.cfg.maxOrderQuantity) {
       return [this.rejected(cmd, "invalid quantity")];
+    }
+    const maxOpen = this.cfg.maxOpenOrders ?? 25;
+    if (
+      !cmd.force &&
+      !cmd.userId.startsWith("bot:") &&
+      this.openOrderCount(cmd.userId) >= maxOpen
+    ) {
+      return [this.rejected(cmd, "too many open orders")];
     }
     if (cmd.orderType === "limit" && (cmd.price == null || cmd.price <= 0)) {
       return [this.rejected(cmd, "limit order requires price")];

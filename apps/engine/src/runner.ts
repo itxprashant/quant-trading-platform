@@ -95,6 +95,7 @@ export class ChallengeRunner {
       minPosition: challenge.config.minPosition,
       maxPosition: challenge.config.maxPosition,
       maxOrderQuantity: challenge.config.maxOrderQuantity,
+      maxOpenOrders: challenge.config.maxOpenOrders ?? 25,
       allowMargin: challenge.config.allowMargin,
     });
     this.persistence = new Persistence(db, challenge.id, this.engine);

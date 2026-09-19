@@ -144,7 +144,8 @@ compose exec nginx nginx -t
 compose exec nginx nginx -s reload
 
 echo "==> Installing certbot renewal cron..."
-CRON_LINE="0 3 * * * cd $ROOT && ./scripts/certbot-renew.sh >> /var/log/quanta-certbot-renew.log 2>&1"
+mkdir -p "$ROOT/logs"
+CRON_LINE="0 3 * * * cd $ROOT && ./scripts/certbot-renew.sh >> $ROOT/logs/certbot-renew.log 2>&1"
 ( crontab -l 2>/dev/null | grep -v certbot-renew.sh || true
   echo "$CRON_LINE"
 ) | crontab -
