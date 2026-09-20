@@ -135,6 +135,7 @@ describe("engine bank integration", () => {
         quantity: qty,
         price: 1000,
         ts: 1,
+        admin: true,
       });
       e.placeOrder({
         orderId: `tk${i}`,
@@ -145,6 +146,7 @@ describe("engine bank integration", () => {
         quantity: qty,
         price: 1000,
         ts: 2,
+        admin: true,
       });
     }
     expect(e.absInventoryOf("alice")).toBe(80);

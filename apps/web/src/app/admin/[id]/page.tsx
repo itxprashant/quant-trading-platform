@@ -143,6 +143,64 @@ function LiveControls({ challenge }: { challenge: Challenge }) {
   );
 }
 
+function FreezeControls({
+  challenge,
+  onChange,
+}: {
+  challenge: Challenge;
+  onChange: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/api/admin/${challenge.id}/freeze`, {
+        frozen: !challenge.frozen,
+      });
+      await onChange();
+    } catch {
+      setError("Could not update market freeze. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (challenge.status !== "live") return null;
+
+  return (
+    <Panel className="min-w-0 rounded-md backdrop-blur-none">
+      <PanelHeader title="Market freeze" />
+      <div className="space-y-3 p-4">
+        <p className="text-xs leading-relaxed text-muted">
+          Halt new orders, matching, and bots. Resting books stay intact;
+          traders can still cancel.
+        </p>
+        <Button
+          variant="secondary"
+          onClick={toggle}
+          disabled={busy}
+          loading={busy}
+        >
+          {challenge.frozen ? "Unfreeze market" : "Freeze market"}
+        </Button>
+        {challenge.frozen && (
+          <p role="status" className="text-xs text-warning">
+            Market is frozen — cancellations only.
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="text-xs text-down">
+            {error}
+          </p>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 interface BasketRow {
   symbol: string;
   weight: string;
@@ -699,6 +757,11 @@ function EditInner() {
                     {challenge.name}
                   </h1>
                   <StatusBadge status={challenge.status} />
+                  {challenge.frozen && challenge.status === "live" && (
+                    <span className="rounded-sm border border-warning/30 bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning">
+                      Frozen
+                    </span>
+                  )}
                 </div>
                 <Link
                   href={`/challenges/${challenge.id}`}
@@ -761,6 +824,7 @@ function EditInner() {
                 </div>
                 <div className="grid items-start gap-4 lg:grid-cols-2">
                   <LiveControls challenge={challenge} />
+                  <FreezeControls challenge={challenge} onChange={load} />
                   <AddInstrumentControls challenge={challenge} />
                 </div>
                 {challenge.type === "new_eden" && (

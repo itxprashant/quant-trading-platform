@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, X } from "lucide-react";
 import type { Order } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
-import { ApiError, del, get } from "@/lib/api";
+import { ApiError, del, get, post } from "@/lib/api";
 import { money } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth";
@@ -32,6 +32,7 @@ export function OpenOrders({
   const user = useAuth((s) => s.user);
   const [orders, setOrders] = useState<Order[]>([]);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancellingAll, setCancellingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -62,6 +63,22 @@ export function OpenOrders({
     return () => clearInterval(t);
   }, [load]);
 
+  async function cancelAll() {
+    if (orders.length === 0 || cancellingAll || cancellingId) return;
+    if (!confirm(`Cancel all ${orders.length} working orders?`)) return;
+    setError(null);
+    setCancellingAll(true);
+    try {
+      await post("/api/orders/cancel-all", { challengeId });
+      setOrders([]);
+    } catch (err) {
+      setError(cancelErrorMessage(err));
+      load();
+    } finally {
+      setCancellingAll(false);
+    }
+  }
+
   async function cancel(order: Order) {
     setError(null);
     setCancellingId(order.id);
@@ -79,9 +96,21 @@ export function OpenOrders({
   return (
     <Panel className="flex h-full max-h-[20rem] min-h-0 min-w-0 flex-col overflow-hidden">
       <PanelHeader title="Open orders">
-        <span className="mono rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
-          {orders.length}/{maxOpenOrders}
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={cancelAll}
+            disabled={
+              orders.length === 0 || cancellingAll || cancellingId !== null
+            }
+            className="rounded-md px-2 py-0.5 text-[11px] font-medium text-muted hover:bg-down-subtle hover:text-down focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {cancellingAll ? "Cancelling…" : "Cancel all"}
+          </button>
+          <span className="mono rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
+            {orders.length}/{maxOpenOrders}
+          </span>
+        </div>
       </PanelHeader>
       <div className="min-h-0 flex-1 overflow-auto">
         {error && (
@@ -175,7 +204,7 @@ export function OpenOrders({
                     <button
                       type="button"
                       onClick={() => cancel(o)}
-                      disabled={cancellingId === o.id}
+                      disabled={cancellingAll || cancellingId === o.id}
                       className="grid size-7 place-items-center rounded-md text-muted hover:bg-down-subtle hover:text-down focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
                       aria-label={`Cancel ${o.side} order for ${o.symbol}, ${o.remainingQuantity} remaining`}
                     >

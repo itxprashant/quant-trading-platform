@@ -155,6 +155,23 @@ export async function isSymbolLocked(
   );
 }
 
+export async function setMarketFrozen(
+  redis: Redis,
+  challengeId: string,
+  frozen: boolean,
+): Promise<void> {
+  const key = redisKeys.marketFrozen(challengeId);
+  if (frozen) await redis.set(key, "1");
+  else await redis.del(key);
+}
+
+export async function isMarketFrozen(
+  redis: Redis,
+  challengeId: string,
+): Promise<boolean> {
+  return (await redis.get(redisKeys.marketFrozen(challengeId))) === "1";
+}
+
 /* ---- New Eden: dynamically-listed instruments (options, ETFs) ---- */
 export async function addListedSymbol(
   redis: Redis,

@@ -75,6 +75,9 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
       if (challenge.status !== "live") {
         return reply.code(409).send({ error: "challenge_not_live" });
       }
+      if (challenge.frozen) {
+        return reply.code(409).send({ error: "market_frozen" });
+      }
       const tpl = (challenge.config.eden?.bonds ?? []).find(
         (b) => b.id === input.bondId,
       );
@@ -151,6 +154,9 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
       if (!challenge) return reply.code(404).send({ error: "challenge_not_found" });
       if (challenge.status !== "live") {
         return reply.code(409).send({ error: "challenge_not_live" });
+      }
+      if (challenge.frozen) {
+        return reply.code(409).send({ error: "market_frozen" });
       }
       const listed = (challenge.config.eden?.etfs ?? []).some(
         (e) => e.symbol === input.etfSymbol,

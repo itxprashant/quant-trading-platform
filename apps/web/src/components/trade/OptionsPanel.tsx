@@ -30,11 +30,13 @@ export function OptionsPanel({
   contracts,
   prices,
   onChange,
+  frozen = false,
 }: {
   challengeId: string;
   contracts: OptionContract[];
   prices: Map<string, PricePoint>;
   onChange?: () => void;
+  frozen?: boolean;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [qty, setQty] = useState("1");
@@ -193,6 +195,7 @@ export function OptionsPanel({
               variant="buy"
               size="sm"
               loading={busy}
+              disabled={frozen}
               onClick={() => trade(selected, "buy")}
             >
               Buy
@@ -201,6 +204,7 @@ export function OptionsPanel({
               variant="sell"
               size="sm"
               loading={busy}
+              disabled={frozen}
               onClick={() => trade(selected, "sell")}
             >
               Sell
@@ -210,8 +214,9 @@ export function OptionsPanel({
               size="sm"
               loading={busy}
               disabled={
+                frozen ||
                 contracts.find((c) => c.symbol === selected)?.status !==
-                "exercise_window"
+                  "exercise_window"
               }
               onClick={() => exercise(selected)}
             >
@@ -230,7 +235,10 @@ export function OptionsPanel({
 }
 
 function errText(err: unknown, fallback: string): string {
-  return err instanceof ApiError
-    ? ((err.body as { error?: string })?.error ?? fallback)
-    : fallback;
+  if (err instanceof ApiError) {
+    const code = (err.body as { error?: string })?.error;
+    if (code === "market_frozen") return "Market frozen — cancellations only.";
+    return code ?? fallback;
+  }
+  return fallback;
 }

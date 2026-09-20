@@ -84,6 +84,8 @@ export interface PlaceOrderCommand {
   ts: number;
   /** Bypass the per-order quantity cap (forced liquidation, assignment). */
   force?: boolean;
+  /** Bypass maxOrderQuantity (per-order and working-size) for admins. */
+  admin?: boolean;
 }
 
 export interface CancelOrderCommand {
@@ -95,6 +97,23 @@ export interface CancelOrderCommand {
 }
 
 const PRICE_TRADE_IMPACT = 0.9 / 50;
+
+/** Largest qty that still fits ±maxOrderQuantity after inventory and working orders. */
+export function clampOrderQuantity(args: {
+  side: OrderSide;
+  requested: number;
+  position: number;
+  openBuyQty: number;
+  openSellQty: number;
+  maxOrderQuantity: number;
+}): number {
+  const room =
+    args.side === "buy"
+      ? args.maxOrderQuantity - args.position - args.openBuyQty
+      : args.maxOrderQuantity + args.position - args.openSellQty;
+  if (args.requested <= 0) return 0;
+  return Math.max(0, Math.min(Math.floor(args.requested), Math.floor(room)));
+}
 
 /**
  * Authoritative, in-memory state machine for one challenge. Pure logic: it
@@ -117,6 +136,8 @@ export class ChallengeEngine {
   private bookSequence = 0;
   /** Orders cancelled before placeOrder rested them on the book. */
   private readonly cancelledIds = new Set<string>();
+  /** When true, new placements are rejected; cancels still apply. */
+  private frozen = false;
 
   constructor(cfg: EngineConfig) {
     this.cfg = cfg;
@@ -127,6 +148,10 @@ export class ChallengeEngine {
       this.symbolCfg.set(s.symbol, s);
       this.autonomousSet.add(s.symbol);
     }
+  }
+
+  setFrozen(frozen: boolean): void {
+    this.frozen = frozen;
   }
 
   /* ----------------------------------------------------------------- *
@@ -347,10 +372,15 @@ export class ChallengeEngine {
     return n;
   }
 
-  /** Remaining working size for a trader across every book. */
-  openOrderQuantity(userId: string): number {
+  /** Remaining working size for a trader, optionally scoped to a symbol/side. */
+  openOrderQuantity(userId: string, symbol?: string, side?: OrderSide): number {
+    if (symbol) {
+      return this.books.get(symbol)?.remainingForUser(userId, side) ?? 0;
+    }
     let qty = 0;
-    for (const book of this.books.values()) qty += book.remainingForUser(userId);
+    for (const book of this.books.values()) {
+      qty += book.remainingForUser(userId, side);
+    }
     return qty;
   }
 
@@ -516,27 +546,34 @@ export class ChallengeEngine {
     if (cmd.quantity <= 0) {
       return [this.rejected(cmd, "invalid quantity")];
     }
-    if (!cmd.force && cmd.quantity > this.cfg.maxOrderQuantity) {
-      return [this.rejected(cmd, "invalid quantity")];
+    if (this.frozen && !cmd.force) {
+      return [this.rejected(cmd, "market frozen")];
     }
     const maxOpen = this.cfg.maxOpenOrders ?? 25;
     const human = !cmd.force && !cmd.userId.startsWith("bot:");
     if (human && this.openOrderCount(cmd.userId) >= maxOpen) {
       return [this.rejected(cmd, "too many open orders")];
     }
-    if (
-      human &&
-      cmd.orderType === "limit" &&
-      this.openOrderQuantity(cmd.userId) + cmd.quantity >
-        this.cfg.maxOrderQuantity
-    ) {
-      return [this.rejected(cmd, "too much open quantity")];
-    }
     if (cmd.orderType === "limit" && (cmd.price == null || cmd.price <= 0)) {
       return [this.rejected(cmd, "limit order requires price")];
     }
 
-    let remaining = cmd.quantity;
+    let quantity = cmd.quantity;
+    if (human && !cmd.admin) {
+      quantity = clampOrderQuantity({
+        side: cmd.side,
+        requested: cmd.quantity,
+        position: this.positionOf(cmd.userId, cmd.symbol),
+        openBuyQty: book.remainingForUser(cmd.userId, "buy"),
+        openSellQty: book.remainingForUser(cmd.userId, "sell"),
+        maxOrderQuantity: this.cfg.maxOrderQuantity,
+      });
+      if (quantity <= 0) {
+        return [this.rejected(cmd, "no capacity")];
+      }
+    }
+
+    let remaining = quantity;
     const oppSide: OrderSide = cmd.side === "buy" ? "sell" : "buy";
     const symbol = cmd.symbol;
     let lastTradePrice: number | null = null;
@@ -617,12 +654,12 @@ export class ChallengeEngine {
           seq: ++this.seq,
         };
         book.add(resting);
-        status = remaining === cmd.quantity ? "open" : "partially_filled";
+        status = remaining === quantity ? "open" : "partially_filled";
         touched.add(symbol);
       }
     } else if (remaining > 0) {
       // Market remainder (or limit at-limit) is cancelled.
-      status = remaining === cmd.quantity ? "cancelled" : "partially_filled";
+      status = remaining === quantity ? "cancelled" : "partially_filled";
     } else {
       status = "filled";
     }
@@ -635,7 +672,7 @@ export class ChallengeEngine {
       symbol,
       side: cmd.side,
       status,
-      quantity: cmd.quantity,
+      quantity,
       remainingQuantity: remaining,
       price: cmd.price,
       ts: cmd.ts,

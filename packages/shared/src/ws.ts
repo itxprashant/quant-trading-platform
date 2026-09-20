@@ -87,6 +87,11 @@ export type ServerMessage =
         ts: number;
       };
     }
+  | {
+      type: "market_status";
+      challengeId: string;
+      data: { frozen: boolean };
+    }
   | { type: "otc_offer"; challengeId: string; data: OtcOffer }
   | {
       type: "otc_result";

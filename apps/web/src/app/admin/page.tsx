@@ -9,6 +9,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Snowflake,
   Square,
 } from "lucide-react";
 import type { Challenge, ChallengeStatus } from "@qtp/shared";
@@ -16,7 +17,7 @@ import { get, post } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
 import { AdminGuard } from "@/components/AdminGuard";
 import { Button } from "@/components/ui/Button";
-import { StatusBadge } from "@/components/ui/Badge";
+import { Badge, StatusBadge } from "@/components/ui/Badge";
 import { Input, Select } from "@/components/ui/Input";
 
 function AdminInner() {
@@ -52,6 +53,21 @@ function AdminInner() {
     } catch {
       setError(
         "Could not change challenge status. Refresh to check its current state, then try again.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setFrozen(id: string, frozen: boolean) {
+    setBusy(id + (frozen ? "freeze" : "unfreeze"));
+    setError(null);
+    try {
+      await post(`/api/admin/${id}/freeze`, { frozen });
+      await load();
+    } catch {
+      setError(
+        "Could not update market freeze. Refresh to check its current state, then try again.",
       );
     } finally {
       setBusy(null);
@@ -260,7 +276,12 @@ function AdminInner() {
                       </div>
                     </th>
                     <td className="px-4 py-4">
-                      <StatusBadge status={c.status} />
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <StatusBadge status={c.status} />
+                        {c.frozen && c.status === "live" && (
+                          <Badge tone="warning">Frozen</Badge>
+                        )}
+                      </div>
                     </td>
                     <td className="mono px-4 py-4 text-right">
                       {c.participantCount ?? 0}
@@ -317,6 +338,18 @@ function AdminInner() {
                         )}
                         {c.status === "live" && (
                           <>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              disabled={busy !== null}
+                              loading={
+                                busy === c.id + (c.frozen ? "unfreeze" : "freeze")
+                              }
+                              onClick={() => setFrozen(c.id, !c.frozen)}
+                            >
+                              <Snowflake className="size-3.5" />{" "}
+                              {c.frozen ? "Unfreeze" : "Freeze"}
+                            </Button>
                             <Button
                               size="sm"
                               variant="secondary"

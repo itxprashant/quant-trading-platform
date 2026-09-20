@@ -26,9 +26,11 @@ interface EtfView {
 export function MarketsPanel({
   challengeId,
   onChange,
+  frozen = false,
 }: {
   challengeId: string;
   onChange?: () => void;
+  frozen?: boolean;
 }) {
   const [templates, setTemplates] = useState<BondTemplate[]>([]);
   const [holdings, setHoldings] = useState<BondHolding[]>([]);
@@ -138,7 +140,10 @@ export function MarketsPanel({
                     variant="secondary"
                     size="sm"
                     loading={busy === `bond:${t.id}`}
-                    disabled={held != null && held.quantity >= t.maxPerUser}
+                    disabled={
+                      frozen ||
+                      (held != null && held.quantity >= t.maxPerUser)
+                    }
                     onClick={() => buyBond(t.id)}
                   >
                     Buy
@@ -213,7 +218,7 @@ export function MarketsPanel({
                     <Button
                       variant="buy"
                       size="sm"
-                      disabled={!etf.windowOpen}
+                      disabled={frozen || !etf.windowOpen}
                       loading={busy === `etf:${etf.symbol}:create`}
                       onClick={() => etfTrade(etf.symbol, "create")}
                     >
@@ -222,7 +227,7 @@ export function MarketsPanel({
                     <Button
                       variant="sell"
                       size="sm"
-                      disabled={!etf.windowOpen}
+                      disabled={frozen || !etf.windowOpen}
                       loading={busy === `etf:${etf.symbol}:redeem`}
                       onClick={() => etfTrade(etf.symbol, "redeem")}
                     >
@@ -246,7 +251,10 @@ export function MarketsPanel({
 }
 
 function errText(err: unknown, fallback: string): string {
-  return err instanceof ApiError
-    ? ((err.body as { error?: string })?.error ?? fallback)
-    : fallback;
+  if (err instanceof ApiError) {
+    const code = (err.body as { error?: string })?.error;
+    if (code === "market_frozen") return "Market frozen — cancellations only.";
+    return code ?? fallback;
+  }
+  return fallback;
 }

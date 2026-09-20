@@ -71,6 +71,8 @@ export interface RealtimeState {
   grant: GrantMission | null;
   /** Instruments introduced live (spot/ETF/option) after the initial config. */
   listedSymbols: Array<SymbolConfig & { kind: "spot" | "etf" | "option" }>;
+  /** null until the gateway snapshot or a freeze toggle arrives. */
+  frozen: boolean | null;
 }
 
 type Action =
@@ -165,6 +167,8 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, vote: msg.data };
     case "grant":
       return { ...state, grant: msg.data };
+    case "market_status":
+      return { ...state, frozen: msg.data.frozen };
     case "symbol_listed": {
       const { config, kind } = msg.data;
       if (state.listedSymbols.some((s) => s.symbol === config.symbol)) {
@@ -198,6 +202,7 @@ const initial: RealtimeState = {
   vote: null,
   grant: null,
   listedSymbols: [],
+  frozen: null,
 };
 
 export function useRealtime(challengeId: string | null): RealtimeState {

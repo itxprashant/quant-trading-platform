@@ -101,7 +101,7 @@ export async function suiteTrading(t, ctx) {
     );
   });
 
-  await t.test("working size cap returns 400 open_quantity_exceeded", async () => {
+  await t.test("working size above the cap is clamped, not rejected", async () => {
     const created = await http.post(
       "/api/challenges",
       {
@@ -136,6 +136,7 @@ export async function suiteTrading(t, ctx) {
       },
     });
     t.eq(first.status, 202);
+    t.eq(first.body.quantity, 30);
     const second = await http.request("POST", "/api/orders", {
       token: ctx.t1.token,
       body: {
@@ -147,8 +148,34 @@ export async function suiteTrading(t, ctx) {
         price: 1,
       },
     });
-    t.eq(second.status, 400);
-    t.eq(second.body.error, "open_quantity_exceeded");
+    t.eq(second.status, 202);
+    t.eq(second.body.quantity, 20);
+    const third = await http.request("POST", "/api/orders", {
+      token: ctx.t1.token,
+      body: {
+        challengeId: created.id,
+        symbol: "OQX",
+        side: "buy",
+        type: "limit",
+        quantity: 10,
+        price: 1,
+      },
+    });
+    t.eq(third.status, 409);
+    t.eq(third.body.error, "no_capacity");
+    const sell = await http.request("POST", "/api/orders", {
+      token: ctx.t1.token,
+      body: {
+        challengeId: created.id,
+        symbol: "OQX",
+        side: "sell",
+        type: "limit",
+        quantity: 10,
+        price: 20,
+      },
+    });
+    t.eq(sell.status, 202);
+    t.eq(sell.body.quantity, 10);
     await http.post(
       `/api/challenges/${created.id}/status`,
       { status: "ended" },
@@ -156,18 +183,22 @@ export async function suiteTrading(t, ctx) {
     );
   });
 
-  await t.test("quantity above maxOrderQuantity is 400", async () => {
-    await t.throws(
-      () =>
-        place(ctx.t1.token, cid, {
-          symbol: sym,
-          side: "buy",
-          type: "limit",
-          quantity: 99,
-          price: 10,
-        }),
-      { status: 400, error: "quantity_exceeds_limit" },
+  await t.test("quantity above maxOrderQuantity is clamped to remaining room", async () => {
+    await http.post(
+      "/api/orders/cancel-all",
+      { challengeId: cid },
+      { token: ctx.t1.token },
     );
+    const ack = await place(ctx.t1.token, cid, {
+      symbol: sym,
+      side: "buy",
+      type: "limit",
+      quantity: 99,
+      price: 10,
+    });
+    t.eq(ack.status, "accepted");
+    t.eq(ack.quantity, 20);
+    await http.del(`/api/orders/${ack.orderId}`, { token: ctx.t1.token }).catch(() => {});
   });
 
   await t.test("zero / negative quantity is 400 validation_error", async () => {
@@ -575,5 +606,98 @@ export async function suiteTrading(t, ctx) {
     });
     t.eq(ack.status, "accepted");
     await http.del(`/api/orders/${ack.orderId}`, { token: ctx.t1.token }).catch(() => {});
+  });
+
+  await t.test("admin may exceed maxOrderQuantity", async () => {
+    const ack = await place(ctx.admin.token, cid, {
+      symbol: sym,
+      side: "buy",
+      type: "limit",
+      quantity: 99,
+      price: 1,
+    });
+    t.eq(ack.status, "accepted");
+    await http.del(`/api/orders/${ack.orderId}`, { token: ctx.admin.token }).catch(() => {});
+  });
+
+  await t.test("cancel-all cancels the caller's working orders", async () => {
+    await http.post(
+      "/api/orders/cancel-all",
+      { challengeId: cid },
+      { token: ctx.t1.token },
+    );
+    const a = await place(ctx.t1.token, cid, {
+      symbol: sym,
+      side: "buy",
+      type: "limit",
+      quantity: 1,
+      price: 1.1,
+    });
+    const b = await place(ctx.t1.token, cid, {
+      symbol: sym,
+      side: "buy",
+      type: "limit",
+      quantity: 1,
+      price: 1.2,
+    });
+    t.eq(a.status, "accepted");
+    t.eq(b.status, "accepted");
+    const res = await http.post(
+      "/api/orders/cancel-all",
+      { challengeId: cid },
+      { token: ctx.t1.token },
+    );
+    t.eq(typeof res.cancelled, "number");
+    t.ok(res.cancelled >= 2, `expected >= 2 cancelled, got ${res.cancelled}`);
+    const open = await http.get("/api/orders", {
+      token: ctx.t1.token,
+      query: { challengeId: cid, open: "true" },
+    });
+    t.eq(open.length, 0);
+  });
+
+  await t.test("freeze rejects new orders and still allows cancel", async () => {
+    const ack = await place(ctx.t1.token, cid, {
+      symbol: sym,
+      side: "buy",
+      type: "limit",
+      quantity: 1,
+      price: 2,
+    });
+    t.eq(ack.status, "accepted");
+    await http.post(
+      `/api/admin/${cid}/freeze`,
+      { frozen: true },
+      { token: ctx.admin.token },
+    );
+    await t.throws(
+      () =>
+        place(ctx.t1.token, cid, {
+          symbol: sym,
+          side: "buy",
+          type: "limit",
+          quantity: 1,
+          price: 3,
+        }),
+      { status: 409, error: "market_frozen" },
+    );
+    const cancel = await http.del(`/api/orders/${ack.orderId}`, {
+      token: ctx.t1.token,
+    });
+    t.eq(cancel.status, "cancelled");
+    await http.post(
+      `/api/admin/${cid}/freeze`,
+      { frozen: false },
+      { token: ctx.admin.token },
+    );
+    const again = await place(ctx.t1.token, cid, {
+      symbol: sym,
+      side: "buy",
+      type: "limit",
+      quantity: 1,
+      price: 2.5,
+    });
+    t.eq(again.status, "accepted");
+    await http.del(`/api/orders/${again.orderId}`, { token: ctx.t1.token }).catch(() => {});
   });
 }

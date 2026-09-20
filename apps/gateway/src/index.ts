@@ -11,6 +11,7 @@ import {
   getOptionContracts,
   getPrice,
   hasPremiumAccess,
+  isMarketFrozen,
 } from "@qtp/bus";
 import { isNewsEmbargoed, type NewsItem } from "@qtp/shared";
 import { challenges, getDb } from "@qtp/db";
@@ -174,6 +175,11 @@ async function subscribe(conn: Conn, challengeId: string): Promise<void> {
   set.add(conn);
   await fanout.add(challengeId);
   send(conn, { type: "subscribed", challengeId });
+  send(conn, {
+    type: "market_status",
+    challengeId,
+    data: { frozen: await isMarketFrozen(redis, challengeId) },
+  });
   await sendSnapshot(conn, challengeId);
 }
 

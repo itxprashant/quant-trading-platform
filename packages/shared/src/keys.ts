@@ -55,6 +55,8 @@ export const redisKeys = {
     `qtp:premium:${challengeId}:${userId}`,
   /** Set of symbols disabled for trading (dynamic asset lock). */
   lockedSymbols: (challengeId: string) => `qtp:locked:${challengeId}`,
+  /** Live-market freeze flag (engine stays up; placements blocked). */
+  marketFrozen: (challengeId: string) => `qtp:frozen:${challengeId}`,
   /** Latest fair-value snapshot JSON (all symbols) for quick reads. */
   fairValueSnapshot: (challengeId: string) => `qtp:fvsnap:${challengeId}`,
   /** Set of dynamically-listed tradeable symbols (options, ETFs). */

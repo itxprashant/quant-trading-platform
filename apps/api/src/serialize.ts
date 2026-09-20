@@ -23,6 +23,7 @@ export function serializeChallenge(
     endsAt: c.endsAt ? c.endsAt.toISOString() : null,
     createdAt: c.createdAt.toISOString(),
     participantCount,
+    frozen: c.frozen ?? false,
   };
 }
 

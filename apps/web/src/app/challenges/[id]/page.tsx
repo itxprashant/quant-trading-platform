@@ -208,6 +208,8 @@ export default function TradePage() {
     );
   }
 
+  const marketFrozen = rt.frozen ?? challenge.frozen ?? false;
+
   return (
     <div className="min-h-dvh">
       <TopBar />
@@ -222,6 +224,14 @@ export default function TradePage() {
         id="main"
         className="mx-auto min-w-0 max-w-[1600px] space-y-3 p-3 sm:p-5"
       >
+        {marketFrozen && (
+          <div
+            role="status"
+            className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+          >
+            Market frozen — you can only cancel pending orders.
+          </div>
+        )}
         <header className="flex flex-wrap items-end justify-between gap-3 pb-2">
           <div className="min-w-0">
             <Link
@@ -235,6 +245,11 @@ export default function TradePage() {
                 {challenge.name}
               </h1>
               <StatusBadge status={challenge.status} />
+              {marketFrozen && (
+                <span className="rounded-sm border border-warning/30 bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning">
+                  Frozen
+                </span>
+              )}
             </div>
             <p className="mt-1 text-xs text-muted">
               {isEden
@@ -380,6 +395,11 @@ export default function TradePage() {
               price={limitPrice}
               onPriceChange={setLimitPrice}
               refPrice={livePrice?.price}
+              frozen={marketFrozen}
+              positionQty={
+                portfolio?.positions.find((p) => p.symbol === activeSymbol)
+                  ?.quantity ?? 0
+              }
             />
           ) : (
             <Panel className="grid min-h-48 place-items-center p-6 text-sm text-muted">
@@ -447,12 +467,14 @@ export default function TradePage() {
                 contracts={rt.optionContracts}
                 prices={rt.prices}
                 onChange={() => setOrderRefresh((n) => n + 1)}
+                frozen={marketFrozen}
               />
             )}
             {hasEtfs && (
               <MarketsPanel
                 challengeId={challengeId}
                 onChange={() => setOrderRefresh((n) => n + 1)}
+                frozen={marketFrozen}
               />
             )}
           </div>

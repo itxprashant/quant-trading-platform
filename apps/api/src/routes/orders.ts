@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { challenges, orders, participants } from "@qtp/db";
+import { challenges, orders, participants, positions } from "@qtp/db";
+import { clampOrderQuantity } from "@qtp/core";
 import { zPlaceOrderInput, type EngineCommand } from "@qtp/shared";
 import {
   checkRateLimit,
@@ -10,6 +11,7 @@ import {
   isSymbolLocked,
   publishCommand,
 } from "@qtp/bus";
+import { z } from "zod";
 import { validate } from "../util.js";
 import { rateLimit } from "../ratelimit.js";
 
@@ -29,6 +31,9 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       if (challenge.status !== "live") {
         return reply.code(409).send({ error: "challenge_not_live" });
       }
+      if (challenge.frozen) {
+        return reply.code(409).send({ error: "market_frozen" });
+      }
       const knownSymbol =
         challenge.config.symbols.some((s) => s.symbol === input.symbol) ||
         (await isListedSymbol(app.redis, input.challengeId, input.symbol));
@@ -41,9 +46,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       if (input.type === "limit" && input.price == null) {
         return reply.code(400).send({ error: "limit_requires_price" });
       }
-      if (input.quantity > challenge.config.maxOrderQuantity) {
-        return reply.code(400).send({ error: "quantity_exceeds_limit" });
-      }
+      const isAdmin = req.user.role === "admin";
 
       const maxOrdersPerSecond = challenge.config.maxOrdersPerSecond ?? 5;
       const orderRate = await checkRateLimit(
@@ -63,25 +66,6 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      const maxVolumePerMinute = challenge.config.maxVolumePerMinute ?? 500;
-      const volume = await checkVolumeLimit(
-        app.redis,
-        req.user.sub,
-        input.challengeId,
-        input.quantity,
-        maxVolumePerMinute,
-        60_000,
-      );
-      reply.header("x-volume-limit", String(maxVolumePerMinute));
-      reply.header("x-volume-remaining", String(volume.remaining));
-      if (!volume.allowed) {
-        reply.header("retry-after", String(Math.ceil(volume.resetMs / 1000)));
-        return reply.code(429).send({
-          error: "volume_limited",
-          retryAfterMs: volume.resetMs,
-        });
-      }
-
       // Auto-enroll the trader if they aren't a participant yet.
       await app.db
         .insert(participants)
@@ -95,15 +79,14 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
 
       const orderId = randomUUID();
       const maxOpenOrders = challenge.config.maxOpenOrders ?? 25;
-      const maxOpenQty = challenge.config.maxOrderQuantity;
-      const limitError = await app.db.transaction(async (tx) => {
+      const maxVolumePerMinute = challenge.config.maxVolumePerMinute ?? 500;
+      const result = await app.db.transaction(async (tx) => {
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtext(${input.challengeId}), hashtext(${req.user.sub}))`,
         );
         const [open] = await tx
           .select({
             n: count(),
-            qty: sql<number>`coalesce(sum(${orders.remainingQuantity}), 0)`,
           })
           .from(orders)
           .where(
@@ -114,11 +97,73 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
             ),
           );
         const openN = Number(open?.n ?? 0);
-        const openQty = Number(open?.qty ?? 0);
-        if (openN >= maxOpenOrders) return "open_orders_exceeded";
-        if (input.type === "limit" && openQty + input.quantity > maxOpenQty) {
-          return "open_quantity_exceeded";
+        if (openN >= maxOpenOrders) {
+          return { error: "open_orders_exceeded" as const };
         }
+
+        let acceptedQty = input.quantity;
+        if (!isAdmin) {
+          const [posRow] = await tx
+            .select({ qty: positions.quantity })
+            .from(positions)
+            .where(
+              and(
+                eq(positions.challengeId, input.challengeId),
+                eq(positions.userId, req.user.sub),
+                eq(positions.symbol, input.symbol),
+              ),
+            );
+          const working = await tx
+            .select({
+              side: orders.side,
+              qty: sql<number>`coalesce(sum(${orders.remainingQuantity}), 0)`,
+            })
+            .from(orders)
+            .where(
+              and(
+                eq(orders.challengeId, input.challengeId),
+                eq(orders.userId, req.user.sub),
+                eq(orders.symbol, input.symbol),
+                inArray(orders.status, ["open", "partially_filled"]),
+              ),
+            )
+            .groupBy(orders.side);
+          let openBuyQty = 0;
+          let openSellQty = 0;
+          for (const row of working) {
+            const qty = Number(row.qty ?? 0);
+            if (row.side === "buy") openBuyQty = qty;
+            else openSellQty = qty;
+          }
+          acceptedQty = clampOrderQuantity({
+            side: input.side,
+            requested: input.quantity,
+            position: Number(posRow?.qty ?? 0),
+            openBuyQty,
+            openSellQty,
+            maxOrderQuantity: challenge.config.maxOrderQuantity,
+          });
+          if (acceptedQty <= 0) {
+            return { error: "no_capacity" as const };
+          }
+        }
+
+        const volume = await checkVolumeLimit(
+          app.redis,
+          req.user.sub,
+          input.challengeId,
+          acceptedQty,
+          maxVolumePerMinute,
+          60_000,
+        );
+        if (!volume.allowed) {
+          return {
+            error: "volume_limited" as const,
+            resetMs: volume.resetMs,
+            remaining: volume.remaining,
+          };
+        }
+
         await tx.insert(orders).values({
           id: orderId,
           challengeId: input.challengeId,
@@ -126,16 +171,31 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
           symbol: input.symbol,
           side: input.side,
           type: input.type,
-          quantity: input.quantity,
-          remainingQuantity: input.quantity,
+          quantity: acceptedQty,
+          remainingQuantity: acceptedQty,
           price: input.price ?? null,
           status: "open",
         });
-        return null;
+        return { acceptedQty, volumeRemaining: volume.remaining };
       });
-      if (limitError) {
-        return reply.code(400).send({ error: limitError });
+      if ("error" in result) {
+        if (result.error === "no_capacity") {
+          return reply.code(409).send({ error: "no_capacity" });
+        }
+        if (result.error === "volume_limited") {
+          reply.header("x-volume-limit", String(maxVolumePerMinute));
+          reply.header("x-volume-remaining", String(result.remaining));
+          reply.header("retry-after", String(Math.ceil(result.resetMs / 1000)));
+          return reply.code(429).send({
+            error: "volume_limited",
+            retryAfterMs: result.resetMs,
+          });
+        }
+        return reply.code(400).send({ error: result.error });
       }
+
+      reply.header("x-volume-limit", String(maxVolumePerMinute));
+      reply.header("x-volume-remaining", String(result.volumeRemaining));
 
       const cmd: EngineCommand = {
         type: "place_order",
@@ -145,13 +205,18 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
         symbol: input.symbol,
         side: input.side,
         orderType: input.type,
-        quantity: input.quantity,
+        quantity: result.acceptedQty,
         price: input.price ?? null,
         ts: Date.now(),
+        ...(isAdmin ? { admin: true } : {}),
       };
       await publishCommand(app.redis, input.challengeId, cmd);
 
-      return reply.code(202).send({ orderId, status: "accepted" });
+      return reply.code(202).send({
+        orderId,
+        status: "accepted",
+        quantity: result.acceptedQty,
+      });
     },
   );
 
@@ -195,6 +260,72 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
         status: o.status,
         createdAt: o.createdAt.toISOString(),
       }));
+    },
+  );
+
+  // Cancel every working order owned by the caller on this challenge.
+  app.post(
+    "/cancel-all",
+    {
+      preHandler: [
+        app.authenticate,
+        rateLimit({ bucket: "cancel-all", limit: 2, windowMs: 1000, by: "user" }),
+      ],
+    },
+    async (req, reply) => {
+      const body = validate(
+        z.object({ challengeId: z.string().uuid() }),
+        req.body,
+        reply,
+      );
+      if (!body) return;
+
+      const challenge = await app.db.query.challenges.findFirst({
+        where: eq(challenges.id, body.challengeId),
+      });
+      if (!challenge) return reply.code(404).send({ error: "not_found" });
+      if (challenge.status === "draft" || challenge.status === "ended") {
+        return reply.code(409).send({ error: "challenge_not_cancellable" });
+      }
+
+      const rows = await app.db
+        .select()
+        .from(orders)
+        .where(
+          and(
+            eq(orders.challengeId, body.challengeId),
+            eq(orders.userId, req.user.sub),
+            inArray(orders.status, ["open", "partially_filled"]),
+          ),
+        );
+      if (rows.length === 0) {
+        return { cancelled: 0 };
+      }
+
+      await app.db
+        .update(orders)
+        .set({ status: "cancelled", remainingQuantity: 0 })
+        .where(
+          and(
+            eq(orders.challengeId, body.challengeId),
+            eq(orders.userId, req.user.sub),
+            inArray(orders.status, ["open", "partially_filled"]),
+          ),
+        );
+
+      for (const order of rows) {
+        const cmd: EngineCommand = {
+          type: "cancel_order",
+          orderId: order.id,
+          challengeId: order.challengeId,
+          userId: req.user.sub,
+          symbol: order.symbol,
+          side: order.side,
+          ts: Date.now(),
+        };
+        await publishCommand(app.redis, order.challengeId, cmd);
+      }
+      return { cancelled: rows.length };
     },
   );
 

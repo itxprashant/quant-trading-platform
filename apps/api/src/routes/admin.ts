@@ -35,6 +35,7 @@ import {
   publishBroadcast,
   publishCommand,
   pushNews,
+  setMarketFrozen,
   setPrice,
   setSymbolTradeable,
 } from "@qtp/bus";
@@ -239,6 +240,63 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get("/:challengeId/fair-value", async (req) => {
     const { challengeId } = req.params as { challengeId: string };
     return getFairValues(app.redis, challengeId);
+  });
+
+  // Halt matching on a live challenge without stopping the engine.
+  app.post("/:challengeId/freeze", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      z.object({ frozen: z.boolean() }),
+      req.body,
+      reply,
+    );
+    if (!body) return;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+    if (challenge.status !== "live") {
+      return reply.code(409).send({ error: "challenge_not_live" });
+    }
+
+    await app.db
+      .update(challenges)
+      .set({ frozen: body.frozen })
+      .where(eq(challenges.id, challengeId));
+    await setMarketFrozen(app.redis, challengeId, body.frozen);
+
+    const cmd: EngineCommand = {
+      type: "set_frozen",
+      challengeId,
+      frozen: body.frozen,
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challengeId, cmd);
+    await publishBroadcast(app.redis, challengeId, [
+      {
+        target: "all",
+        msg: {
+          type: "market_status",
+          challengeId,
+          data: { frozen: body.frozen },
+        },
+      },
+      {
+        target: "all",
+        msg: {
+          type: "alert",
+          challengeId,
+          data: {
+            level: body.frozen ? "warning" : "info",
+            message: body.frozen
+              ? "Market frozen — cancellations only."
+              : "Market unfrozen.",
+            ts: Date.now(),
+          },
+        },
+      },
+    ]);
+    return { ok: true, frozen: body.frozen };
   });
 
   // Lock / unlock a symbol for trading (dynamic asset introduction).
@@ -703,6 +761,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     await app.redis.del(redisKeys.leaderboard(challengeId));
     await app.redis.del(redisKeys.fairValueSet(challengeId));
     await app.redis.del(redisKeys.lockedSymbols(challengeId));
+    await app.redis.del(redisKeys.marketFrozen(challengeId));
     await app.redis.del(redisKeys.listedSymbols(challengeId));
     await app.redis.del(redisKeys.etfWindows(challengeId));
     await app.redis.del(redisKeys.optionContracts(challengeId));
@@ -716,6 +775,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       .update(participants)
       .set({ loanDebt: 0 })
       .where(eq(participants.challengeId, challengeId));
+    await app.db
+      .update(challenges)
+      .set({ frozen: false })
+      .where(eq(challenges.id, challengeId));
+    await setMarketFrozen(app.redis, challengeId, false);
     // Signal engines to reload this challenge from scratch.
     await app.redis.publish(`qtp:control:${challengeId}`, "reset");
 

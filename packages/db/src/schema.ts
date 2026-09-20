@@ -95,6 +95,8 @@ export const challenges = pgTable(
     scoring: jsonb("scoring").$type<ScoringConfig>().notNull(),
     startsAt: timestamp("starts_at", { withTimezone: true }),
     endsAt: timestamp("ends_at", { withTimezone: true }),
+    /** Live-market halt: engine stays up, books stay intact, cancels only. */
+    frozen: boolean("frozen").notNull().default(false),
     createdBy: uuid("created_by").references(() => users.id, {
       onDelete: "set null",
     }),

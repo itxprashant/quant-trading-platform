@@ -255,6 +255,7 @@ export const zChallenge = z.object({
   endsAt: z.string().nullable(),
   createdAt: z.string(),
   participantCount: z.number().int().optional(),
+  frozen: z.boolean().default(false),
 });
 export type Challenge = z.infer<typeof zChallenge>;
 

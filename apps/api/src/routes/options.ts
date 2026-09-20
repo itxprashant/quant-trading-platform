@@ -50,6 +50,9 @@ export async function optionRoutes(app: FastifyInstance): Promise<void> {
       if (challenge.status !== "live") {
         return reply.code(409).send({ error: "challenge_not_live" });
       }
+      if (challenge.frozen) {
+        return reply.code(409).send({ error: "market_frozen" });
+      }
       const contracts = await getOptionContracts(app.redis, input.challengeId);
       const series = contracts.find((c) => c.symbol === input.symbol);
       if (!series) return reply.code(400).send({ error: "unknown_symbol" });

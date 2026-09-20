@@ -57,11 +57,13 @@ export class OrderBook {
     return n;
   }
 
-  /** Remaining quantity owned by a single trader on this book. */
-  remainingForUser(userId: string): number {
+  /** Remaining quantity owned by a single trader on this book (optionally one side). */
+  remainingForUser(userId: string, side?: OrderSide): number {
     let qty = 0;
     for (const o of this.index.values()) {
-      if (o.userId === userId) qty += o.remaining;
+      if (o.userId === userId && (side == null || o.side === side)) {
+        qty += o.remaining;
+      }
     }
     return qty;
   }

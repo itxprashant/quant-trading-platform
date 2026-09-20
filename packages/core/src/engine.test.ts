@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ChallengeEngine, type EngineConfig } from "./engine.js";
+import {
+  ChallengeEngine,
+  clampOrderQuantity,
+  type EngineConfig,
+} from "./engine.js";
 import type { TradeEvent } from "@qtp/shared";
 
 function makeEngine(overrides: Partial<EngineConfig> = {}) {
@@ -19,6 +23,60 @@ function makeEngine(overrides: Partial<EngineConfig> = {}) {
 
 const trades = (evts: ReturnType<ChallengeEngine["placeOrder"]>) =>
   evts.filter((e): e is TradeEvent => e.type === "trade");
+
+describe("clampOrderQuantity", () => {
+  const base = {
+    requested: 80,
+    position: 0,
+    openBuyQty: 0,
+    openSellQty: 0,
+    maxOrderQuantity: 50,
+  };
+
+  it("clamps a flat buy or sell to the limit", () => {
+    expect(clampOrderQuantity({ ...base, side: "buy" })).toBe(50);
+    expect(clampOrderQuantity({ ...base, side: "sell" })).toBe(50);
+  });
+
+  it("lets a long unwind sell and blocks a further buy", () => {
+    expect(
+      clampOrderQuantity({ ...base, side: "sell", position: 80, requested: 40 }),
+    ).toBe(40);
+    expect(
+      clampOrderQuantity({ ...base, side: "buy", position: 80, requested: 10 }),
+    ).toBe(0);
+  });
+
+  it("clamps a buy against inventory plus working buys", () => {
+    expect(
+      clampOrderQuantity({
+        ...base,
+        side: "buy",
+        position: 30,
+        openBuyQty: 10,
+        requested: 20,
+      }),
+    ).toBe(10);
+    expect(
+      clampOrderQuantity({
+        ...base,
+        side: "buy",
+        position: 30,
+        openBuyQty: 20,
+        requested: 20,
+      }),
+    ).toBe(0);
+  });
+
+  it("lets a short cover buy and blocks a further sell", () => {
+    expect(
+      clampOrderQuantity({ ...base, side: "buy", position: -80, requested: 40 }),
+    ).toBe(40);
+    expect(
+      clampOrderQuantity({ ...base, side: "sell", position: -80, requested: 10 }),
+    ).toBe(0);
+  });
+});
 
 describe("ChallengeEngine matching", () => {
   it("rests a limit order with no opposing liquidity", () => {
@@ -205,7 +263,7 @@ describe("ChallengeEngine matching", () => {
     expect(e.snapshot("X1").bids).toHaveLength(2);
   });
 
-  it("rejects a limit that would push working size past maxOrderQuantity", () => {
+  it("clamps a second buy so working size stays at maxOrderQuantity", () => {
     const e = makeEngine({ maxOrderQuantity: 50, maxOpenOrders: 10 });
     e.placeOrder({
       orderId: "o1",
@@ -227,8 +285,193 @@ describe("ChallengeEngine matching", () => {
       price: 98,
       ts: 2,
     });
+    expect(evts.some((evt) => evt.type === "order_update" && evt.status === "rejected")).toBe(false);
+    expect(evts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "order_update",
+          orderId: "o2",
+          status: "open",
+          quantity: 20,
+          remainingQuantity: 20,
+        }),
+      ]),
+    );
+    expect(e.openOrderQuantity("alice", "X1", "buy")).toBe(50);
+  });
+
+  it("lets an admin rest more than maxOrderQuantity", () => {
+    const e = makeEngine({ maxOrderQuantity: 50, maxOpenOrders: 10 });
+    const evts = e.placeOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 80,
+      price: 99,
+      ts: 1,
+      admin: true,
+    });
+    expect(evts.some((evt) => evt.type === "order_update" && evt.status === "rejected")).toBe(false);
+    expect(e.openOrderQuantity("alice")).toBe(80);
+  });
+
+  it("clamps a trader buy above maxOrderQuantity to the room", () => {
+    const e = makeEngine({ maxOrderQuantity: 50 });
+    const evts = e.placeOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 80,
+      price: 99,
+      ts: 1,
+    });
+    expect(evts.some((evt) => evt.type === "order_update" && evt.status === "rejected")).toBe(false);
+    expect(e.openOrderQuantity("alice", "X1", "buy")).toBe(50);
+    expect(e.snapshot("X1").bids[0]).toMatchObject({ quantity: 50 });
+  });
+
+  it("lets a long unwind sell and rejects a further buy past the cap", () => {
+    const e = makeEngine({
+      maxOrderQuantity: 50,
+      maxPosition: 200,
+      minPosition: -200,
+      maxOpenOrders: 10,
+    });
+    e.placeOrder({
+      orderId: "s",
+      userId: "mm",
+      symbol: "X1",
+      side: "sell",
+      orderType: "limit",
+      quantity: 80,
+      price: 100,
+      ts: 1,
+      admin: true,
+    });
+    e.placeOrder({
+      orderId: "b",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 80,
+      price: 100,
+      ts: 2,
+      admin: true,
+    });
+    expect(e.positionOf("alice", "X1")).toBe(80);
+
+    const buy = e.placeOrder({
+      orderId: "o-buy",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 10,
+      price: 99,
+      ts: 3,
+    });
+    expect(buy).toMatchObject([{ type: "order_update", status: "rejected" }]);
+
+    const sell = e.placeOrder({
+      orderId: "o-sell",
+      userId: "alice",
+      symbol: "X1",
+      side: "sell",
+      orderType: "limit",
+      quantity: 40,
+      price: 101,
+      ts: 4,
+    });
+    expect(sell.some((evt) => evt.type === "order_update" && evt.status === "rejected")).toBe(false);
+    expect(e.openOrderQuantity("alice", "X1", "sell")).toBe(40);
+  });
+
+  it("rejects a buy when open buys already fill to the cap, but still allows a sell", () => {
+    const e = makeEngine({ maxOrderQuantity: 50, maxOpenOrders: 10 });
+    e.placeOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 50,
+      price: 99,
+      ts: 1,
+    });
+    const buy = e.placeOrder({
+      orderId: "o2",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 10,
+      price: 98,
+      ts: 2,
+    });
+    expect(buy).toMatchObject([{ type: "order_update", status: "rejected" }]);
+    const sell = e.placeOrder({
+      orderId: "o3",
+      userId: "alice",
+      symbol: "X1",
+      side: "sell",
+      orderType: "limit",
+      quantity: 10,
+      price: 101,
+      ts: 3,
+    });
+    expect(sell.some((evt) => evt.type === "order_update" && evt.status === "rejected")).toBe(false);
+    expect(e.openOrderQuantity("alice", "X1", "sell")).toBe(10);
+  });
+
+  it("rejects new orders while frozen and still allows cancel", () => {
+    const e = makeEngine();
+    e.placeOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 10,
+      price: 99,
+      ts: 1,
+    });
+    e.setFrozen(true);
+    const evts = e.placeOrder({
+      orderId: "o2",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 98,
+      ts: 2,
+    });
     expect(evts).toMatchObject([{ type: "order_update", status: "rejected" }]);
-    expect(e.openOrderQuantity("alice")).toBe(30);
+    const cancel = e.cancelOrder({
+      orderId: "o1",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      ts: 3,
+    });
+    expect(cancel[0]).toMatchObject({ type: "order_update", status: "cancelled" });
+    e.setFrozen(false);
+    const after = e.placeOrder({
+      orderId: "o3",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 97,
+      ts: 4,
+    });
+    expect(after.some((evt) => evt.type === "order_update" && evt.status === "rejected")).toBe(false);
   });
 
   it("PnL subtracts starting cash so a funded book starts at zero", () => {

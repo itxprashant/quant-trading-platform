@@ -22,6 +22,8 @@ export type EngineCommand =
       quantity: number;
       price: number | null;
       ts: number;
+      /** Bypass maxOrderQuantity (per-order and working-size) for admins. */
+      admin?: boolean;
     }
   | {
       type: "cancel_order";
@@ -63,6 +65,13 @@ export type EngineCommand =
       challengeId: string;
       effects: MomentumEffect[];
       volEvent: boolean;
+      ts: number;
+    }
+  | {
+      /** Halt / resume matching while keeping the runner and books intact. */
+      type: "set_frozen";
+      challengeId: string;
+      frozen: boolean;
       ts: number;
     }
   | {

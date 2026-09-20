@@ -76,6 +76,7 @@ export class ChallengeRunner {
   private newsTimer?: NodeJS.Timeout;
   private readonly eden?: EdenConfig;
   private readonly edenEnabled: boolean;
+  private frozen: boolean;
 
   constructor(
     private readonly redis: Redis,
@@ -88,6 +89,7 @@ export class ChallengeRunner {
     this.eden = challenge.config.eden;
     this.edenEnabled =
       challenge.type === "new_eden" && !!this.eden?.rules.enabled;
+    this.frozen = challenge.frozen ?? false;
     this.engine = new ChallengeEngine({
       challengeId: challenge.id,
       symbols: challenge.config.symbols,
@@ -98,6 +100,7 @@ export class ChallengeRunner {
       maxOpenOrders: challenge.config.maxOpenOrders ?? 25,
       allowMargin: challenge.config.allowMargin,
     });
+    this.engine.setFrozen(this.frozen);
     this.persistence = new Persistence(db, challenge.id, this.engine);
     this.bots = new BotEngine(
       this.engine,
@@ -286,6 +289,7 @@ export class ChallengeRunner {
           quantity: cmd.quantity,
           price: cmd.price,
           ts: cmd.ts,
+          admin: cmd.admin,
         });
       case "cancel_order":
         return this.engine.cancelOrder({
@@ -295,9 +299,14 @@ export class ChallengeRunner {
           side: cmd.side,
           ts: cmd.ts,
         });
+      case "set_frozen":
+        this.frozen = cmd.frozen;
+        this.engine.setFrozen(cmd.frozen);
+        return [];
       case "issue_loan":
         return this.handleIssueLoan(cmd.userId, cmd.loanId, cmd.principal, cmd.ts);
       case "force_liquidate":
+        if (this.frozen) return [];
         return this.liquidate(cmd.userId, cmd.reason, cmd.ts);
       case "set_fair_value": {
         const fv = this.engine.setFairValue(cmd.symbol, cmd.fairValue);
@@ -323,6 +332,7 @@ export class ChallengeRunner {
         this.edenBots?.onNewsPulse(cmd.effects, cmd.volEvent);
         return [];
       case "exercise_option":
+        if (this.frozen) return [];
         return this.options?.exercise(cmd.userId, cmd.symbol, cmd.quantity, cmd.ts) ?? [];
       case "add_symbol":
         void this.addSpotSymbol(cmd.config, cmd.locked, cmd.ts);
@@ -340,9 +350,11 @@ export class ChallengeRunner {
         void this.options?.close(cmd.cycleId);
         return [];
       case "purchase_bond":
+        if (this.frozen) return [];
         void this.markets?.purchaseBond(cmd.userId, cmd.bondId, cmd.quantity, cmd.ts);
         return [];
       case "etf_trade":
+        if (this.frozen) return [];
         void this.markets?.etfTrade(
           cmd.userId,
           cmd.etfSymbol,
@@ -778,7 +790,7 @@ export class ChallengeRunner {
 
   /** Drive autonomous bots: apply their commands and broadcast results. */
   private async botTick(): Promise<void> {
-    if (!this.running) return;
+    if (!this.running || this.frozen) return;
     const now = Date.now();
     const { places, cancels } = this.edenBots
       ? this.edenBots.act(now)
@@ -794,7 +806,7 @@ export class ChallengeRunner {
   }
 
   private async tick(): Promise<void> {
-    if (!this.running) return;
+    if (!this.running || this.frozen) return;
     const now = Date.now();
     const events: EngineEvent[] = [];
     // Sample two-sided quoting for market-making uptime scoring.
@@ -842,7 +854,7 @@ export class ChallengeRunner {
    * margin-call enforcement with forced liquidation. Runs once per game-minute.
    */
   private async minuteTick(): Promise<void> {
-    if (!this.running || !this.edenEnabled || !this.eden) return;
+    if (!this.running || this.frozen || !this.edenEnabled || !this.eden) return;
     const now = Date.now();
     const rules = this.eden.rules;
     const events: EngineEvent[] = [];

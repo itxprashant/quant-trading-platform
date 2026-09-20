@@ -19,6 +19,8 @@ export function TradeTicket({
   price,
   onPriceChange,
   refPrice,
+  frozen = false,
+  positionQty = 0,
 }: {
   challengeId: string;
   symbol: string;
@@ -28,9 +30,12 @@ export function TradeTicket({
   price: string;
   onPriceChange: (v: string) => void;
   refPrice?: number;
+  frozen?: boolean;
+  positionQty?: number;
 }) {
   const router = useRouter();
   const user = useAuth((s) => s.user);
+  const isAdmin = user?.role === "admin";
   const [side, setSide] = useState<OrderSide>("buy");
   const [type, setType] = useState<OrderType>("limit");
   const [quantity, setQuantity] = useState("10");
@@ -55,13 +60,38 @@ export function TradeTicket({
     loadOpen();
   }, [loadOpen, refreshKey]);
 
+  const qtyNum = parseInt(quantity, 10) || 0;
+  const openBuyQty = openOrders
+    .filter((o) => o.symbol === symbol && o.side === "buy")
+    .reduce((s, o) => s + o.remainingQuantity, 0);
+  const openSellQty = openOrders
+    .filter((o) => o.symbol === symbol && o.side === "sell")
+    .reduce((s, o) => s + o.remainingQuantity, 0);
+  const remainingCap = isAdmin
+    ? Number.POSITIVE_INFINITY
+    : Math.max(
+        0,
+        side === "buy"
+          ? maxQuantity - positionQty - openBuyQty
+          : maxQuantity + positionQty - openSellQty,
+      );
+  const atCountCap = openOrders.length >= maxOpenOrders;
+  const atSizeCap = !isAdmin && remainingCap <= 0;
+  const qtyCap = Number.isFinite(remainingCap) ? remainingCap : maxQuantity;
+
   async function submit() {
     if (!user) {
       router.push(`/login?next=/challenges/${challengeId}`);
       return;
     }
+    if (frozen) {
+      setStatus({
+        kind: "err",
+        msg: "Market frozen — cancellations only.",
+      });
+      return;
+    }
     const qty = parseInt(quantity, 10);
-    const openQty = openOrders.reduce((s, o) => s + o.remainingQuantity, 0);
     if (openOrders.length >= maxOpenOrders) {
       setStatus({
         kind: "err",
@@ -69,10 +99,13 @@ export function TradeTicket({
       });
       return;
     }
-    if (type === "limit" && openQty + qty > maxQuantity) {
+    if (!isAdmin && remainingCap <= 0) {
       setStatus({
         kind: "err",
-        msg: `Working size ${openQty + qty} exceeds the ${maxQuantity} unit cap. Cancel or reduce size.`,
+        msg:
+          side === "buy"
+            ? "No buy room at the current inventory and working orders."
+            : "No sell room at the current inventory and working orders.",
       });
       return;
     }
@@ -87,27 +120,35 @@ export function TradeTicket({
         quantity: qty,
         ...(type === "limit" ? { price: parseFloat(price) } : {}),
       };
-      await post("/api/orders", body);
+      const ack = await post<{
+        orderId: string;
+        status: string;
+        quantity?: number;
+      }>("/api/orders", body);
+      const accepted = ack.quantity ?? qty;
       setOpenOrders((cur) => [
         ...cur,
         {
-          id: `local-${Date.now()}`,
+          id: ack.orderId ?? `local-${Date.now()}`,
           challengeId,
           userId: user.id,
           symbol,
           side,
           type,
-          quantity: qty,
-          remainingQuantity: qty,
+          quantity: accepted,
+          remainingQuantity: accepted,
           price: type === "limit" ? parseFloat(price) : null,
           status: "open",
           createdAt: new Date().toISOString(),
         },
       ]);
       loadOpen();
+      const capped = accepted < qty;
       setStatus({
         kind: "ok",
-        msg: `${side === "buy" ? "Buy" : "Sell"} ${qty} ${symbol} submitted.`,
+        msg: `${side === "buy" ? "Buy" : "Sell"} ${accepted} ${symbol} submitted.${
+          capped ? ` (capped from ${qty})` : ""
+        }`,
       });
     } catch (err) {
       const code =
@@ -119,7 +160,13 @@ export function TradeTicket({
         msg:
           code === "challenge_not_live"
             ? "Challenge is not live."
-            : code === "quantity_exceeds_limit"
+            : code === "market_frozen"
+              ? "Market frozen — cancellations only."
+              : code === "no_capacity"
+                ? side === "buy"
+                  ? "No buy room at the current inventory and working orders."
+                  : "No sell room at the current inventory and working orders."
+              : code === "quantity_exceeds_limit"
               ? `Max order size is ${maxQuantity}.`
               : code === "open_orders_exceeded"
                 ? "Too many open orders. Cancel one to place another."
@@ -137,12 +184,6 @@ export function TradeTicket({
       setSubmitting(false);
     }
   }
-
-  const qtyNum = parseInt(quantity, 10) || 0;
-  const openQty = openOrders.reduce((s, o) => s + o.remainingQuantity, 0);
-  const remainingCap = Math.max(0, maxQuantity - openQty);
-  const atCountCap = openOrders.length >= maxOpenOrders;
-  const atSizeCap = type === "limit" && (remainingCap <= 0 || qtyNum > remainingCap);
 
   return (
     <Panel className="flex min-w-0 flex-col overflow-hidden">
@@ -194,12 +235,13 @@ export function TradeTicket({
         </Field>
 
         <Field
-          label={`Quantity (maximum ${type === "limit" ? remainingCap : maxQuantity})`}
+          label={
+            isAdmin ? "Quantity" : `Quantity (up to ${qtyCap})`
+          }
         >
           <Input
             type="number"
             min={1}
-            max={type === "limit" ? remainingCap : maxQuantity}
             step={1}
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
@@ -212,17 +254,11 @@ export function TradeTicket({
             <button
               key={p}
               type="button"
-              aria-label={`Set quantity to ${p}% of the ${type === "limit" ? remainingCap : maxQuantity} unit order limit`}
+              aria-label={`Set quantity to ${p}% of the ${qtyCap} unit order limit`}
               onClick={() =>
                 setQuantity(
                   String(
-                    Math.max(
-                      1,
-                      Math.floor(
-                        ((type === "limit" ? remainingCap : maxQuantity) * p) /
-                          100,
-                      ),
-                    ),
+                    Math.max(1, Math.floor((qtyCap * p) / 100)),
                   ),
                 )
               }
@@ -272,16 +308,22 @@ export function TradeTicket({
           className="mt-auto w-full"
           size="lg"
           loading={submitting}
-          disabled={Boolean(user) && (atCountCap || atSizeCap)}
+          disabled={
+            frozen || (Boolean(user) && (atCountCap || atSizeCap))
+          }
           onClick={submit}
         >
-          {user
-            ? atCountCap
-              ? "Open order limit reached"
-              : atSizeCap
-                ? "Working size at cap"
-                : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`
-            : "Sign in to trade"}
+          {frozen
+            ? "Market frozen"
+            : user
+              ? atCountCap
+                ? "Open order limit reached"
+                : atSizeCap
+                  ? side === "buy"
+                    ? "No buy room"
+                    : "No sell room"
+                  : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`
+              : "Sign in to trade"}
         </Button>
 
         {status && (
