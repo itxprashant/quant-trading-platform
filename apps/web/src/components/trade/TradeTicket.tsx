@@ -14,6 +14,8 @@ export function TradeTicket({
   challengeId,
   symbol,
   maxQuantity,
+  minPosition = -maxQuantity,
+  maxPosition = maxQuantity,
   maxOpenOrders = 25,
   refreshKey = 0,
   price,
@@ -25,6 +27,8 @@ export function TradeTicket({
   challengeId: string;
   symbol: string;
   maxQuantity: number;
+  minPosition?: number;
+  maxPosition?: number;
   maxOpenOrders?: number;
   refreshKey?: number;
   price: string;
@@ -72,12 +76,12 @@ export function TradeTicket({
     : Math.max(
         0,
         side === "buy"
-          ? maxQuantity - positionQty - openBuyQty
-          : maxQuantity + positionQty - openSellQty,
+          ? maxPosition - positionQty - openBuyQty
+          : positionQty - minPosition - openSellQty,
       );
   const atCountCap = openOrders.length >= maxOpenOrders;
   const atSizeCap = !isAdmin && remainingCap <= 0;
-  const qtyCap = Number.isFinite(remainingCap) ? remainingCap : maxQuantity;
+  const qtyCap = Math.min(remainingCap, maxQuantity);
 
   async function submit() {
     if (!user) {
@@ -91,7 +95,14 @@ export function TradeTicket({
       });
       return;
     }
-    const qty = parseInt(quantity, 10);
+    const qty = Number(quantity);
+    if (!Number.isInteger(qty) || qty <= 0 || (!isAdmin && qty > qtyCap)) {
+      setStatus({
+        kind: "err",
+        msg: `Enter a whole quantity from 1 to ${qtyCap}.`,
+      });
+      return;
+    }
     if (openOrders.length >= maxOpenOrders) {
       setStatus({
         kind: "err",
@@ -166,19 +177,19 @@ export function TradeTicket({
                 ? side === "buy"
                   ? "No buy room at the current inventory and working orders."
                   : "No sell room at the current inventory and working orders."
-              : code === "quantity_exceeds_limit"
-              ? `Max order size is ${maxQuantity}.`
-              : code === "open_orders_exceeded"
-                ? "Too many open orders. Cancel one to place another."
-                : code === "open_quantity_exceeded"
-                  ? `Working size would exceed the ${maxQuantity} unit cap. Cancel or reduce size.`
-                  : code === "rate_limited"
-                ? "Too many orders. Slow down and retry."
-                : code === "volume_limited"
-                  ? "Volume limit reached for this minute. Wait and retry."
-                  : code === "validation_error"
-                    ? "Check your order details."
-                    : "Order rejected.",
+                : code === "quantity_exceeds_limit"
+                  ? `Max order size is ${maxQuantity}.`
+                  : code === "open_orders_exceeded"
+                    ? "Too many open orders. Cancel one to place another."
+                    : code === "open_quantity_exceeded"
+                      ? `Working size would exceed the ${maxQuantity} unit cap. Cancel or reduce size.`
+                      : code === "rate_limited"
+                        ? "Too many orders. Slow down and retry."
+                        : code === "volume_limited"
+                          ? "Volume limit reached for this minute. Wait and retry."
+                          : code === "validation_error"
+                            ? "Check your order details."
+                            : "Order rejected.",
       });
     } finally {
       setSubmitting(false);
@@ -191,6 +202,10 @@ export function TradeTicket({
         <span className="mono truncate text-xs text-text">{symbol}</span>
       </PanelHeader>
       <div className="flex flex-1 flex-col gap-3 p-4">
+        <p className="text-xs text-muted">
+          Inventory {minPosition} to +{maxPosition}; {maxQuantity} units per
+          order.
+        </p>
         <div
           role="group"
           aria-label="Order side"
@@ -234,11 +249,7 @@ export function TradeTicket({
           </Select>
         </Field>
 
-        <Field
-          label={
-            isAdmin ? "Quantity" : `Quantity (up to ${qtyCap})`
-          }
-        >
+        <Field label={isAdmin ? "Quantity" : `Quantity (up to ${qtyCap})`}>
           <Input
             type="number"
             min={1}
@@ -256,11 +267,7 @@ export function TradeTicket({
               type="button"
               aria-label={`Set quantity to ${p}% of the ${qtyCap} unit order limit`}
               onClick={() =>
-                setQuantity(
-                  String(
-                    Math.max(1, Math.floor((qtyCap * p) / 100)),
-                  ),
-                )
+                setQuantity(String(Math.max(1, Math.floor((qtyCap * p) / 100))))
               }
               className="h-7 rounded-md border border-border bg-surface-2 text-xs text-muted transition-colors hover:border-border-strong hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
             >
@@ -308,9 +315,7 @@ export function TradeTicket({
           className="mt-auto w-full"
           size="lg"
           loading={submitting}
-          disabled={
-            frozen || (Boolean(user) && (atCountCap || atSizeCap))
-          }
+          disabled={frozen || (Boolean(user) && (atCountCap || atSizeCap))}
           onClick={submit}
         >
           {frozen

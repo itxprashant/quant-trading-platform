@@ -19,26 +19,35 @@ export function optionSymbol(
   underlying: string,
   type: OptionType,
   strike: number,
+  cycleId?: string,
 ): string {
-  return `${underlying}-${type === "call" ? "C" : "P"}-${formatStrike(strike)}`;
+  return `${underlying}-${type === "call" ? "C" : "P"}-${formatStrike(strike)}${cycleId === undefined ? "" : `@${encodeURIComponent(cycleId)}`}`;
 }
 
 export interface ParsedOption {
   underlying: string;
   type: OptionType;
   strike: number;
+  cycleId?: string;
 }
 
 /** Parse a contract symbol back into its parts, or null if it is not one. */
 export function parseOptionSymbol(symbol: string): ParsedOption | null {
-  const m = /^(.+)-([CP])-(.+)$/.exec(symbol);
+  const m = /^(.+)-([CP])-([0-9]+(?:_[0-9]+)?)(?:@(.+))?$/.exec(symbol);
   if (!m) return null;
   const strike = Number(m[3]!.replace(/_/g, "."));
   if (!Number.isFinite(strike)) return null;
+  let cycleId: string | undefined;
+  try {
+    cycleId = m[4] === undefined ? undefined : decodeURIComponent(m[4]);
+  } catch {
+    return null;
+  }
   return {
     underlying: m[1]!,
     type: m[2] === "C" ? "call" : "put",
     strike,
+    ...(cycleId === undefined ? {} : { cycleId }),
   };
 }
 
@@ -67,7 +76,8 @@ export function theoreticalOption(
   cycleFractionLeft: number,
 ): number {
   const intrinsic = intrinsicValue(type, underlyingFv, strike);
-  const timeValue = Math.max(0, volatility) * 4 * Math.max(0, cycleFractionLeft);
+  const timeValue =
+    Math.max(0, volatility) * 4 * Math.max(0, cycleFractionLeft);
   return intrinsic + timeValue;
 }
 
@@ -94,7 +104,8 @@ export function proRataAssign<T extends { id: string; qty: number }>(
   shorts: T[],
   total: number,
 ): Array<{ id: string; qty: number }> {
-  const pool = shorts.filter((s) => s.qty > 0);
+  if (!Number.isSafeInteger(total)) return [];
+  const pool = shorts.filter((s) => Number.isSafeInteger(s.qty) && s.qty > 0);
   const sum = pool.reduce((a, s) => a + s.qty, 0);
   if (sum <= 0 || total <= 0) return [];
   const capped = Math.min(total, sum);

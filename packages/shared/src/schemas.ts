@@ -187,6 +187,8 @@ export const zEdenOptionsConfig = z.object({
 export type EdenOptionsConfig = z.infer<typeof zEdenOptionsConfig>;
 
 export const zEdenConfig = z.object({
+  /** Run the versioned event.md timeline rather than host-only operations. */
+  eventScript: z.boolean().optional(),
   rules: zEdenRules.default({}),
   bots: zEdenBotConfig.optional(),
   options: zEdenOptionsConfig.optional(),
@@ -328,6 +330,9 @@ export const zLoan = z.object({
   totalRepay: z.number(),
   /** Amount still outstanding. */
   remaining: z.number(),
+  installment: z.number().optional(),
+  nextPaymentAt: z.string().nullable().optional(),
+  fundedAt: z.string().nullable().optional(),
   status: z.enum(["active", "repaid"]),
   createdAt: z.string(),
 });
@@ -464,7 +469,9 @@ export function isNewsEmbargoed(
   item: Pick<NewsItem, "embargoUntil">,
   now = Date.now(),
 ): boolean {
-  return item.embargoUntil != null && new Date(item.embargoUntil).getTime() > now;
+  return (
+    item.embargoUntil != null && new Date(item.embargoUntil).getTime() > now
+  );
 }
 
 export const zPostNewsInput = z.object({
@@ -562,6 +569,8 @@ export const zOtcOffer = z.object({
   userId: z.string().uuid(),
   description: z.string(),
   legs: z.array(zOtcLeg),
+  choices: z.array(zOtcLeg).nullable().optional(),
+  settleAt: z.string().nullable().optional(),
   /** Net cash to the trader (positive = trader is paid). */
   cashToTrader: z.number(),
   status: z.enum(["pending", "accepted", "rejected", "expired", "settled"]),
@@ -575,6 +584,8 @@ export const zOtcRespondInput = z.object({
   action: z.enum(["accept", "reject", "bargain"]),
   /** New cash-to-trader proposed when bargaining. */
   counterCash: z.number().optional(),
+  choiceSymbol: z.string().min(1).optional(),
+  choiceQuantity: z.number().int().positive().max(50).optional(),
 });
 export type OtcRespondInput = z.infer<typeof zOtcRespondInput>;
 

@@ -499,10 +499,13 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
   const [feed, setFeed] = useState<NewsFeed>("announcement");
   const [level, setLevel] = useState<NewsLevel>("info");
   const [kind, setKind] = useState<NewsKind>("neutral");
-  const [fvSymbol, setFvSymbol] = useState(
-    challenge.config.symbols[0]?.symbol ?? "",
-  );
-  const [fvDelta, setFvDelta] = useState("0");
+  const [fvEffects, setFvEffects] = useState([
+    { symbol: challenge.config.symbols[0]?.symbol ?? "", delta: 0 },
+  ]);
+  const [momentum, setMomentum] = useState([
+    { symbol: challenge.config.symbols[0]?.symbol ?? "", sentiment: 0 },
+  ]);
+  const [embargoSec, setEmbargoSec] = useState("10");
   const [volEvent, setVolEvent] = useState(false);
   const [publishAt, setPublishAt] = useState("");
   const [sending, setSending] = useState(false);
@@ -521,7 +524,6 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
     setSending(true);
     setError(null);
     try {
-      const delta = Number(fvDelta);
       const body: Record<string, unknown> = { message: trimmed, level, feed };
       // datetime-local yields a local wall-clock string; send an absolute ISO.
       if (publishAt) {
@@ -530,9 +532,11 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
       }
       if (isEden) {
         body.kind = kind;
-        if (kind === "signal" && delta !== 0) {
-          body.fvEffects = [{ symbol: fvSymbol, delta }];
-        }
+        body.embargoSec = Number(embargoSec);
+        if (kind === "signal")
+          body.fvEffects = fvEffects.filter((e) => e.delta !== 0);
+        if (kind === "noise")
+          body.momentum = momentum.filter((e) => e.sentiment !== 0);
         if (volEvent) body.volEvent = true;
       }
       const res = await post<{ item: NewsItem; scheduled?: boolean }>(
@@ -621,30 +625,170 @@ function NewsControls({ challenge }: { challenge: Challenge }) {
         </div>
         {isEden && (
           <div className="flex flex-wrap items-end gap-3">
+            <Field
+              label="Premium embargo (s)"
+              hint="Public release is delayed; premium sees it first."
+            >
+              <Input
+                type="number"
+                min={0}
+                max={120}
+                step={1}
+                value={embargoSec}
+                onChange={(e) => setEmbargoSec(e.target.value)}
+                className="mono w-24"
+              />
+            </Field>
             {kind === "signal" && (
               <>
-                <Field label="FV symbol">
-                  <Select
-                    value={fvSymbol}
-                    onChange={(e) => setFvSymbol(e.target.value)}
-                  >
-                    {challenge.config.symbols.map((s) => (
-                      <option key={s.symbol} value={s.symbol}>
-                        {s.symbol}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="FV delta">
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={fvDelta}
-                    onChange={(e) => setFvDelta(e.target.value)}
-                    className="mono"
-                  />
-                </Field>
+                {fvEffects.map((effect, i) => (
+                  <div key={i} className="flex flex-wrap items-end gap-2">
+                    <Field label={`FV symbol ${i + 1}`}>
+                      <Select
+                        value={effect.symbol}
+                        onChange={(e) =>
+                          setFvEffects((rows) =>
+                            rows.map((row, j) =>
+                              j === i
+                                ? { ...row, symbol: e.target.value }
+                                : row,
+                            ),
+                          )
+                        }
+                      >
+                        {challenge.config.symbols.map((s) => (
+                          <option key={s.symbol} value={s.symbol}>
+                            {s.symbol}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="FV delta">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={effect.delta}
+                        onChange={(e) =>
+                          setFvEffects((rows) =>
+                            rows.map((row, j) =>
+                              j === i
+                                ? { ...row, delta: Number(e.target.value) }
+                                : row,
+                            ),
+                          )
+                        }
+                        className="mono"
+                      />
+                    </Field>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Remove FV effect ${i + 1}`}
+                      onClick={() =>
+                        setFvEffects((rows) => rows.filter((_, j) => j !== i))
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={fvEffects.length >= 20}
+                  onClick={() =>
+                    setFvEffects((rows) => [
+                      ...rows,
+                      {
+                        symbol: challenge.config.symbols[0]?.symbol ?? "",
+                        delta: 0,
+                      },
+                    ])
+                  }
+                >
+                  Add FV effect
+                </Button>
               </>
+            )}
+            {kind === "noise" && (
+              <div className="w-full space-y-2">
+                <p className="text-xs text-muted">
+                  NOISE does not move fair value. Set sentiment from -1 (sell)
+                  to +1 (buy) to drive momentum flow.
+                </p>
+                {momentum.map((effect, i) => (
+                  <div key={i} className="flex flex-wrap items-end gap-2">
+                    <Field label={`Momentum symbol ${i + 1}`}>
+                      <Select
+                        value={effect.symbol}
+                        onChange={(e) =>
+                          setMomentum((rows) =>
+                            rows.map((row, j) =>
+                              j === i
+                                ? { ...row, symbol: e.target.value }
+                                : row,
+                            ),
+                          )
+                        }
+                      >
+                        {[
+                          ...challenge.config.symbols,
+                          ...(challenge.config.eden?.etfs ?? []),
+                        ].map((s) => (
+                          <option key={s.symbol} value={s.symbol}>
+                            {s.symbol}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Sentiment">
+                      <Input
+                        type="number"
+                        min={-1}
+                        max={1}
+                        step={0.1}
+                        value={effect.sentiment}
+                        onChange={(e) =>
+                          setMomentum((rows) =>
+                            rows.map((row, j) =>
+                              j === i
+                                ? { ...row, sentiment: Number(e.target.value) }
+                                : row,
+                            ),
+                          )
+                        }
+                        className="mono w-24"
+                      />
+                    </Field>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Remove momentum effect ${i + 1}`}
+                      onClick={() =>
+                        setMomentum((rows) => rows.filter((_, j) => j !== i))
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={momentum.length >= 20}
+                  onClick={() =>
+                    setMomentum((rows) => [
+                      ...rows,
+                      {
+                        symbol: challenge.config.symbols[0]?.symbol ?? "",
+                        sentiment: 0,
+                      },
+                    ])
+                  }
+                >
+                  Add momentum effect
+                </Button>
+              </div>
             )}
             <label className="flex items-center gap-2 pb-2 text-xs text-muted">
               <input

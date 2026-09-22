@@ -1,12 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sigma } from "lucide-react";
-import type { OptionContract, PricePoint } from "@qtp/shared";
+import type {
+  OptionContract,
+  OrderBookSnapshot,
+  Portfolio,
+  PricePoint,
+} from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import { ApiError, post } from "@/lib/api";
+import { Input, Select } from "@/components/ui/Input";
+import { ApiError, get, post } from "@/lib/api";
+import { OrderBook } from "./OrderBook";
+import { optionPhase } from "@/lib/eden";
 import { money } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -29,12 +36,22 @@ export function OptionsPanel({
   challengeId,
   contracts,
   prices,
+  books,
+  portfolio,
+  exerciseWindowSec = 15,
+  maxQuantity = 50,
+  positionCap = 100,
   onChange,
   frozen = false,
 }: {
   challengeId: string;
   contracts: OptionContract[];
   prices: Map<string, PricePoint>;
+  books: Map<string, OrderBookSnapshot>;
+  portfolio: Portfolio | null;
+  exerciseWindowSec?: number;
+  maxQuantity?: number;
+  positionCap?: number;
   onChange?: () => void;
   frozen?: boolean;
 }) {
@@ -42,10 +59,69 @@ export function OptionsPanel({
   const [qty, setQty] = useState("1");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [type, setType] = useState<"limit" | "market">("limit");
+  const [price, setPrice] = useState("");
+  const [now, setNow] = useState(Date.now());
+  const [restBook, setRestBook] = useState<OrderBookSnapshot>();
+  const contract = contracts.find((c) => c.symbol === selected);
+  const phase = contract ? optionPhase(contract, exerciseWindowSec, now) : null;
+  const held =
+    portfolio?.positions.find((p) => p.symbol === selected)?.quantity ?? 0;
+  const quantity = Number(qty);
+  const validQty = Number.isInteger(quantity) && quantity > 0;
+  const validPrice =
+    type === "market" ||
+    (price.trim() !== "" &&
+      Number.isFinite(Number(price)) &&
+      Number(price) > 0);
 
-  const inWindow = contracts.some((c) => c.status === "exercise_window");
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 200);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    setRestBook(undefined);
+    setPrice("");
+    setError(null);
+    setMessage(null);
+    if (!selected) return;
+    let cancelled = false;
+    const load = () =>
+      get<OrderBookSnapshot>(
+        `/api/market/${challengeId}/${encodeURIComponent(selected)}/orderbook`,
+      )
+        .then((book) => {
+          if (!cancelled) setRestBook(book);
+        })
+        .catch(() => {
+          if (!cancelled)
+            setError("Could not refresh depth. Live depth may be delayed.");
+        });
+    void load();
+    const timer = setInterval(load, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [challengeId, selected]);
+
+  const inWindow = contracts.some(
+    (c) => optionPhase(c, exerciseWindowSec, now).exercisable,
+  );
 
   async function trade(symbol: string, side: "buy" | "sell") {
+    if (
+      !contract ||
+      !optionPhase(contract, exerciseWindowSec, Date.now()).tradable ||
+      !validQty ||
+      quantity > maxQuantity ||
+      !validPrice ||
+      frozen ||
+      busy
+    )
+      return;
     setError(null);
     setBusy(true);
     try {
@@ -53,9 +129,11 @@ export function OptionsPanel({
         challengeId,
         symbol,
         side,
-        type: "market",
-        quantity: Number(qty) || 1,
+        type,
+        quantity,
+        ...(type === "limit" ? { price: Number(price) } : {}),
       });
+      setMessage("Order submitted. Check working orders and fills below.");
       onChange?.();
     } catch (err) {
       setError(errText(err, "Order failed"));
@@ -65,14 +143,24 @@ export function OptionsPanel({
   }
 
   async function exercise(symbol: string) {
+    if (
+      !contract ||
+      !optionPhase(contract, exerciseWindowSec, Date.now()).exercisable ||
+      !validQty ||
+      quantity > held ||
+      frozen ||
+      busy
+    )
+      return;
     setError(null);
     setBusy(true);
     try {
       await post(`/api/options/exercise`, {
         challengeId,
         symbol,
-        quantity: Number(qty) || 1,
+        quantity,
       });
+      setMessage("Exercise submitted. Awaiting settlement confirmation.");
       onChange?.();
     } catch (err) {
       setError(errText(err, "Exercise failed"));
@@ -112,6 +200,9 @@ export function OptionsPanel({
                 <th className="px-2.5 py-1.5 text-left font-medium">Series</th>
                 <th className="px-2.5 py-1.5 text-right font-medium">Strike</th>
                 <th className="px-2.5 py-1.5 text-right font-medium">Mark</th>
+                <th className="px-2.5 py-1.5 text-right font-medium">
+                  Deadline
+                </th>
                 <th className="px-2.5 py-1.5 text-right font-medium">
                   Intrinsic
                 </th>
@@ -161,6 +252,16 @@ export function OptionsPanel({
                     <td className="px-2.5 py-1.5 text-right mono">
                       {mark != null ? money(mark) : "—"}
                     </td>
+                    <td className="px-2.5 py-1.5 text-right mono text-muted">
+                      {optionPhase(c, exerciseWindowSec, now).tradable
+                        ? `Expiry ${Math.max(0, Math.ceil((Date.parse(c.expiresAt) - now) / 1000))}s`
+                        : now <
+                              Date.parse(c.expiresAt) +
+                                exerciseWindowSec * 1000 &&
+                            c.status !== "expired"
+                          ? `Exercise ${Math.max(0, Math.ceil((Date.parse(c.expiresAt) + exerciseWindowSec * 1000 - now) / 1000))}s`
+                          : "Expired"}
+                    </td>
                     <td
                       className={cn(
                         "px-2.5 py-1.5 text-right mono",
@@ -177,12 +278,49 @@ export function OptionsPanel({
         </div>
       )}
 
-      {selected && (
+      {selected && contract && (
         <div className="border-t border-border p-3">
           <div className="mb-2 flex items-center justify-between text-[11px] text-faint">
             <span className="mono break-all text-muted">{selected}</span>
           </div>
+          <p className="mb-2 text-xs text-muted">
+            Held: <span className="mono">{held}</span>. Manual exercise only,
+            within {exerciseWindowSec}s of expiry. Missed contracts expire
+            worthless. Assignment can breach inventory limits; restore capacity
+            within 30s.
+          </p>
+          <p className="mb-2 text-xs text-faint">
+            Expires {new Date(contract.expiresAt).toLocaleTimeString()};
+            exercise closes {new Date(phase!.deadline).toLocaleTimeString()}.
+          </p>
+          <p className="mb-2 text-xs text-faint">
+            Orders: 1-{maxQuantity} whole units. Inventory cap: +/-{positionCap}
+            . Exercise up to {Math.max(0, held)} held contracts;{" "}
+            {contract.optionType === "call" ? "receive" : "deliver"}{" "}
+            {contract.underlying} at strike {money(contract.strike)}.
+          </p>
           <div className="flex flex-wrap gap-2">
+            <Select
+              aria-label="Option order type"
+              value={type}
+              onChange={(e) => setType(e.target.value as "limit" | "market")}
+              className="w-28"
+            >
+              <option value="limit">Limit</option>
+              <option value="market">Market</option>
+            </Select>
+            {type === "limit" && (
+              <Input
+                aria-label="Option limit price"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                placeholder="Price"
+                className="mono w-28"
+              />
+            )}
             <Input
               type="number"
               min={1}
@@ -195,7 +333,13 @@ export function OptionsPanel({
               variant="buy"
               size="sm"
               loading={busy}
-              disabled={frozen}
+              disabled={
+                frozen ||
+                !phase?.tradable ||
+                !validQty ||
+                quantity > maxQuantity ||
+                !validPrice
+              }
               onClick={() => trade(selected, "buy")}
             >
               Buy
@@ -204,7 +348,13 @@ export function OptionsPanel({
               variant="sell"
               size="sm"
               loading={busy}
-              disabled={frozen}
+              disabled={
+                frozen ||
+                !phase?.tradable ||
+                !validQty ||
+                quantity > maxQuantity ||
+                !validPrice
+              }
               onClick={() => trade(selected, "sell")}
             >
               Sell
@@ -214,21 +364,37 @@ export function OptionsPanel({
               size="sm"
               loading={busy}
               disabled={
-                frozen ||
-                contracts.find((c) => c.symbol === selected)?.status !==
-                  "exercise_window"
+                frozen || !phase?.exercisable || !validQty || quantity > held
               }
               onClick={() => exercise(selected)}
             >
               Exercise
             </Button>
           </div>
+          {message && (
+            <p role="status" className="mt-2 text-xs text-up">
+              {message}
+            </p>
+          )}
           {error && (
             <p role="alert" className="mt-2 text-xs text-down">
               {error}
             </p>
           )}
         </div>
+      )}
+      {selected && contract && (
+        <OrderBook
+          embedded
+          snapshot={
+            books.get(selected) ??
+            (restBook?.symbol === selected ? restBook : undefined)
+          }
+          onPick={(p) => {
+            setPrice(p.toFixed(2));
+            setType("limit");
+          }}
+        />
       )}
     </Panel>
   );

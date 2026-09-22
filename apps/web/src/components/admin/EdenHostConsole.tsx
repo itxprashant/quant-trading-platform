@@ -12,6 +12,8 @@ import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
 import { get, post } from "@/lib/api";
+import { otcNetCash } from "@/lib/eden";
+import { money } from "@/lib/format";
 
 interface EtfView {
   symbol: string;
@@ -213,6 +215,15 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
         <section className="min-w-0 border-t border-border pt-5">
           <OtcBuilder
             challenge={challenge}
+            symbols={Array.from(
+              new Set([
+                ...challenge.config.symbols.map((s) => s.symbol),
+                ...etfs.map((e) => e.symbol),
+                ...contracts
+                  .filter((c) => c.status === "open")
+                  .map((c) => c.symbol),
+              ]),
+            )}
             onSent={() => setMsg("OTC offer sent")}
           />
         </section>
@@ -242,18 +253,19 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
 
 function OtcBuilder({
   challenge,
+  symbols,
   onSent,
 }: {
   challenge: Challenge;
+  symbols: string[];
   onSent: () => void;
 }) {
   const challengeId = challenge.id;
-  const symbols = challenge.config.symbols.map((s) => s.symbol);
   const [traders, setTraders] = useState<LeaderboardEntry[]>([]);
   const [userId, setUserId] = useState("");
   const [description, setDescription] = useState("");
   const [cashToTrader, setCashToTrader] = useState("0");
-  const [expiresSec, setExpiresSec] = useState("20");
+  const [expiresSec, setExpiresSec] = useState("15");
   const [legs, setLegs] = useState<OtcLeg[]>([
     { symbol: symbols[0] ?? "", quantity: 1, price: 100 },
   ]);
@@ -321,7 +333,10 @@ function OtcBuilder({
             ))}
           </Select>
         </Field>
-        <Field label="Cash to trader">
+        <Field
+          label="Cash adjustment"
+          hint="Added after signed leg costs, not the total settlement."
+        >
           <Input
             type="number"
             step="0.01"
@@ -444,6 +459,13 @@ function OtcBuilder({
           Send offer
         </Button>
       </div>
+      <p className="text-xs text-muted">
+        Net cash to trader:{" "}
+        <span className="mono">
+          {money(otcNetCash(Number(cashToTrader), legs))}
+        </span>
+        . Acceptance is binding; accepted bargains settle after 5 seconds.
+      </p>
       {error && (
         <p role="alert" className="text-xs text-down">
           {error}
@@ -473,8 +495,8 @@ function OpsControls({
   const [grantDesc, setGrantDesc] = useState(
     "Largest holder at the deadline wins the grant.",
   );
-  const [grantPrize, setGrantPrize] = useState("5000");
-  const [grantSec, setGrantSec] = useState("120");
+  const [grantPrize, setGrantPrize] = useState("10000");
+  const [grantSec, setGrantSec] = useState("300");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -538,6 +560,13 @@ function OpsControls({
       <div className="space-y-1.5">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted">
           Premium auction
+        </p>
+        <p className="text-xs text-muted">
+          Top {(challenge.config.eden?.auctionWinnerFraction ?? 0.3) * 100}% of
+          active bidders pay their own bid. Publish the cutoff after close.
+          Access lasts {challenge.config.eden?.premiumAccessMinutes ?? 15}{" "}
+          minutes with a {challenge.config.eden?.premiumLeadSec ?? 10}s news
+          lead.
         </p>
         <div className="grid grid-cols-[100px_1fr] items-end gap-2">
           <Field label="Duration (s)">

@@ -23,6 +23,7 @@
     "db:migrate": "tsx src/migrate.ts",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx src/seed.ts",
+    "db:backfill-eden": "tsx src/backfill-eden.ts",
     "lint": "echo \"(lint placeholder)\""
   },
   "dependencies": {

@@ -44,6 +44,10 @@ export class OrderBook {
     return this.index.has(orderId);
   }
 
+  orders(): RestingOrder[] {
+    return [...this.index.values()].map((order) => ({ ...order }));
+  }
+
   getOwner(orderId: string): string | undefined {
     return this.index.get(orderId)?.userId;
   }
@@ -70,10 +74,12 @@ export class OrderBook {
 
   /** Insert an order as resting liquidity. */
   add(order: RestingOrder): void {
+    if (this.index.has(order.id)) throw new Error("Duplicate resting order");
     const levels = order.side === "buy" ? this.bidLevels : this.askLevels;
     const queue = levels.get(order.price);
     if (queue) {
       queue.push(order);
+      queue.sort((a, b) => a.seq - b.seq);
     } else {
       levels.set(order.price, [order]);
       this.insertPrice(order.side, order.price);
@@ -101,8 +107,7 @@ export class OrderBook {
 
   /** Peek at the best resting order on a side without removing it. */
   peekBest(side: OrderSide): RestingOrder | undefined {
-    const price =
-      side === "buy" ? this.bidPrices[0] : this.askPrices[0];
+    const price = side === "buy" ? this.bidPrices[0] : this.askPrices[0];
     if (price === undefined) return undefined;
     const levels = side === "buy" ? this.bidLevels : this.askLevels;
     return levels.get(price)?.[0];

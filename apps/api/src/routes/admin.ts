@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
@@ -5,6 +6,9 @@ import {
   bondHoldings,
   challengeNews,
   challenges,
+  engineCheckpoints,
+  eventActions,
+  fairValues,
   grantMissions,
   loans,
   optionContracts,
@@ -13,11 +17,14 @@ import {
   otcOffers,
   participants,
   positions,
+  scoreSnapshots,
   trades,
   users,
   voteProposals,
 } from "@qtp/db";
 import {
+  EDEN_EVENT_AERIUM,
+  EDEN_EVENT_OPTIONS,
   zCreateOtcInput,
   zEdenConfig,
   zEdenOptionsConfig,
@@ -29,8 +36,6 @@ import {
 } from "@qtp/shared";
 import { redisKeys } from "@qtp/shared";
 import {
-  clearNewsFeed,
-  clearTraderMetrics,
   getFairValues,
   publishBroadcast,
   publishCommand,
@@ -89,7 +94,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     if (!body) return;
     await app.redis
       .pipeline()
-      .set(`qtp:drift_target:${challengeId}:${body.symbol}`, String(body.target))
+      .set(
+        `qtp:drift_target:${challengeId}:${body.symbol}`,
+        String(body.target),
+      )
       .set(`qtp:drift_speed:${challengeId}:${body.symbol}`, String(body.speed))
       .exec();
     return { ok: true };
@@ -131,15 +139,28 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         columns: { displayName: true },
       });
 
-      const embargoUntil =
-        body.embargoSec && body.embargoSec > 0
-          ? new Date(Date.now() + body.embargoSec * 1000)
-          : null;
-
       // Future publish time keeps the item dormant until the engine publishes
       // it (see ChallengeRunner news scheduler). Past/now publishes immediately.
+      const now = Date.now();
       const publishAt = body.publishAt ? new Date(body.publishAt) : null;
-      const scheduled = publishAt != null && publishAt.getTime() > Date.now();
+      const scheduled = publishAt != null && publishAt.getTime() > now;
+      const embargoSec =
+        body.embargoSec ??
+        (challenge.type === "new_eden" && body.feed === "news" ? 10 : 0);
+      const embargoUntil =
+        embargoSec > 0
+          ? new Date(
+              (scheduled ? publishAt.getTime() : now) + embargoSec * 1000,
+            )
+          : null;
+      const momentum = body.momentum?.length
+        ? body.momentum
+        : (body.fvEffects ?? [])
+            .filter((e) => e.delta !== 0)
+            .map((e) => ({
+              symbol: e.symbol,
+              sentiment: Math.sign(e.delta),
+            }));
 
       const [row] = await app.db
         .insert(challengeNews)
@@ -150,9 +171,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           feed: body.feed,
           kind: body.kind,
           fvEffects: body.fvEffects ?? null,
+          momentum,
+          volEvent: !!body.volEvent,
+          effectsAppliedAt: null,
           embargoUntil,
           publishAt,
-          publishedAt: scheduled ? null : new Date(),
+          publishedAt: scheduled ? null : new Date(now),
           createdBy: req.user.sub,
         })
         .returning();
@@ -173,44 +197,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         { target: "all", msg: { type: "news", challengeId, data: item } },
       ]);
 
-      // Signal news moves fair value via the engine command stream.
-      if (
-        body.kind === "signal" &&
-        body.fvEffects &&
-        body.fvEffects.length > 0
-      ) {
-        const cmd: EngineCommand = {
-          type: "apply_fv_delta",
-          challengeId,
-          effects: body.fvEffects,
-          ts: Date.now(),
-        };
-        await publishCommand(app.redis, challengeId, cmd);
-      }
-
-      // Broadcast a momentum pulse so the bot ecosystem reacts. Explicit
-      // momentum wins; otherwise derive direction from the signal's FV deltas
-      // (NOISE headlines carry no fvEffects, so the host supplies momentum to
-      // make the retail bots overreact while fair value stays put).
-      const momentum =
-        body.momentum && body.momentum.length > 0
-          ? body.momentum
-          : (body.fvEffects ?? [])
-              .filter((e) => e.delta !== 0)
-              .map((e) => ({
-                symbol: e.symbol,
-                sentiment: Math.sign(e.delta),
-              }));
-      if (momentum.length > 0 || body.volEvent) {
-        const pulse: EngineCommand = {
-          type: "news_pulse",
-          challengeId,
-          effects: momentum,
-          volEvent: !!body.volEvent,
-          ts: Date.now(),
-        };
-        await publishCommand(app.redis, challengeId, pulse);
-      }
+      // The runner polls published, unapplied rows and applies FV/momentum only
+      // after embargoUntil, recording effectsAppliedAt for restart recovery.
 
       return { item };
     },
@@ -245,11 +233,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   // Halt matching on a live challenge without stopping the engine.
   app.post("/:challengeId/freeze", async (req, reply) => {
     const { challengeId } = req.params as { challengeId: string };
-    const body = validate(
-      z.object({ frozen: z.boolean() }),
-      req.body,
-      reply,
-    );
+    const body = validate(z.object({ frozen: z.boolean() }), req.body, reply);
     if (!body) return;
     const challenge = await app.db.query.challenges.findFirst({
       where: eq(challenges.id, challengeId),
@@ -308,7 +292,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       reply,
     );
     if (!body) return;
-    await setSymbolTradeable(app.redis, challengeId, body.symbol, body.tradeable);
+    await setSymbolTradeable(
+      app.redis,
+      challengeId,
+      body.symbol,
+      body.tradeable,
+    );
     await publishBroadcast(app.redis, challengeId, [
       {
         target: "all",
@@ -413,54 +402,72 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, symbol: body.symbol };
   });
 
-  // Open a fresh options cycle. With no underlying, opens on all configured
-  // underlyings (New Eden); with an underlying, opens a single cycle on it and
-  // (for non-Eden challenges) persists the options config so it survives a
-  // restart.
+  // Always persist enabled options; an omitted underlying uses the configured list.
   app.post("/:challengeId/options/open", async (req, reply) => {
     const { challengeId } = req.params as { challengeId: string };
     const body = validate(
-      z.object({ underlying: z.string().optional() }),
+      z.object({ underlying: z.string().trim().min(1).optional() }),
       req.body ?? {},
       reply,
     );
     if (!body) return;
 
-    if (body.underlying) {
-      const challenge = await app.db.query.challenges.findFirst({
-        where: eq(challenges.id, challengeId),
-      });
-      if (!challenge) return reply.code(404).send({ error: "not_found" });
+    const result = await app.db.transaction(async (tx) => {
+      const [challenge] = await tx
+        .select()
+        .from(challenges)
+        .where(eq(challenges.id, challengeId))
+        .for("update");
+      if (!challenge) return { error: "not_found" } as const;
       const eden = challenge.config.eden ?? zEdenConfig.parse({});
       const opts =
         eden.options ??
         zEdenOptionsConfig.parse({ enabled: true, autoCycle: false });
       const underlyings = Array.from(
-        new Set([...(opts.underlyings ?? []), body.underlying]),
+        new Set([
+          ...(opts.underlyings ?? []),
+          ...(body.underlying ? [body.underlying] : []),
+        ]),
       );
+      if (
+        underlyings.length === 0 ||
+        underlyings.some((symbol) => !symbol.trim())
+      ) {
+        return { error: "invalid_underlyings" } as const;
+      }
       const config: ChallengeConfig = {
         ...challenge.config,
         eden: {
           ...eden,
-          options: { ...opts, enabled: true, underlyings, autoCycle: false },
+          options: {
+            ...opts,
+            enabled: true,
+            underlyings,
+            ...(body.underlying ? { autoCycle: false } : {}),
+          },
         },
       };
-      await app.db
+      await tx
         .update(challenges)
         .set({ config })
         .where(eq(challenges.id, challengeId));
-    }
+      return { challengeId: challenge.id };
+    });
+    if ("error" in result)
+      return reply
+        .code(result.error === "not_found" ? 404 : 400)
+        .send({ error: result.error });
 
     const cmd: EngineCommand = {
       type: "open_option_cycle",
-      challengeId,
+      challengeId: result.challengeId,
       cycleId: "",
       underlying: body.underlying ?? "",
       strikes: [],
       expiresAt: 0,
       ts: Date.now(),
     };
-    await publishCommand(app.redis, challengeId, cmd);
+    await publishCommand(app.redis, result.challengeId, cmd);
     return { ok: true };
   });
 
@@ -514,7 +521,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       createdAt: row!.createdAt.toISOString(),
     };
     await publishBroadcast(app.redis, challengeId, [
-      { target: body.userId, msg: { type: "otc_offer", challengeId, data: offer } },
+      {
+        target: body.userId,
+        msg: { type: "otc_offer", challengeId, data: offer },
+      },
     ]);
     return { offer };
   });
@@ -554,6 +564,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       reply,
     );
     if (!body) return;
+    if (
+      challenge.status !== "live" ||
+      (challenge.endsAt && challenge.endsAt.getTime() <= Date.now())
+    ) {
+      return reply.code(409).send({ error: "challenge_not_live" });
+    }
     const durationSec =
       body.durationSec ?? challenge.config.eden?.auctionDurationSec ?? 30;
     const expiresAt = new Date(Date.now() + durationSec * 1000);
@@ -722,67 +738,197 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // Reset trading state for a single challenge (orders, trades, positions, prices).
   app.post("/:challengeId/reset", async (req, reply) => {
-    const { challengeId } = req.params as { challengeId: string };
+    const { challengeId: requestedId } = req.params as { challengeId: string };
     const challenge = await app.db.query.challenges.findFirst({
-      where: eq(challenges.id, challengeId),
+      where: eq(challenges.id, requestedId),
     });
     if (!challenge) return reply.code(404).send({ error: "not_found" });
+    const challengeId = challenge.id;
 
-    await app.db.delete(trades).where(eq(trades.challengeId, challengeId));
-    await app.db.delete(orders).where(eq(orders.challengeId, challengeId));
-    await app.db.delete(positions).where(eq(positions.challengeId, challengeId));
-    await app.db
-      .delete(challengeNews)
-      .where(eq(challengeNews.challengeId, challengeId));
-    // New Eden: clear off-book instruments, deals, and tournament events.
-    await app.db.delete(loans).where(eq(loans.challengeId, challengeId));
-    await app.db.delete(bondHoldings).where(eq(bondHoldings.challengeId, challengeId));
-    await app.db.delete(otcOffers).where(eq(otcOffers.challengeId, challengeId));
-    await app.db
-      .delete(optionContracts)
-      .where(eq(optionContracts.challengeId, challengeId));
-    await app.db.delete(optionCycles).where(eq(optionCycles.challengeId, challengeId));
-    await app.db.delete(auctions).where(eq(auctions.challengeId, challengeId));
-    await app.db
-      .delete(voteProposals)
-      .where(eq(voteProposals.challengeId, challengeId));
-    await app.db
-      .delete(grantMissions)
-      .where(eq(grantMissions.challengeId, challengeId));
-
-    // Reset Redis prices/book to initial config.
-    for (const s of challenge.config.symbols) {
-      await setPrice(app.redis, challengeId, s.symbol, s.initialPrice, Date.now());
-      await app.redis.del(redisKeys.bookSnapshot(challengeId, s.symbol));
-      await app.redis.del(redisKeys.priceHistory(challengeId, s.symbol));
-      await app.redis.del(redisKeys.priceHistoryMid(challengeId, s.symbol));
-      await app.redis.del(redisKeys.fairValue(challengeId, s.symbol));
+    if (challenge.status === "live") {
+      return reply.code(409).send({ error: "pause_before_reset" });
     }
-    await app.redis.del(redisKeys.leaderboard(challengeId));
-    await app.redis.del(redisKeys.fairValueSet(challengeId));
-    await app.redis.del(redisKeys.lockedSymbols(challengeId));
-    await app.redis.del(redisKeys.marketFrozen(challengeId));
-    await app.redis.del(redisKeys.listedSymbols(challengeId));
-    await app.redis.del(redisKeys.etfWindows(challengeId));
-    await app.redis.del(redisKeys.optionContracts(challengeId));
-    await app.redis.del(redisKeys.commandStream(challengeId));
-    await app.redis.del(redisKeys.commandCursor(challengeId));
-    await app.redis.del(redisKeys.eventStream(challengeId));
-    await clearNewsFeed(app.redis, challengeId);
-    await clearTraderMetrics(app.redis, challengeId);
-    // New Eden: clear outstanding loan debt on the participant ledger.
-    await app.db
-      .update(participants)
-      .set({ loanDebt: 0 })
-      .where(eq(participants.challengeId, challengeId));
-    await app.db
-      .update(challenges)
-      .set({ frozen: false })
-      .where(eq(challenges.id, challengeId));
-    await setMarketFrozen(app.redis, challengeId, false);
-    // Signal engines to reload this challenge from scratch.
-    await app.redis.publish(`qtp:control:${challengeId}`, "reset");
+    const lockKey = redisKeys.engineLock(challengeId);
+    const owner = `reset:${randomUUID()}`;
+    if ((await app.redis.set(lockKey, owner, "EX", 120, "NX")) !== "OK") {
+      return reply.code(409).send({
+        error: "engine_still_running",
+        message: "Pause the challenge and retry after its engine has stopped.",
+      });
+    }
+    let lockLost = false;
+    let renewal: Promise<void> | undefined;
+    const renew = async () => {
+      const held = await app.redis.eval(
+        "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('EXPIRE', KEYS[1], 120) end return 0",
+        1,
+        lockKey,
+        owner,
+      );
+      if (held !== 1) lockLost = true;
+      if (lockLost) throw new Error("reset_lock_lost");
+    };
+    const heartbeat = setInterval(() => {
+      if (!renewal)
+        renewal = renew()
+          .catch((error) => {
+            lockLost = true;
+            app.log.error(error, "Reset lease renewal failed");
+          })
+          .finally(() => {
+            renewal = undefined;
+          });
+    }, 10_000);
+    heartbeat.unref();
+    try {
+      const error = await app.db.transaction(async (tx) => {
+        const [current] = await tx
+          .select()
+          .from(challenges)
+          .where(eq(challenges.id, challengeId))
+          .for("update");
+        if (!current) return "not_found";
+        // An admin start that won the row lock before us must prevent reset.
+        if (current.status === "live") return "pause_before_reset";
+        await renew();
+        const config: ChallengeConfig = current.config.eden?.eventScript
+          ? {
+              ...current.config,
+              symbols: [{ ...EDEN_EVENT_AERIUM }],
+              eden: {
+                ...current.config.eden,
+                bonds: [],
+                etfs: [],
+                options: { ...EDEN_EVENT_OPTIONS, enabled: false },
+              },
+            }
+          : current.config;
+        // Hold this row lock until cache cleanup completes, so lifecycle writers
+        // cannot start a new run halfway through the reset.
+        await tx
+          .update(challenges)
+          .set({
+            config,
+            status: "draft",
+            frozen: false,
+          finalizedAt: null,
+          finalResults: null,
+            startsAt: null,
+            endsAt: null,
+          })
+          .where(eq(challenges.id, challengeId));
+        await tx.delete(trades).where(eq(trades.challengeId, challengeId));
+        await tx.delete(orders).where(eq(orders.challengeId, challengeId));
+        await tx
+          .delete(positions)
+          .where(eq(positions.challengeId, challengeId));
+        await tx
+          .delete(challengeNews)
+          .where(eq(challengeNews.challengeId, challengeId));
+        await tx.delete(loans).where(eq(loans.challengeId, challengeId));
+        await tx
+          .delete(bondHoldings)
+          .where(eq(bondHoldings.challengeId, challengeId));
+        await tx
+          .delete(otcOffers)
+          .where(eq(otcOffers.challengeId, challengeId));
+        await tx
+          .delete(optionContracts)
+          .where(eq(optionContracts.challengeId, challengeId));
+        await tx
+          .delete(optionCycles)
+          .where(eq(optionCycles.challengeId, challengeId));
+        // Auction bids and vote ballots cascade with their parent rows.
+        await tx.delete(auctions).where(eq(auctions.challengeId, challengeId));
+        await tx
+          .delete(voteProposals)
+          .where(eq(voteProposals.challengeId, challengeId));
+        await tx
+          .delete(grantMissions)
+          .where(eq(grantMissions.challengeId, challengeId));
+        await tx
+          .delete(engineCheckpoints)
+          .where(eq(engineCheckpoints.challengeId, challengeId));
+        await tx
+          .delete(eventActions)
+          .where(eq(eventActions.challengeId, challengeId));
+        await tx
+          .delete(fairValues)
+          .where(eq(fairValues.challengeId, challengeId));
+        await tx
+          .delete(scoreSnapshots)
+          .where(eq(scoreSnapshots.challengeId, challengeId));
+        await tx
+          .update(participants)
+          .set({
+            cash: config.startingCash,
+            startingCash: config.startingCash,
+            loanDebt: 0,
+          })
+          .where(eq(participants.challengeId, challengeId));
 
-    return { ok: true };
+        // Scan includes expired/dynamically removed instruments and premium flags,
+        // not just the surviving challenge config. Never delete the held lease.
+        for (const prefix of [
+          "price",
+          "phist",
+          "phist-mid",
+          "book",
+          "fv",
+          "premium",
+          "drift_target",
+          "drift_speed",
+        ]) {
+          let cursor = "0";
+          do {
+            await renew();
+            const [next, keys] = await app.redis.scan(
+              cursor,
+              "MATCH",
+              `qtp:${prefix}:${challengeId}:*`,
+              "COUNT",
+              500,
+            );
+            cursor = next;
+            if (keys.length > 0) await app.redis.del(...keys);
+          } while (cursor !== "0");
+        }
+        await app.redis.del(
+          redisKeys.leaderboard(challengeId),
+          redisKeys.newsFeed(challengeId),
+          redisKeys.metrics(challengeId),
+          redisKeys.fairValueSet(challengeId),
+          redisKeys.fairValueSnapshot(challengeId),
+          redisKeys.lockedSymbols(challengeId),
+          redisKeys.marketFrozen(challengeId),
+          redisKeys.listedSymbols(challengeId),
+          redisKeys.etfWindows(challengeId),
+          redisKeys.optionContracts(challengeId),
+          redisKeys.commandStream(challengeId),
+          redisKeys.commandCursor(challengeId),
+          redisKeys.eventStream(challengeId),
+          `qtp:final:${challengeId}`,
+          `qtp:assignment-breaches:${challengeId}`,
+        );
+        await app.redis.srem(redisKeys.activeChallenges, challengeId);
+        // Leave prices empty; the next explicit start seeds the fresh config.
+        await renew();
+        return null;
+      });
+      if (error)
+        return reply.code(error === "not_found" ? 404 : 409).send({ error });
+      return { ok: true };
+    } finally {
+      clearInterval(heartbeat);
+      await renewal;
+      await app.redis
+        .eval(
+          "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
+          1,
+          lockKey,
+          owner,
+        )
+        .catch((error) => app.log.error(error, "Reset lease release failed"));
+    }
   });
 }

@@ -179,9 +179,16 @@ export type EngineCommand =
       ts: number;
     }
   | {
+      type: "resolve_auction";
+      challengeId: string;
+      auctionId: string;
+      ts: number;
+    }
+  | {
       /** Redistribute wealth (solidarity tax) from top to bottom. */
       type: "apply_wealth_tax";
       challengeId: string;
+      proposalId?: string;
       ratePct: number;
       topPct: number;
       bottomPct: number;

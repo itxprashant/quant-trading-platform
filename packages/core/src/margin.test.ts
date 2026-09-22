@@ -25,8 +25,9 @@ function makeEngine(overrides: Partial<EngineConfig> = {}) {
 }
 
 describe("free cash", () => {
-  it("nets cash + market value − loan debt", () => {
-    expect(freeCash({ cash: 100, marketValue: 50, loanDebt: 30 })).toBe(120);
+  it("uses settled cash, not inventory value or outstanding debt", () => {
+    expect(freeCash({ cash: 100, marketValue: 50, loanDebt: 30 })).toBe(100);
+    expect(freeCash({ cash: 0, marketValue: 50000, loanDebt: 0 })).toBe(0);
   });
 
   it("flags a breach at or below threshold", () => {
@@ -77,8 +78,7 @@ describe("engine bank integration", () => {
     e.issueLoan("alice", 500, loanTotalRepay(500, 2));
     expect(e.cashOf("alice")).toBe(10500);
     expect(e.loanDebtOf("alice")).toBe(1000);
-    // free cash already nets the full repay obligation
-    expect(e.freeCashOf("alice")).toBe(10500 - 1000);
+    expect(e.freeCashOf("alice")).toBe(10500);
   });
 
   it("repays loans from cash, capped at outstanding balance", () => {
@@ -153,10 +153,16 @@ describe("engine bank integration", () => {
     // Liquidation of 80 exceeds the 50 qty cap, so it must be forced.
     const cmds = e.liquidationCommands("alice", 3);
     expect(cmds).toHaveLength(1);
-    expect(cmds[0]).toMatchObject({ symbol: "AERIUM", side: "sell", force: true });
+    expect(cmds[0]).toMatchObject({
+      symbol: "AERIUM",
+      side: "sell",
+      force: true,
+    });
     expect(cmds[0]!.quantity).toBe(80);
     // The forced order is accepted (not rejected for exceeding the cap).
     const evts = e.placeOrder(cmds[0]!);
-    expect(evts.some((ev) => ev.type === "order_update" && ev.status === "rejected")).toBe(false);
+    expect(
+      evts.some((ev) => ev.type === "order_update" && ev.status === "rejected"),
+    ).toBe(false);
   });
 });

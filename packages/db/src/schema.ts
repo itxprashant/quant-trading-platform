@@ -15,6 +15,8 @@ import {
 import type {
   ChallengeConfig,
   FvEffect,
+  MomentumEffect,
+  LeaderboardEntry,
   OtcLeg,
   ScoringConfig,
 } from "@qtp/shared";
@@ -41,7 +43,11 @@ export const orderStatusEnum = pgEnum("order_status", [
   "cancelled",
   "rejected",
 ]);
-export const newsLevelEnum = pgEnum("news_level", ["info", "warning", "urgent"]);
+export const newsLevelEnum = pgEnum("news_level", [
+  "info",
+  "warning",
+  "urgent",
+]);
 export const newsKindEnum = pgEnum("news_kind", ["signal", "noise", "neutral"]);
 export const newsFeedEnum = pgEnum("news_feed", ["announcement", "news"]);
 export const loanStatusEnum = pgEnum("loan_status", ["active", "repaid"]);
@@ -95,6 +101,8 @@ export const challenges = pgTable(
     scoring: jsonb("scoring").$type<ScoringConfig>().notNull(),
     startsAt: timestamp("starts_at", { withTimezone: true }),
     endsAt: timestamp("ends_at", { withTimezone: true }),
+    finalizedAt: timestamp("finalized_at", { withTimezone: true }),
+    finalResults: jsonb("final_results").$type<LeaderboardEntry[]>(),
     /** Live-market halt: engine stays up, books stay intact, cancels only. */
     frozen: boolean("frozen").notNull().default(false),
     createdBy: uuid("created_by").references(() => users.id, {
@@ -223,9 +231,7 @@ export const scoreSnapshots = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [
-    index("score_challenge_idx").on(t.challengeId, t.capturedAt),
-  ],
+  (t) => [index("score_challenge_idx").on(t.challengeId, t.capturedAt)],
 );
 
 export const challengeNews = pgTable(
@@ -243,6 +249,9 @@ export const challengeNews = pgTable(
     kind: newsKindEnum("kind").notNull().default("neutral"),
     /** Fair-value adjustments applied by a signal headline. */
     fvEffects: jsonb("fv_effects").$type<FvEffect[]>(),
+    momentum: jsonb("momentum").$type<MomentumEffect[]>(),
+    volEvent: boolean("vol_event").notNull().default(false),
+    effectsAppliedAt: timestamp("effects_applied_at", { withTimezone: true }),
     /** Non-premium traders see this item only after this time. */
     embargoUntil: timestamp("embargo_until", { withTimezone: true }),
     /** Scheduled publish time; item stays dormant until then. Null = immediate. */
@@ -298,6 +307,9 @@ export const loans = pgTable(
     principal: doublePrecision("principal").notNull(),
     totalRepay: doublePrecision("total_repay").notNull(),
     remaining: doublePrecision("remaining").notNull(),
+    installment: doublePrecision("installment").notNull().default(0),
+    nextPaymentAt: timestamp("next_payment_at", { withTimezone: true }),
+    fundedAt: timestamp("funded_at", { withTimezone: true }),
     status: loanStatusEnum("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -326,9 +338,7 @@ export const bondHoldings = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [
-    uniqueIndex("bond_holding_uq").on(t.challengeId, t.userId, t.bondId),
-  ],
+  (t) => [uniqueIndex("bond_holding_uq").on(t.challengeId, t.userId, t.bondId)],
 );
 
 export const optionCycles = pgTable(
@@ -383,7 +393,9 @@ export const otcOffers = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     description: text("description").notNull(),
     legs: jsonb("legs").$type<OtcLeg[]>().notNull(),
+    choices: jsonb("choices").$type<OtcLeg[]>(),
     cashToTrader: doublePrecision("cash_to_trader").notNull(),
+    settleAt: timestamp("settle_at", { withTimezone: true }),
     status: otcStatusEnum("status").notNull().default("pending"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdBy: uuid("created_by").references(() => users.id, {
@@ -489,6 +501,33 @@ export const grantMissions = pgTable(
       .defaultNow(),
   },
   (t) => [index("grant_challenge_idx").on(t.challengeId)],
+);
+
+/** Core state and the consumed command cursor commit with its relational projection. */
+export const engineCheckpoints = pgTable("engine_checkpoints", {
+  challengeId: uuid("challenge_id")
+    .primaryKey()
+    .references(() => challenges.id, { onDelete: "cascade" }),
+  state: jsonb("state").$type<unknown>().notNull(),
+  cursor: text("cursor").notNull().default("0-0"),
+  minuteCount: integer("minute_count").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const eventActions = pgTable(
+  "event_actions",
+  {
+    challengeId: uuid("challenge_id")
+      .notNull()
+      .references(() => challenges.id, { onDelete: "cascade" }),
+    actionId: text("action_id").notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [uniqueIndex("event_action_uq").on(t.challengeId, t.actionId)],
 );
 
 export type User = typeof users.$inferSelect;

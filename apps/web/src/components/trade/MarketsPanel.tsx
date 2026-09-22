@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Landmark } from "lucide-react";
-import type { BondHolding, BondTemplate } from "@qtp/shared";
+import type { BondHolding, BondTemplate, PricePoint } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -25,10 +25,14 @@ interface EtfView {
  */
 export function MarketsPanel({
   challengeId,
+  prices,
+  onSelectSymbol,
   onChange,
   frozen = false,
 }: {
   challengeId: string;
+  prices: Map<string, PricePoint>;
+  onSelectSymbol: (symbol: string) => void;
   onChange?: () => void;
   frozen?: boolean;
 }) {
@@ -37,6 +41,7 @@ export function MarketsPanel({
   const [etfs, setEtfs] = useState<EtfView[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [etfQty, setEtfQty] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
@@ -50,8 +55,11 @@ export function MarketsPanel({
       setTemplates(b.templates);
       setHoldings(b.holdings);
       setEtfs(e.etfs);
+      setRefreshError(null);
     } catch {
-      /* ignore — panel only shows when eden config present */
+      setRefreshError(
+        "Could not refresh bonds and ETF windows. Retrying automatically.",
+      );
     }
   }, [challengeId]);
 
@@ -98,7 +106,7 @@ export function MarketsPanel({
     }
   }
 
-  if (templates.length === 0 && etfs.length === 0) return null;
+  if (templates.length === 0 && etfs.length === 0 && !refreshError) return null;
 
   return (
     <Panel className="flex min-w-0 flex-col overflow-hidden">
@@ -110,6 +118,11 @@ export function MarketsPanel({
         }
       />
       <div className="space-y-4 p-3">
+        {refreshError && (
+          <p role="alert" className="text-xs text-down">
+            {refreshError}
+          </p>
+        )}
         {templates.length > 0 && (
           <div className="space-y-1.5">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-faint">
@@ -117,6 +130,13 @@ export function MarketsPanel({
             </p>
             {templates.map((t) => {
               const held = holdings.find((h) => h.bondId === t.id);
+              const pegPrice = t.peggedYield
+                ? prices.get(t.peggedYield.symbol)?.price
+                : undefined;
+              const currentCoupon =
+                t.peggedYield && pegPrice != null
+                  ? (t.peggedYield.base - pegPrice) / t.peggedYield.divisor
+                  : t.couponPer5Min;
               const coupon =
                 t.couponPer5Min != null
                   ? `${money(t.couponPer5Min)}/5m`
@@ -135,14 +155,36 @@ export function MarketsPanel({
                       {coupon}
                       {held ? ` · held ${held.quantity}` : ""}
                     </p>
+                    {t.peggedYield && (
+                      <p className="mt-1 text-xs text-muted">
+                        ({t.peggedYield.base} - {t.peggedYield.symbol} price) /{" "}
+                        {t.peggedYield.divisor} every 5m. Current:{" "}
+                        <span
+                          className={cn(
+                            "mono",
+                            currentCoupon != null &&
+                              currentCoupon < 0 &&
+                              "text-down",
+                          )}
+                        >
+                          {currentCoupon != null
+                            ? money(currentCoupon)
+                            : "Awaiting price"}
+                        </span>
+                        . Negative coupons debit cash.
+                      </p>
+                    )}
+                    <p className="mt-1 text-xs text-faint">
+                      Limit {t.maxPerUser} per trader
+                      {held ? `; coupons paid ${money(held.couponsPaid)}` : ""}.
+                    </p>
                   </div>
                   <Button
                     variant="secondary"
                     size="sm"
                     loading={busy === `bond:${t.id}`}
                     disabled={
-                      frozen ||
-                      (held != null && held.quantity >= t.maxPerUser)
+                      frozen || (held != null && held.quantity >= t.maxPerUser)
                     }
                     onClick={() => buyBond(t.id)}
                   >
@@ -200,7 +242,21 @@ export function MarketsPanel({
                       )}
                     </div>
                   </div>
+                  <p className="mb-2 text-xs text-muted">
+                    1 {etf.symbol} ={" "}
+                    {etf.basket
+                      .map((leg) => `${leg.weight} ${leg.symbol}`)
+                      .join(" + ")}
+                    . Creation delivers the basket; redemption receives it.
+                  </p>
                   <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => onSelectSymbol(etf.symbol)}
+                    >
+                      Trade book
+                    </Button>
                     <Input
                       type="number"
                       min={1}

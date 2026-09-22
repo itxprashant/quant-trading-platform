@@ -9,7 +9,7 @@ import { cn } from "@/lib/cn";
 function secsLeft(expiresAt: string): number {
   return Math.max(
     0,
-    Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000),
+    Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000),
   );
 }
 
@@ -62,7 +62,7 @@ export function GrantBanner({ grant }: { grant: GrantMission | null }) {
           </span>
         ) : (
           <span className="rounded-md bg-up-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-up">
-            Awarded
+            {grant.status === "awarded" ? "Awarded" : "Awaiting award"}
           </span>
         )}
       </div>

@@ -8,6 +8,7 @@ import type {
   Challenge,
   LeaderboardEntry,
   NewsItem,
+  OrderBookSnapshot,
   Portfolio,
   SymbolConfig,
 } from "@qtp/shared";
@@ -36,6 +37,7 @@ import { DealDesk } from "@/components/trade/DealDesk";
 import { AuctionPanel } from "@/components/trade/AuctionPanel";
 import { VotePanel } from "@/components/trade/VotePanel";
 import { GrantBanner } from "@/components/trade/GrantBanner";
+import { EdenEventProgress } from "@/components/trade/EdenEventProgress";
 import { money, signed, dirClass } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -55,13 +57,15 @@ export default function TradePage() {
   );
   const [restNews, setRestNews] = useState<NewsItem[]>([]);
   const [orderRefresh, setOrderRefresh] = useState(0);
+  const [restBook, setRestBook] = useState<OrderBookSnapshot>();
 
-  const rt = useRealtime(challengeId);
+  const rt = useRealtime(challengeId, challenge?.type === "new_eden");
 
   useEffect(() => {
     let cancelled = false;
     setChallenge(null);
     setLoadError(null);
+    setRestPortfolio(null);
     get<Challenge>(`/api/challenges/${challengeId}`)
       .then((c) => {
         if (cancelled) return;
@@ -83,11 +87,56 @@ export default function TradePage() {
 
   // Initial / refreshed portfolio via REST (WS pushes live updates after).
   useEffect(() => {
+    if (rt.portfolio?.challengeId === challengeId)
+      setRestPortfolio(rt.portfolio);
+  }, [rt.portfolio, challengeId]);
+  useEffect(() => {
     if (!user) return;
+    let cancelled = false;
     get<Portfolio>(`/api/portfolio/${challengeId}`)
-      .then(setRestPortfolio)
+      .then((p) => {
+        if (!cancelled) setRestPortfolio(p);
+      })
       .catch(() => {});
-  }, [challengeId, user, orderRefresh]);
+    return () => {
+      cancelled = true;
+    };
+  }, [challengeId, user, orderRefresh, rt.status, rt.otcResult]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () =>
+      get<Challenge>(`/api/challenges/${challengeId}`)
+        .then((c) => {
+          if (!cancelled) setChallenge(c);
+        })
+        .catch(() => {});
+    const timer = setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [challengeId, rt.status]);
+
+  useEffect(() => {
+    setRestBook(undefined);
+    if (!activeSymbol) return;
+    let cancelled = false;
+    const refresh = () =>
+      get<OrderBookSnapshot>(
+        `/api/market/${challengeId}/${encodeURIComponent(activeSymbol)}/orderbook`,
+      )
+        .then((b) => {
+          if (!cancelled) setRestBook(b);
+        })
+        .catch(() => {});
+    void refresh();
+    const timer = setInterval(refresh, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [challengeId, activeSymbol, rt.status]);
 
   // Refresh open orders + portfolio when an order event arrives.
   useEffect(() => {
@@ -123,32 +172,53 @@ export default function TradePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSymbol, rt.prices.get(activeSymbol)?.price]);
 
-  const portfolio = rt.portfolio ?? restPortfolio;
+  const portfolio = restPortfolio;
 
   // Base config symbols plus any spot/ETF instruments introduced live.
   const tradableSymbols = useMemo<SymbolConfig[]>(() => {
     const base = challenge?.config.symbols ?? [];
+    const etfs = (challenge?.config.eden?.etfs ?? []).map((e) => ({
+      symbol: e.symbol,
+      name: e.name,
+      tickSize: 0.01,
+      volatility: 0,
+      initialPrice: e.basket.reduce(
+        (sum, leg) =>
+          sum +
+          leg.weight *
+            (base.find((s) => s.symbol === leg.symbol)?.initialPrice ?? 0),
+        0,
+      ),
+    }));
     const extra = rt.listedSymbols
       .filter((s) => s.kind === "spot" || s.kind === "etf")
       .filter((s) => !base.some((b) => b.symbol === s.symbol))
       .map(({ kind: _kind, ...cfg }) => cfg);
-    return [...base, ...extra];
+    return Array.from(
+      new Map([...base, ...etfs, ...extra].map((s) => [s.symbol, s])).values(),
+    );
   }, [challenge, rt.listedSymbols]);
 
   const activeCfg = tradableSymbols.find((s) => s.symbol === activeSymbol);
-  const book = rt.books.get(activeSymbol);
+  const book =
+    rt.books.get(activeSymbol) ??
+    (restBook?.symbol === activeSymbol ? restBook : undefined);
   const livePrice = rt.prices.get(activeSymbol);
 
   const metric = challenge?.type === "market_making" ? "score" : "pnl";
   const isEden = challenge?.type === "new_eden";
   const hasOptions = isEden || rt.optionContracts.length > 0;
-  const hasEtfs = isEden || rt.listedSymbols.some((s) => s.kind === "etf");
+  const hasEtfs =
+    isEden ||
+    !!challenge?.config.eden?.etfs?.length ||
+    rt.listedSymbols.some((s) => s.kind === "etf");
 
   const symbolStrip = useMemo(
     () =>
       tradableSymbols.map((s) => {
         const price = rt.prices.get(s.symbol)?.price ?? s.initialPrice;
-        const change = (price - s.initialPrice) / s.initialPrice;
+        const change =
+          s.initialPrice > 0 ? (price - s.initialPrice) / s.initialPrice : 0;
         return { symbol: s.symbol, name: s.name, price, change };
       }),
     [tradableSymbols, rt.prices],
@@ -290,6 +360,9 @@ export default function TradePage() {
             </span>
           </div>
         </header>
+        {isEden && challenge.config.eden?.eventScript && (
+          <EdenEventProgress startsAt={challenge.startsAt} />
+        )}
         {rt.status !== "open" && (
           <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted">
             Live prices may be delayed until the feed reconnects.
@@ -390,6 +463,16 @@ export default function TradePage() {
               challengeId={challengeId}
               symbol={activeSymbol}
               maxQuantity={challenge?.config.maxOrderQuantity ?? 50}
+              minPosition={
+                isEden
+                  ? -(challenge.config.eden?.rules.positionCap ?? 100)
+                  : challenge.config.minPosition
+              }
+              maxPosition={
+                isEden
+                  ? (challenge.config.eden?.rules.positionCap ?? 100)
+                  : challenge.config.maxPosition
+              }
               maxOpenOrders={challenge.config.maxOpenOrders ?? 25}
               refreshKey={orderRefresh}
               price={limitPrice}
@@ -451,6 +534,11 @@ export default function TradePage() {
               challengeId={challengeId}
               portfolio={portfolio}
               multiplier={challenge.config.eden?.rules.loanRepayMultiplier ?? 2}
+              endsAt={challenge.endsAt}
+              carryRate={
+                challenge.config.eden?.rules.costOfCarryPerUnitPerMinute ?? 1
+              }
+              disabled={challenge.status !== "live"}
               onChange={() => setOrderRefresh((n) => n + 1)}
             />
           )}
@@ -466,15 +554,31 @@ export default function TradePage() {
                 challengeId={challengeId}
                 contracts={rt.optionContracts}
                 prices={rt.prices}
+                books={rt.books}
+                portfolio={portfolio}
+                maxQuantity={challenge.config.maxOrderQuantity}
+                positionCap={
+                  challenge.config.eden?.rules.positionCap ??
+                  challenge.config.maxPosition
+                }
+                exerciseWindowSec={
+                  challenge.config.eden?.options?.exerciseWindowSec ?? 15
+                }
                 onChange={() => setOrderRefresh((n) => n + 1)}
-                frozen={marketFrozen}
+                frozen={marketFrozen || challenge.status !== "live"}
               />
             )}
             {hasEtfs && (
               <MarketsPanel
                 challengeId={challengeId}
+                prices={rt.prices}
+                onSelectSymbol={(symbol) => {
+                  setActiveSymbol(symbol);
+                  setLimitPrice("");
+                  window.scrollTo({ top: 0, behavior: "instant" });
+                }}
                 onChange={() => setOrderRefresh((n) => n + 1)}
-                frozen={marketFrozen}
+                frozen={marketFrozen || challenge.status !== "live"}
               />
             )}
           </div>
@@ -485,13 +589,15 @@ export default function TradePage() {
               challengeId={challengeId}
               liveAuction={rt.auction}
               liveWon={rt.auctionWon}
+              connectionStatus={rt.status}
+              terms={challenge.config.eden}
             />
             <VotePanel challengeId={challengeId} liveVote={rt.vote} />
           </div>
         )}
       </main>
 
-      {isEden && <DealDesk offers={rt.otcOffers} />}
+      {isEden && <DealDesk offers={rt.otcOffers} result={rt.otcResult} />}
     </div>
   );
 }

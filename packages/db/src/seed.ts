@@ -1,6 +1,13 @@
 import bcrypt from "bcryptjs";
 import { inArray } from "drizzle-orm";
-import { defaultScoringFor, type ChallengeConfig } from "@qtp/shared";
+import {
+  defaultScoringFor,
+  EDEN_EVENT_AERIUM,
+  EDEN_EVENT_BOTS,
+  EDEN_EVENT_DEFAULTS,
+  EDEN_EVENT_OPTIONS,
+  type ChallengeConfig,
+} from "@qtp/shared";
 import { createDb } from "./client.js";
 import { challenges, participants, users } from "./schema.js";
 
@@ -82,12 +89,10 @@ async function main() {
     autonomousPrice: true,
   };
 
-  const edenConfig: ChallengeConfig = {
-    symbols: [
-      { symbol: "AERIUM", name: "Aerium Dynamics", initialPrice: 1000, volatility: 4, tickSize: 0.5 },
-      { symbol: "HELION", name: "Helion Power", initialPrice: 250, volatility: 1.5, tickSize: 0.1 },
-      { symbol: "VESTA", name: "Vesta Logistics", initialPrice: 80, volatility: 0.8, tickSize: 0.05 },
-    ],
+  const edenConfig: ChallengeConfig & {
+    eden: NonNullable<ChallengeConfig["eden"]> & { eventScript: boolean };
+  } = {
+    symbols: [EDEN_EVENT_AERIUM],
     startingCash: 10000,
     minPosition: -100,
     maxPosition: 100,
@@ -98,6 +103,7 @@ async function main() {
     allowMargin: true,
     autonomousPrice: true,
     eden: {
+      eventScript: true,
       rules: {
         enabled: true,
         costOfCarryPerUnitPerMinute: 1,
@@ -106,49 +112,16 @@ async function main() {
         forcedLiquidation: true,
         positionCap: 100,
       },
-      bots: {
-        hftMarketMakers: 2,
-        momentumTraders: 4,
-        vegaSnipers: 0,
-        parityArbers: 0,
-        spread: 1,
-        quoteSize: 10,
-        intensity: 0.5,
-      },
-      options: {
-        enabled: true,
-        underlyings: ["AERIUM"],
-        cycleMinutes: 5,
-        exerciseWindowSec: 15,
-        autoCycle: true,
-        strikeSteps: 1,
-      },
-      bonds: [
-        { id: "standard", name: "Treasury 5Y", price: 950, faceValue: 1000, couponPer5Min: 10, maxPerUser: 5 },
-        {
-          id: "aerium_pegged",
-          name: "Aerium-Pegged Note",
-          price: 1000,
-          faceValue: 1000,
-          peggedYield: { symbol: "AERIUM", base: 2000, divisor: 10 },
-          maxPerUser: 3,
-        },
-      ],
-      etfs: [
-        {
-          symbol: "ORBITAL",
-          name: "Orbital Index ETF",
-          basket: [
-            { symbol: "AERIUM", weight: 1 },
-            { symbol: "HELION", weight: 2 },
-            { symbol: "VESTA", weight: 4 },
-          ],
-        },
-      ],
-      auctionDurationSec: 30,
-      auctionWinnerFraction: 0.3,
-      premiumLeadSec: 10,
-      premiumAccessMinutes: 15,
+      bots: EDEN_EVENT_BOTS,
+      options: EDEN_EVENT_OPTIONS,
+      // The timeline introduces bonds at minutes 10 and 18.
+      bonds: [],
+      // The timeline lists the 2 AERIUM + 1 NEURO basket at minute 45.
+      etfs: [],
+      auctionDurationSec: EDEN_EVENT_DEFAULTS.auctionDurationSec,
+      auctionWinnerFraction: EDEN_EVENT_DEFAULTS.auctionWinnerFraction,
+      premiumLeadSec: EDEN_EVENT_DEFAULTS.premiumLeadSec,
+      premiumAccessMinutes: EDEN_EVENT_DEFAULTS.premiumAccessMinutes,
     },
   };
 
@@ -179,7 +152,7 @@ async function main() {
         slug: slugify("New Eden Exchange"),
         name: "New Eden Exchange",
         description:
-          "Full-economy tournament: margin & predatory loans, cost of carry, fair value, signal/noise news, options, bonds, ETFs, OTC deals, blind auctions, votes, and grants — all driven live from the host console.",
+          "The New Eden Exchange: a scripted 130-minute tournament with a halftime break, timed asset introductions, news, options, bonds, ETFs, OTC deals, auctions, a policy vote, and a government grant.",
         type: "new_eden",
         status: "scheduled",
         config: edenConfig,

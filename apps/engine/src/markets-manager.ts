@@ -22,6 +22,7 @@ import type {
   EtfConfig,
   SymbolConfig,
 } from "@qtp/shared";
+import type { DbTransaction, Persistence } from "./persistence.js";
 
 /**
  * Bonds + ETFs for New Eden (comp_desc Session 1):
@@ -42,6 +43,11 @@ export class MarketsManager {
   private readonly timers = new Set<NodeJS.Timeout>();
   private running = false;
   private windowLoopStarted = false;
+  private bondWork: Promise<void> = Promise.resolve();
+  private persistence?: Pick<Persistence, "queueWrite" | "markUsers">;
+  private dispatch: (task: () => Promise<void>) => void = (task) => {
+    void task().catch(console.error);
+  };
 
   constructor(
     private readonly engine: ChallengeEngine,
@@ -57,8 +63,8 @@ export class MarketsManager {
       ts: number,
     ) => Promise<void>,
   ) {
-    this.bonds = bonds;
-    this.etfs = etfs;
+    this.bonds = [...bonds];
+    this.etfs = [...etfs];
   }
 
   get hasBonds(): boolean {
@@ -73,8 +79,34 @@ export class MarketsManager {
     return this.bondValue.get(userId) ?? 0;
   }
 
+  setDispatcher(dispatch: (task: () => Promise<void>) => void): void {
+    this.dispatch = dispatch;
+  }
+
+  /** Production must install this before start; emit must flush the queued batch. */
+  setPersistence(
+    persistence: Pick<Persistence, "queueWrite" | "markUsers">,
+  ): void {
+    this.persistence = persistence;
+  }
+
+  private async write(
+    write: (tx: DbTransaction) => Promise<void>,
+  ): Promise<void> {
+    if (this.persistence) this.persistence.queueWrite(write);
+    else await this.db.transaction(write);
+  }
+
+  listBond(template: BondTemplate): boolean {
+    if (this.bonds.some((bond) => bond.id === template.id)) return false;
+    this.bonds.push(template);
+    return true;
+  }
+
   async start(): Promise<void> {
+    if (this.running) return;
     this.running = true;
+    this.bondValue.clear();
     // Restore aggregate bond face value so net worth survives restarts.
     const rows = await this.db
       .select()
@@ -91,6 +123,7 @@ export class MarketsManager {
 
     // List ETFs as tradeable (non-autonomous) instruments around their NAV.
     const now = Date.now();
+    const sequence = this.engine.exportState().bookSequence;
     for (const etf of this.etfs) {
       const nav = this.navOf(etf);
       this.engine.addSymbol(
@@ -103,13 +136,29 @@ export class MarketsManager {
         },
         { autonomous: false },
       );
-      await setPrice(this.redis, this.challenge.id, etf.symbol, Math.max(0.1, nav), now);
-      await setFairValue(this.redis, this.challenge.id, etf.symbol, Math.max(0.1, nav));
+      await setPrice(
+        this.redis,
+        this.challenge.id,
+        etf.symbol,
+        this.engine.getPrice(etf.symbol)!,
+        now,
+      );
+      await setFairValue(
+        this.redis,
+        this.challenge.id,
+        etf.symbol,
+        this.engine.getFairValue(etf.symbol) ??
+          Math.max(0.1, this.navOf(etf, true)),
+      );
+      this.engine.setFairValue(
+        etf.symbol,
+        this.engine.getFairValue(etf.symbol) ??
+          Math.max(0.1, this.navOf(etf, true)),
+      );
       await setBookSnapshot(this.redis, this.challenge.id, {
         symbol: etf.symbol,
-        bids: [],
-        asks: [],
-        sequence: 0,
+        ...this.engine.snapshot(etf.symbol),
+        sequence,
       });
       await addListedSymbol(this.redis, this.challenge.id, etf.symbol);
     }
@@ -136,13 +185,22 @@ export class MarketsManager {
       tickSize: 0.1,
     };
     this.engine.addSymbol(symbolCfg, { autonomous: false });
-    await setPrice(this.redis, this.challenge.id, cfg.symbol, nav, now);
-    await setFairValue(this.redis, this.challenge.id, cfg.symbol, nav);
+    await setPrice(
+      this.redis,
+      this.challenge.id,
+      cfg.symbol,
+      this.engine.getPrice(cfg.symbol)!,
+      now,
+    );
+    const fv =
+      this.engine.getFairValue(cfg.symbol) ??
+      Math.max(0.1, this.navOf(cfg, true));
+    await setFairValue(this.redis, this.challenge.id, cfg.symbol, fv);
+    this.engine.setFairValue(cfg.symbol, fv);
     await setBookSnapshot(this.redis, this.challenge.id, {
       symbol: cfg.symbol,
-      bids: [],
-      asks: [],
-      sequence: 0,
+      ...this.engine.snapshot(cfg.symbol),
+      sequence: this.engine.exportState().bookSequence,
     });
     await addListedSymbol(this.redis, this.challenge.id, cfg.symbol);
     this.ensureWindowLoop();
@@ -152,11 +210,16 @@ export class MarketsManager {
   /** Start the periodic create/redeem window loop once. */
   private ensureWindowLoop(): void {
     if (this.windowLoopStarted || !this.running) return;
+    const eden = this.challenge.config.eden;
+    if (eden && "eventScript" in eden && eden.eventScript === true) return;
     this.windowLoopStarted = true;
     const open = () => {
       if (!this.running || this.etfs.length === 0) return;
-      void this.openWindows();
-      const close = setTimeout(() => void this.closeWindows(), 30_000);
+      this.dispatch(() => this.openWindows());
+      const close = setTimeout(() => {
+        this.timers.delete(close);
+        if (this.running) this.dispatch(() => this.closeWindows());
+      }, 30_000);
       this.timers.add(close);
     };
     const loop = setInterval(open, this.minuteMs * 10);
@@ -170,13 +233,14 @@ export class MarketsManager {
       clearInterval(t);
     }
     this.timers.clear();
+    this.windowLoopStarted = false;
   }
 
   /** Recompute and broadcast ETF NAVs (called on the engine tick). */
   async updateNavs(now: number): Promise<void> {
     const events: EngineEvent[] = [];
     for (const etf of this.etfs) {
-      const nav = Math.max(0.01, this.navOf(etf));
+      const nav = Math.max(0.01, this.navOf(etf, true));
       const fv = this.engine.setFairValue(etf.symbol, nav);
       events.push({
         type: "fair_value",
@@ -190,7 +254,13 @@ export class MarketsManager {
   }
 
   /** Pay bond coupons — called by the runner every 5th game-minute. */
-  async payCoupons(now: number): Promise<void> {
+  payCoupons(now: number): Promise<void> {
+    const work = this.bondWork.then(() => this.payBondCoupons(now));
+    this.bondWork = work.catch(() => {});
+    return work;
+  }
+
+  private async payBondCoupons(now: number): Promise<void> {
     if (this.bonds.length === 0) return;
     const rows = await this.db
       .select()
@@ -198,17 +268,24 @@ export class MarketsManager {
       .where(eq(bondHoldingsT.challengeId, this.challenge.id));
     const touched = new Set<string>();
     const events: EngineEvent[] = [];
+    const payments: Array<{
+      id: string;
+      userId: string;
+      coupon: number;
+      couponsPaid: number;
+    }> = [];
     for (const r of rows) {
       if (r.quantity <= 0) continue;
       const tpl = this.bonds.find((b) => b.id === r.bondId);
       if (!tpl) continue;
       const coupon = this.couponFor(tpl) * r.quantity;
       if (coupon === 0) continue;
-      this.engine.adjustCash(r.userId, coupon);
-      await this.db
-        .update(bondHoldingsT)
-        .set({ couponsPaid: r.couponsPaid + coupon })
-        .where(eq(bondHoldingsT.id, r.id));
+      payments.push({
+        id: r.id,
+        userId: r.userId,
+        coupon,
+        couponsPaid: r.couponsPaid + coupon,
+      });
       touched.add(r.userId);
       events.push({
         type: "alert",
@@ -222,20 +299,45 @@ export class MarketsManager {
         ts: now,
       });
     }
+    if (payments.length === 0) return;
+    await this.write(async (tx) => {
+      for (const payment of payments) {
+        await tx
+          .update(bondHoldingsT)
+          .set({ couponsPaid: payment.couponsPaid })
+          .where(eq(bondHoldingsT.id, payment.id));
+      }
+    });
+    for (const payment of payments)
+      this.engine.adjustCash(payment.userId, payment.coupon);
+    this.persistence?.markUsers([...touched]);
     if (events.length > 0) await this.emit(events);
     await this.refreshPortfolios([...touched], now);
   }
 
   /* ---- Trader commands ---- */
 
-  async purchaseBond(
+  purchaseBond(
+    userId: string,
+    bondId: string,
+    quantity: number,
+    ts: number,
+  ): Promise<void> {
+    const work = this.bondWork.then(() =>
+      this.buyBond(userId, bondId, quantity, ts),
+    );
+    this.bondWork = work.catch(() => {});
+    return work;
+  }
+
+  private async buyBond(
     userId: string,
     bondId: string,
     quantity: number,
     ts: number,
   ): Promise<void> {
     const tpl = this.bonds.find((b) => b.id === bondId);
-    if (!tpl || quantity <= 0) {
+    if (!tpl || !Number.isSafeInteger(quantity) || quantity <= 0) {
       await this.alert(userId, "Unknown bond.", "warning", ts);
       return;
     }
@@ -260,28 +362,33 @@ export class MarketsManager {
       return;
     }
     const cost = tpl.price * quantity;
+    const holdingId = existing[0]?.id;
+    await this.write(async (tx) => {
+      if (holdingId) {
+        await tx
+          .update(bondHoldingsT)
+          .set({ quantity: held + quantity })
+          .where(eq(bondHoldingsT.id, holdingId));
+      } else {
+        await tx.insert(bondHoldingsT).values({
+          challengeId: this.challenge.id,
+          userId,
+          bondId,
+          name: tpl.name,
+          quantity,
+          price: tpl.price,
+          faceValue: tpl.faceValue,
+          couponsPaid: 0,
+        });
+      }
+    });
     this.engine.adjustCash(userId, -cost);
     this.bondValue.set(
       userId,
-      (this.bondValue.get(userId) ?? 0) + tpl.faceValue * quantity,
+      (this.bondValue.get(userId) ?? 0) +
+        (existing[0]?.faceValue ?? tpl.faceValue) * quantity,
     );
-    if (existing[0]) {
-      await this.db
-        .update(bondHoldingsT)
-        .set({ quantity: held + quantity })
-        .where(eq(bondHoldingsT.id, existing[0].id));
-    } else {
-      await this.db.insert(bondHoldingsT).values({
-        challengeId: this.challenge.id,
-        userId,
-        bondId,
-        name: tpl.name,
-        quantity,
-        price: tpl.price,
-        faceValue: tpl.faceValue,
-        couponsPaid: 0,
-      });
-    }
+    this.persistence?.markUsers([userId]);
     await this.alert(
       userId,
       `Bought ${quantity} × ${tpl.name} for $${cost.toFixed(0)}.`,
@@ -299,7 +406,7 @@ export class MarketsManager {
     ts: number,
   ): Promise<void> {
     const etf = this.etfs.find((e) => e.symbol === etfSymbol);
-    if (!etf || quantity <= 0) {
+    if (!etf || !Number.isSafeInteger(quantity) || quantity <= 0) {
       await this.alert(userId, "Unknown ETF.", "warning", ts);
       return;
     }
@@ -313,15 +420,24 @@ export class MarketsManager {
       return;
     }
     const nav = Math.max(0.01, this.navOf(etf));
-    if (action === "create") {
-      this.engine.settleFill(userId, etfSymbol, quantity, nav); // mint @ NAV
-    } else {
-      if (this.engine.positionOf(userId, etfSymbol) < quantity) {
-        await this.alert(userId, "Not enough ETF units to redeem.", "warning", ts);
-        return;
-      }
-      this.engine.settleFill(userId, etfSymbol, -quantity, nav); // burn @ NAV
+    if (
+      !this.engine.exchangeBasket(
+        userId,
+        etfSymbol,
+        etf.basket,
+        action,
+        quantity,
+      )
+    ) {
+      await this.alert(
+        userId,
+        "Basket exchange rejected: insufficient inventory, unavailable component, or position/working-order cap exceeded.",
+        "warning",
+        ts,
+      );
+      return;
     }
+    this.persistence?.markUsers([userId]);
     await this.alert(
       userId,
       `${action === "create" ? "Created" : "Redeemed"} ${quantity} × ${etfSymbol} at NAV $${nav.toFixed(2)}.`,
@@ -366,10 +482,13 @@ export class MarketsManager {
   }
 
   /* ---- Internals ---- */
-  private navOf(etf: EtfConfig): number {
+  private navOf(etf: EtfConfig, fair = false): number {
     const prices: Record<string, number> = {};
     for (const c of etf.basket) {
-      prices[c.symbol] = this.engine.getPrice(c.symbol) ?? 0;
+      prices[c.symbol] =
+        (fair ? this.engine.getFairValue(c.symbol) : undefined) ??
+        this.engine.getPrice(c.symbol) ??
+        0;
     }
     return etfNav(etf.basket, prices);
   }
@@ -389,7 +508,14 @@ export class MarketsManager {
     ts: number,
   ): Promise<void> {
     await this.emit([
-      { type: "alert", challengeId: this.challenge.id, userId, level, message, ts },
+      {
+        type: "alert",
+        challengeId: this.challenge.id,
+        userId,
+        level,
+        message,
+        ts,
+      },
     ]);
   }
 

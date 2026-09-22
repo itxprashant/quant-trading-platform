@@ -1,7 +1,18 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { challenges, otcOffers } from "@qtp/db";
-import { getFairValues, getPrice, publishBroadcast, publishCommand } from "@qtp/bus";
+import {
+  challenges,
+  orders,
+  otcOffers,
+  participants,
+  positions,
+} from "@qtp/db";
+import {
+  getFairValues,
+  getPrice,
+  publishBroadcast,
+  publishCommand,
+} from "@qtp/bus";
 import { bargainRejectProbability } from "@qtp/core";
 import {
   zOtcRespondInput,
@@ -9,6 +20,7 @@ import {
   type OtcOffer,
 } from "@qtp/shared";
 import { validate } from "../util.js";
+import { scheduleEdenResolver } from "../eden-ops.js";
 
 function serializeOffer(row: typeof otcOffers.$inferSelect): OtcOffer {
   return {
@@ -17,10 +29,12 @@ function serializeOffer(row: typeof otcOffers.$inferSelect): OtcOffer {
     userId: row.userId,
     description: row.description,
     legs: row.legs,
+    choices: row.choices ?? undefined,
     cashToTrader: row.cashToTrader,
     status: row.status,
     expiresAt: row.expiresAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
+    settleAt: row.settleAt?.toISOString() ?? null,
   };
 }
 
@@ -31,28 +45,26 @@ function serializeOffer(row: typeof otcOffers.$inferSelect): OtcOffer {
  * likely the desk walks. Accepted deals are binding and settle atomically.
  */
 export async function otcRoutes(app: FastifyInstance): Promise<void> {
-  app.get(
-    "/:challengeId",
-    { preHandler: [app.authenticate] },
-    async (req) => {
-      const { challengeId } = req.params as { challengeId: string };
-      const rows = await app.db
-        .select()
-        .from(otcOffers)
-        .where(
-          and(
-            eq(otcOffers.challengeId, challengeId),
-            eq(otcOffers.userId, req.user.sub),
-            eq(otcOffers.status, "pending"),
-          ),
-        )
-        .orderBy(desc(otcOffers.createdAt))
-        .limit(20);
-      return rows
-        .filter((r) => r.expiresAt.getTime() > Date.now())
-        .map(serializeOffer);
-    },
-  );
+  app.get("/:challengeId", { preHandler: [app.authenticate] }, async (req) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const rows = await app.db
+      .select()
+      .from(otcOffers)
+      .where(
+        and(
+          eq(otcOffers.challengeId, challengeId),
+          eq(otcOffers.userId, req.user.sub),
+          inArray(otcOffers.status, ["pending", "accepted"]),
+        ),
+      )
+      .orderBy(desc(otcOffers.createdAt))
+      .limit(20);
+    return rows
+      .filter(
+        (r) => r.status === "accepted" || r.expiresAt.getTime() > Date.now(),
+      )
+      .map(serializeOffer);
+  });
 
   app.post(
     "/:offerId/respond",
@@ -76,11 +88,35 @@ export async function otcRoutes(app: FastifyInstance): Promise<void> {
         await app.db
           .update(otcOffers)
           .set({ status: "expired" })
-          .where(eq(otcOffers.id, offerId));
+          .where(
+            and(eq(otcOffers.id, offerId), eq(otcOffers.status, "pending")),
+          );
         return reply.code(409).send({ error: "offer_expired" });
       }
 
       const challengeId = offer.challengeId;
+      const challenge = await app.db.query.challenges.findFirst({
+        where: eq(challenges.id, challengeId),
+      });
+      if (
+        !challenge ||
+        challenge.status !== "live" ||
+        (challenge.endsAt && challenge.endsAt.getTime() <= Date.now())
+      ) {
+        return reply.code(409).send({ error: "challenge_not_live" });
+      }
+      const participant = await app.db.query.participants.findFirst({
+        where: and(
+          eq(participants.challengeId, challengeId),
+          eq(participants.userId, req.user.sub),
+        ),
+      });
+      if (!participant) return reply.code(403).send({ error: "not_enrolled" });
+      const pendingClaim = and(
+        eq(otcOffers.id, offerId),
+        eq(otcOffers.status, "pending"),
+        gt(otcOffers.expiresAt, sql`clock_timestamp()`),
+      );
       const broadcastResult = async (status: OtcOffer["status"]) => {
         await publishBroadcast(app.redis, challengeId, [
           {
@@ -95,23 +131,57 @@ export async function otcRoutes(app: FastifyInstance): Promise<void> {
       };
 
       if (input.action === "reject") {
-        await app.db
+        const [claimed] = await app.db
           .update(otcOffers)
           .set({ status: "rejected" })
-          .where(eq(otcOffers.id, offerId));
+          .where(pendingClaim)
+          .returning();
+        if (!claimed)
+          return reply.code(409).send({ error: "offer_not_pending" });
         await broadcastResult("rejected");
         return reply.send({ result: "rejected" });
+      }
+
+      if (challenge.frozen) {
+        return reply.code(409).send({ error: "market_frozen" });
+      }
+
+      let legs = offer.legs;
+      if (offer.choices != null) {
+        const choice = offer.choices.find(
+          (leg) => leg.symbol === input.choiceSymbol,
+        );
+        const quantity = input.choiceQuantity;
+        if (
+          !choice ||
+          quantity == null ||
+          !Number.isInteger(quantity) ||
+          quantity < 1 ||
+          quantity > 50 ||
+          choice.quantity >= 0 ||
+          quantity > -choice.quantity
+        ) {
+          return reply.code(400).send({ error: "invalid_choice" });
+        }
+        // Offer-time prices and maximums are immutable; ignore client-supplied legs/prices.
+        legs = [
+          { symbol: choice.symbol, quantity: -quantity, price: choice.price },
+        ];
+      } else if (input.choiceSymbol != null || input.choiceQuantity != null) {
+        return reply.code(400).send({ error: "choice_not_available" });
       }
 
       let cashToTrader = offer.cashToTrader;
 
       if (input.action === "bargain") {
         const counter = input.counterCash ?? offer.cashToTrader;
+        if (!Number.isFinite(counter))
+          return reply.code(400).send({ error: "invalid_counter" });
         // Fair cash-to-trader makes the legs net-zero at fair value.
         const fvs = await getFairValues(app.redis, challengeId);
         let unitsValue = 0;
         let legCash = 0;
-        for (const leg of offer.legs) {
+        for (const leg of legs) {
           const fv =
             fvs[leg.symbol] ??
             (await getPrice(app.redis, challengeId, leg.symbol)) ??
@@ -125,33 +195,122 @@ export async function otcRoutes(app: FastifyInstance): Promise<void> {
         const underpayPct = surplus > 0 ? surplus / notional : 0;
         const rejectProb = bargainRejectProbability(underpayPct);
         if (Math.random() < rejectProb) {
-          await app.db
+          const [claimed] = await app.db
             .update(otcOffers)
             .set({ status: "rejected" })
-            .where(eq(otcOffers.id, offerId));
+            .where(pendingClaim)
+            .returning();
+          if (!claimed)
+            return reply.code(409).send({ error: "offer_not_pending" });
           await broadcastResult("rejected");
           return reply.send({ result: "rejected", rejectProb });
         }
         cashToTrader = counter;
       }
 
-      // Accept (or successful bargain): binding settlement.
-      await app.db
+      // Preliminary cap check only; the engine rechecks after the bargaining delay.
+      // Cash is deliberately not a guard: an accepted deal can trigger a margin call.
+      if (challenge.type === "new_eden") {
+        const changes = new Map<string, number>();
+        for (const leg of legs)
+          changes.set(
+            leg.symbol,
+            (changes.get(leg.symbol) ?? 0) + leg.quantity,
+          );
+        const cap = challenge.config.eden?.rules.positionCap ?? 100;
+        for (const [symbol, delta] of changes) {
+          if (delta === 0) continue;
+          const [position] = await app.db
+            .select()
+            .from(positions)
+            .where(
+              and(
+                eq(positions.challengeId, challengeId),
+                eq(positions.userId, req.user.sub),
+                eq(positions.symbol, symbol),
+              ),
+            );
+          const side = delta > 0 ? "buy" : "sell";
+          const [working] = await app.db
+            .select({
+              quantity: sql<number>`coalesce(sum(${orders.remainingQuantity}), 0)`,
+            })
+            .from(orders)
+            .where(
+              and(
+                eq(orders.challengeId, challengeId),
+                eq(orders.userId, req.user.sub),
+                eq(orders.symbol, symbol),
+                eq(orders.side, side),
+                inArray(orders.status, ["open", "partially_filled"]),
+              ),
+            );
+          const projected =
+            (position?.quantity ?? 0) +
+            delta +
+            Math.sign(delta) * Number(working?.quantity ?? 0);
+          if (
+            (delta > 0 && projected > cap) ||
+            (delta < 0 && projected < -cap)
+          ) {
+            return reply.code(409).send({ error: "position_cap_exceeded" });
+          }
+        }
+      }
+
+      // Acceptance is binding, but only the engine may mark the deal settled.
+      const [claimed] = await app.db
         .update(otcOffers)
-        .set({ status: "settled", cashToTrader })
-        .where(eq(otcOffers.id, offerId));
+        .set({
+          status: "accepted",
+          legs,
+          cashToTrader,
+          settleAt:
+            input.action === "bargain"
+              ? sql`clock_timestamp() + interval '5 seconds'`
+              : sql`clock_timestamp()`,
+        })
+        .where(
+          and(
+            pendingClaim,
+            sql`exists (select 1 from ${challenges}
+            where ${challenges.id} = ${challengeId}
+              and ${challenges.status} = 'live'
+              and ${challenges.frozen} = false
+              and (${challenges.endsAt} is null or ${challenges.endsAt} > clock_timestamp()))`,
+          ),
+        )
+        .returning();
+      if (!claimed) return reply.code(409).send({ error: "offer_not_pending" });
+      const settleAt = claimed.settleAt!;
       const cmd: EngineCommand = {
         type: "execute_otc",
         challengeId,
         offerId,
         userId: offer.userId,
-        legs: offer.legs,
-        cashToTrader,
+        legs: claimed.legs,
+        cashToTrader: claimed.cashToTrader,
         ts: Date.now(),
       };
-      await publishCommand(app.redis, challengeId, cmd);
-      await broadcastResult("settled");
-      return reply.send({ result: "settled", cashToTrader });
+      // The runner also polls accepted rows, recovering crashes or lost timers.
+      // Notify acceptance before enqueueing; settlement notifications are engine-owned.
+      if (settleAt.getTime() > Date.now()) {
+        scheduleEdenResolver(settleAt.getTime() - Date.now(), async () => {
+          await publishCommand(app.redis, challengeId, {
+            ...cmd,
+            ts: Date.now(),
+          });
+        });
+      } else {
+        await publishCommand(app.redis, challengeId, cmd);
+      }
+      return reply.send({
+        result: "accepted",
+        message: "Awaiting engine reservation; acceptance is provisional.",
+        legs: claimed.legs,
+        cashToTrader: claimed.cashToTrader,
+        settleAt: settleAt.toISOString(),
+      });
     },
   );
 }

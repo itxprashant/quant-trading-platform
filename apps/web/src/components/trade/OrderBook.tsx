@@ -135,9 +135,11 @@ function Side({
 export function OrderBook({
   snapshot,
   onPick,
+  embedded = false,
 }: {
   snapshot?: OrderBookSnapshot;
   onPick?: (price: number) => void;
+  embedded?: boolean;
 }) {
   const bids = cumulative(snapshot?.bids ?? []);
   const asks = cumulative(snapshot?.asks ?? []);
@@ -147,7 +149,12 @@ export function OrderBook({
   const spread = bestBid != null && bestAsk != null ? bestAsk - bestBid : null;
 
   return (
-    <Panel className="flex h-full min-w-0 flex-col overflow-hidden">
+    <Panel
+      className={cn(
+        "flex h-full min-w-0 flex-col overflow-hidden",
+        embedded && "rounded-none border-x-0 border-b-0",
+      )}
+    >
       <PanelHeader title="Order Book">
         {spread != null && (
           <span className="text-xs text-faint">

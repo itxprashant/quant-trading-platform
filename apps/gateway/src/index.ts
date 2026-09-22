@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, or } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -12,9 +12,10 @@ import {
   getPrice,
   hasPremiumAccess,
   isMarketFrozen,
+  isSymbolLocked,
 } from "@qtp/bus";
 import { isNewsEmbargoed, type NewsItem } from "@qtp/shared";
-import { challenges, getDb } from "@qtp/db";
+import { challengeNews, challenges, getDb } from "@qtp/db";
 import type {
   BroadcastEnvelope,
   ClientMessage,
@@ -26,7 +27,9 @@ import { Fanout } from "./fanout.js";
 interface Conn {
   ws: WebSocket;
   userId: string | null;
+  isAdmin: boolean;
   subs: Set<string>;
+  pendingNews: Map<string, ReturnType<typeof setTimeout>>;
   isAlive: boolean;
 }
 
@@ -35,8 +38,6 @@ const redis = createRedis(env.redisUrl);
 
 /** challengeId -> set of connections subscribed to it. */
 const registry = new Map<string, Set<Conn>>();
-/** Cache of challenge symbol lists for snapshot delivery. */
-const symbolCache = new Map<string, string[]>();
 
 const fanout = new Fanout(env.redisUrl, dispatch);
 
@@ -54,7 +55,9 @@ function dispatch(challengeId: string, envelopes: BroadcastEnvelope[]): void {
       env_.msg.type === "news" &&
       isEmbargoed(env_.msg.data, Date.now())
     ) {
-      void dispatchEmbargoedNews(challengeId, conns, env_.msg);
+      void dispatchEmbargoedNews(challengeId, conns, env_.msg).catch(
+        console.error,
+      );
       continue;
     }
     if (env_.target === "all") {
@@ -77,25 +80,36 @@ async function dispatchEmbargoedNews(
   msg: Extract<ServerMessage, { type: "news" }>,
 ): Promise<void> {
   const item = msg.data;
-  const releaseMs = Math.max(
-    0,
-    new Date(item.embargoUntil!).getTime() - Date.now(),
-  );
   for (const conn of conns) {
-    const premium = await hasPremiumAccess(redis, challengeId, conn.userId);
+    const premium =
+      conn.isAdmin || (await hasPremiumAccess(redis, challengeId, conn.userId));
     if (premium) {
-      send(conn, msg);
+      if (conn.subs.has(challengeId)) send(conn, msg);
     } else {
-      // Deliver to non-premium subscribers once the embargo lifts.
-      setTimeout(() => {
-        if (conn.ws.readyState === WebSocket.OPEN) send(conn, msg);
-      }, releaseMs).unref?.();
+      scheduleNews(conn, challengeId, item);
     }
   }
 }
 
+function scheduleNews(conn: Conn, challengeId: string, item: NewsItem): void {
+  const key = `${challengeId}:${item.id}`;
+  if (!conn.subs.has(challengeId) || conn.pendingNews.has(key)) return;
+  const timer = setTimeout(
+    () => {
+      conn.pendingNews.delete(key);
+      if (conn.subs.has(challengeId))
+        send(conn, { type: "news", challengeId, data: item });
+    },
+    Math.max(0, new Date(item.embargoUntil!).getTime() - Date.now()),
+  );
+  timer.unref();
+  conn.pendingNews.set(key, timer);
+}
+
 function send(conn: Conn, msg: ServerMessage): void {
   if (conn.ws.readyState !== WebSocket.OPEN) return;
+  // Host-only information must not leak through live broadcasts or snapshots.
+  if (msg.type === "fair_value" && !conn.isAdmin) return;
   if (conn.ws.bufferedAmount > env.maxBufferedBytes) {
     // Slow consumer: drop the connection rather than buffer unbounded.
     metrics.messagesDropped += 1;
@@ -106,24 +120,46 @@ function send(conn: Conn, msg: ServerMessage): void {
   metrics.messagesSent += 1;
 }
 
-async function symbolsFor(challengeId: string): Promise<string[]> {
-  const cached = symbolCache.get(challengeId);
-  if (cached) return cached;
-  const row = await db.query.challenges.findFirst({
+async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
+  // Read fresh config: symbols and ETFs can be introduced while a game is live.
+  const challenge = await db.query.challenges.findFirst({
     where: eq(challenges.id, challengeId),
   });
-  const symbols = row?.config.symbols.map((s) => s.symbol) ?? [];
-  symbolCache.set(challengeId, symbols);
-  return symbols;
-}
-
-async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
-  const symbols = await symbolsFor(challengeId);
+  const symbols = challenge?.config.symbols.map((s) => s.symbol) ?? [];
   // Include dynamically-listed instruments (options / ETFs) so late joiners
   // see their books and marks too.
   const listed = await getListedSymbols(redis, challengeId);
-  for (const symbol of [...symbols, ...listed]) {
+  for (const symbol of new Set([...symbols, ...listed])) {
     const price = await getPrice(redis, challengeId, symbol);
+    const spot = challenge?.config.symbols.find((s) => s.symbol === symbol);
+    const etf = challenge?.config.eden?.etfs?.find((e) => e.symbol === symbol);
+    if (spot || etf) {
+      let nav = 0;
+      for (const leg of etf?.basket ?? []) {
+        nav +=
+          leg.weight *
+          ((await getPrice(redis, challengeId, leg.symbol)) ??
+            challenge?.config.symbols.find((s) => s.symbol === leg.symbol)
+              ?.initialPrice ??
+            0);
+      }
+      send(conn, {
+        type: "symbol_listed",
+        challengeId,
+        data: {
+          config: spot ?? {
+            symbol,
+            name: etf?.name,
+            initialPrice: Math.max(0.1, price ?? nav),
+            volatility: 0,
+            tickSize: 0.1,
+          },
+          kind: spot ? "spot" : "etf",
+          locked: await isSymbolLocked(redis, challengeId, symbol),
+          ts: Date.now(),
+        },
+      });
+    }
     if (price != null) {
       send(conn, {
         type: "price",
@@ -143,17 +179,50 @@ async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
       data: { contracts, ts: Date.now() },
     });
   }
-  const news = await getNewsFeed(redis, challengeId);
+  let news = await getNewsFeed(redis, challengeId, 50);
+  if (news.length === 0) {
+    const rows = await db
+      .select()
+      .from(challengeNews)
+      .where(
+        and(
+          eq(challengeNews.challengeId, challengeId),
+          or(
+            isNull(challengeNews.publishAt),
+            isNotNull(challengeNews.publishedAt),
+          ),
+        ),
+      )
+      .orderBy(desc(challengeNews.createdAt))
+      .limit(50);
+    news = rows.map((row) => ({
+      id: row.id,
+      challengeId,
+      message: row.message,
+      level: row.level,
+      feed: row.feed,
+      createdAt: row.createdAt.toISOString(),
+      embargoUntil: row.embargoUntil?.toISOString() ?? null,
+    }));
+  }
   if (news.length > 0) {
-    const premium = await hasPremiumAccess(redis, challengeId, conn.userId);
+    const premium =
+      conn.isAdmin || (await hasPremiumAccess(redis, challengeId, conn.userId));
     const visible = premium
       ? news
       : news.filter((n) => !isEmbargoed(n, Date.now()));
     if (visible.length > 0) {
       send(conn, { type: "news_feed", challengeId, data: visible });
     }
+    if (!premium) {
+      for (const item of news) {
+        if (isEmbargoed(item, Date.now()))
+          scheduleNews(conn, challengeId, item);
+      }
+    }
   }
-  // New Eden: deliver current fair values so late joiners see them.
+  if (!conn.isAdmin) return;
+  // Fair values are only for the host console, never the premium trader feed.
   const fvs = await getFairValues(redis, challengeId);
   for (const [symbol, fairValue] of Object.entries(fvs)) {
     send(conn, {
@@ -185,18 +254,28 @@ async function subscribe(conn: Conn, challengeId: string): Promise<void> {
 
 async function unsubscribe(conn: Conn, challengeId: string): Promise<void> {
   if (!conn.subs.delete(challengeId)) return;
+  for (const [key, timer] of conn.pendingNews) {
+    if (key.startsWith(`${challengeId}:`)) {
+      clearTimeout(timer);
+      conn.pendingNews.delete(key);
+    }
+  }
   const set = registry.get(challengeId);
   set?.delete(conn);
   if (set && set.size === 0) registry.delete(challengeId);
   await fanout.remove(challengeId);
 }
 
-function authenticate(url: string): string | null {
+function authenticate(
+  url: string,
+): { userId: string; isAdmin: boolean } | null {
   try {
     const token = new URL(url, "http://localhost").searchParams.get("token");
     if (!token) return null;
-    const payload = jwt.verify(token, env.jwtSecret) as { sub: string };
-    return payload.sub ?? null;
+    const payload = jwt.verify(token, env.jwtSecret);
+    if (typeof payload === "string" || typeof payload.sub !== "string")
+      return null;
+    return { userId: payload.sub, isAdmin: payload.role === "admin" };
   } catch {
     return null;
   }
@@ -245,10 +324,13 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 type AliveWs = WebSocket & { isAlive?: boolean };
 
 wss.on("connection", (ws: AliveWs, req) => {
+  const identity = authenticate(req.url ?? "");
   const conn: Conn = {
     ws,
-    userId: authenticate(req.url ?? ""),
+    userId: identity?.userId ?? null,
+    isAdmin: identity?.isAdmin ?? false,
     subs: new Set(),
+    pendingNews: new Map(),
     isAlive: true,
   };
   ws.isAlive = true;
@@ -268,7 +350,7 @@ wss.on("connection", (ws: AliveWs, req) => {
     }
     switch (msg.type) {
       case "subscribe":
-        void subscribe(conn, msg.challengeId);
+        void subscribe(conn, msg.challengeId).catch(console.error);
         break;
       case "unsubscribe":
         void unsubscribe(conn, msg.challengeId);
@@ -280,7 +362,8 @@ wss.on("connection", (ws: AliveWs, req) => {
   });
 
   ws.on("close", () => {
-    for (const challengeId of [...conn.subs]) void unsubscribe(conn, challengeId);
+    for (const challengeId of [...conn.subs])
+      void unsubscribe(conn, challengeId);
   });
 
   ws.on("error", () => ws.terminate());

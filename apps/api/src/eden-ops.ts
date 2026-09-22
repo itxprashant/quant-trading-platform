@@ -1,28 +1,27 @@
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
-  auctionBids,
   auctions,
-  challenges,
   grantMissions,
+  participants,
+  users,
   voteBallots,
   voteProposals,
 } from "@qtp/db";
-import {
-  grantPremiumAccess,
-  publishBroadcast,
-  publishCommand,
-} from "@qtp/bus";
-import { resolveAuction, tallyVote } from "@qtp/core";
-import type { BroadcastEnvelope, EngineCommand } from "@qtp/shared";
+import { publishBroadcast, publishCommand } from "@qtp/bus";
+import { tallyVote } from "@qtp/core";
+import type { EngineCommand } from "@qtp/shared";
 
 /** Default solidarity-tax brackets when a wealth-tax vote passes. */
-export const WEALTH_TAX = { ratePct: 0.1, topPct: 0.1, bottomPct: 0.2 } as const;
+export const WEALTH_TAX = {
+  ratePct: 0.15,
+  topPct: 0.1,
+  bottomPct: 0.2,
+} as const;
 
 /**
- * Resolve a blind auction round: rank sealed bids, grant the winners premium
- * news access (TTL from challenge config), publish the public cutoff, and notify
- * each bidder of their result. Idempotent — a no-op once the auction is resolved.
+ * The engine owns ranking, atomic payment, entitlements, and result broadcasts.
+ * Repeated requests are safe only when the engine deduplicates by auctionId.
  */
 export async function resolveAuctionRound(
   app: FastifyInstance,
@@ -30,78 +29,19 @@ export async function resolveAuctionRound(
   auctionId: string,
 ): Promise<void> {
   const auction = await app.db.query.auctions.findFirst({
-    where: eq(auctions.id, auctionId),
+    where: and(
+      eq(auctions.id, auctionId),
+      eq(auctions.challengeId, challengeId),
+    ),
   });
   if (!auction || auction.status !== "open") return;
 
-  const challenge = await app.db.query.challenges.findFirst({
-    where: eq(challenges.id, challengeId),
+  await publishCommand(app.redis, challengeId, {
+    type: "resolve_auction",
+    challengeId,
+    auctionId,
+    ts: Date.now(),
   });
-  const eden = challenge?.config.eden;
-  const winnerFraction = eden?.auctionWinnerFraction ?? 0.3;
-  const accessMs = (eden?.premiumAccessMinutes ?? 15) * 60_000;
-
-  const bids = await app.db
-    .select()
-    .from(auctionBids)
-    .where(eq(auctionBids.auctionId, auctionId));
-
-  const { winners, cutoff } = resolveAuction(
-    bids.map((b) => ({ userId: b.userId, amount: b.amount })),
-    winnerFraction,
-  );
-  const winnerSet = new Set(winners);
-
-  await app.db
-    .update(auctions)
-    .set({ status: "resolved", cutoff })
-    .where(eq(auctions.id, auctionId));
-
-  for (const b of bids) {
-    const won = winnerSet.has(b.userId);
-    if (won) {
-      await app.db
-        .update(auctionBids)
-        .set({ won: true })
-        .where(eq(auctionBids.id, b.id));
-      await grantPremiumAccess(app.redis, challengeId, b.userId, accessMs);
-    }
-  }
-
-  // Public cutoff to everyone; per-bidder win/lose result targeted.
-  const envelopes: BroadcastEnvelope[] = [
-    {
-      target: "all",
-      msg: {
-        type: "auction",
-        challengeId,
-        data: {
-          id: auctionId,
-          challengeId,
-          status: "resolved",
-          expiresAt: auction.expiresAt.toISOString(),
-          cutoff,
-          createdAt: auction.createdAt.toISOString(),
-        },
-      },
-    },
-  ];
-  for (const b of bids) {
-    envelopes.push({
-      target: b.userId,
-      msg: {
-        type: "auction_result",
-        challengeId,
-        data: {
-          auctionId,
-          cutoff,
-          won: winnerSet.has(b.userId),
-          ts: Date.now(),
-        },
-      },
-    });
-  }
-  await publishBroadcast(app.redis, challengeId, envelopes);
 }
 
 /**
@@ -113,23 +53,57 @@ export async function closeVote(
   challengeId: string,
   proposalId: string,
 ): Promise<void> {
-  const proposal = await app.db.query.voteProposals.findFirst({
-    where: eq(voteProposals.id, proposalId),
+  const closed = await app.db.transaction(async (tx) => {
+    const [proposal] = await tx
+      .select()
+      .from(voteProposals)
+      .where(
+        and(
+          eq(voteProposals.id, proposalId),
+          eq(voteProposals.challengeId, challengeId),
+        ),
+      )
+      .for("update");
+    if (!proposal || proposal.status !== "open") return null;
+    const ballots = await tx
+      .select({ choice: voteBallots.choice })
+      .from(voteBallots)
+      .innerJoin(
+        participants,
+        and(
+          eq(participants.userId, voteBallots.userId),
+          eq(participants.challengeId, challengeId),
+        ),
+      )
+      .innerJoin(users, eq(users.id, voteBallots.userId))
+      .where(
+        and(eq(voteBallots.proposalId, proposalId), eq(users.role, "trader")),
+      );
+    const { passed } = tallyVote(
+      ballots.map((b) => (b.choice === "yes" ? "yes" : "no")),
+    );
+    const [claimed] = await tx
+      .update(voteProposals)
+      .set({ status: passed ? "passed" : "failed" })
+      .where(
+        and(eq(voteProposals.id, proposalId), eq(voteProposals.status, "open")),
+      )
+      .returning();
+    return claimed ? { proposal, ballots, passed } : null;
   });
-  if (!proposal || proposal.status !== "open") return;
+  if (!closed) return;
+  const { proposal, ballots, passed } = closed;
 
-  const ballots = await app.db
-    .select()
-    .from(voteBallots)
-    .where(eq(voteBallots.proposalId, proposalId));
-  const { passed } = tallyVote(
-    ballots.map((b) => (b.choice === "yes" ? "yes" : "no")),
-  );
-
-  await app.db
-    .update(voteProposals)
-    .set({ status: passed ? "passed" : "failed" })
-    .where(eq(voteProposals.id, proposalId));
+  // Persisted passed proposals also let the runner recover a failed enqueue.
+  if (passed && proposal.kind === "wealth_tax") {
+    await publishCommand(app.redis, challengeId, {
+      type: "apply_wealth_tax",
+      challengeId,
+      proposalId,
+      ...WEALTH_TAX,
+      ts: Date.now(),
+    });
+  }
 
   await publishBroadcast(app.redis, challengeId, [
     {
@@ -152,18 +126,6 @@ export async function closeVote(
       },
     },
   ]);
-
-  if (passed && proposal.kind === "wealth_tax") {
-    const cmd: EngineCommand = {
-      type: "apply_wealth_tax",
-      challengeId,
-      ratePct: WEALTH_TAX.ratePct,
-      topPct: WEALTH_TAX.topPct,
-      bottomPct: WEALTH_TAX.bottomPct,
-      ts: Date.now(),
-    };
-    await publishCommand(app.redis, challengeId, cmd);
-  }
 }
 
 /**
@@ -202,8 +164,14 @@ export async function awardGrantMission(
  * Schedule a resolver to run after `ms`. Best-effort in-process timer (single
  * VM); resolvers are idempotent so a missed timer can be retried manually.
  */
-export function scheduleEdenResolver(ms: number, fn: () => Promise<void>): void {
-  setTimeout(() => {
-    fn().catch((err) => console.error("[eden] resolver error", err));
-  }, Math.max(0, ms)).unref?.();
+export function scheduleEdenResolver(
+  ms: number,
+  fn: () => Promise<void>,
+): void {
+  setTimeout(
+    () => {
+      fn().catch((err) => console.error("[eden] resolver error", err));
+    },
+    Math.max(0, ms),
+  ).unref?.();
 }

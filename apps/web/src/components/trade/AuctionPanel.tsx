@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Gavel } from "lucide-react";
-import type { Auction } from "@qtp/shared";
+import type { Auction, EdenConfig } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -19,7 +19,7 @@ interface AuctionView {
 function secsLeft(expiresAt: string): number {
   return Math.max(
     0,
-    Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000),
+    Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000),
   );
 }
 
@@ -32,28 +32,38 @@ export function AuctionPanel({
   challengeId,
   liveAuction,
   liveWon,
+  connectionStatus,
+  terms,
 }: {
   challengeId: string;
   liveAuction: Auction | null;
   liveWon: boolean;
+  connectionStatus: string;
+  terms?: EdenConfig;
 }) {
   const [view, setView] = useState<AuctionView | null>(null);
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [, setNow] = useState(Date.now());
 
   const load = useCallback(async () => {
     try {
       setView(await get<AuctionView>(`/api/auctions/${challengeId}`));
+      setRefreshError(null);
     } catch {
-      /* ignore */
+      setRefreshError(
+        "Could not refresh auction status. Retrying automatically.",
+      );
     }
   }, [challengeId]);
 
   useEffect(() => {
     load();
-  }, [load]);
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
+  }, [load, connectionStatus]);
 
   // Refresh from REST whenever a live auction message changes status/identity.
   useEffect(() => {
@@ -66,10 +76,23 @@ export function AuctionPanel({
   }, []);
 
   // Prefer the freshest of REST + live socket state.
-  const auction = liveAuction ?? view?.auction ?? null;
+  const rest = view?.auction;
+  const auction = !rest
+    ? liveAuction
+    : !liveAuction
+      ? rest
+      : rest.id === liveAuction.id
+        ? rest.status === "resolved"
+          ? rest
+          : liveAuction
+        : Date.parse(rest.createdAt) >= Date.parse(liveAuction.createdAt)
+          ? rest
+          : liveAuction;
   const premium = view?.premium ?? false;
-  const myBid = view?.myBid ?? null;
-  const won = liveWon || myBid?.won || false;
+  const myBid = view?.auction?.id === auction?.id ? view?.myBid : null;
+  const won =
+    (auction?.id === liveAuction?.id && liveWon) || myBid?.won || false;
+  const termsText = `${terms?.auctionDurationSec ?? 30}s sealed bids. Top ${(terms?.auctionWinnerFraction ?? 0.3) * 100}% of active bidders win and pay their own bid. Lowest winning bid is public. Winners receive ${terms?.premiumLeadSec ?? 10}s early news for ${terms?.premiumAccessMinutes ?? 15} minutes.`;
 
   if (!auction) {
     return (
@@ -85,6 +108,12 @@ export function AuctionPanel({
         </PanelHeader>
         <div className="px-3 py-6 text-center text-xs text-faint">
           No auction running. Premium news access is sold in blind rounds.
+          <p className="mt-2">{termsText}</p>
+          {refreshError && (
+            <p role="alert" className="mt-2 text-down">
+              {refreshError}
+            </p>
+          )}
         </div>
       </Panel>
     );
@@ -93,7 +122,12 @@ export function AuctionPanel({
   const open = auction.status === "open" && secsLeft(auction.expiresAt) > 0;
 
   async function bid() {
-    if (!auction) return;
+    if (
+      !auction ||
+      auction.status !== "open" ||
+      Date.now() >= Date.parse(auction.expiresAt)
+    )
+      return;
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       setError("Enter a positive bid");
@@ -134,6 +168,12 @@ export function AuctionPanel({
       </PanelHeader>
 
       <div className="space-y-3 p-3 text-sm">
+        <p className="text-xs text-muted">{termsText}</p>
+        {refreshError && (
+          <p role="alert" className="text-xs text-down">
+            {refreshError}
+          </p>
+        )}
         {open ? (
           <>
             <p className="text-xs text-muted">
@@ -162,6 +202,10 @@ export function AuctionPanel({
               </Button>
             </div>
           </>
+        ) : auction.status === "open" ? (
+          <p role="status" className="text-xs text-warning">
+            Bidding closed. Awaiting cutoff and allocation.
+          </p>
         ) : (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">

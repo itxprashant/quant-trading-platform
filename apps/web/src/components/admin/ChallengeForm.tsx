@@ -16,6 +16,13 @@ import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
 import { ApiError, patch, post } from "@/lib/api";
+import {
+  EDEN_EVENT_AERIUM,
+  EDEN_EVENT_BOTS,
+  EDEN_EVENT_OPTIONS,
+  EDEN_EVENT_DEFAULTS,
+  EDEN_EVENT_DURATION_MINUTES,
+} from "@qtp/shared";
 
 const blankSymbol = (): SymbolConfig => ({
   symbol: "",
@@ -40,8 +47,9 @@ function defaultScoring(type: ChallengeType): ScoringConfig {
 }
 
 /** Sensible New Eden defaults matching comp_desc.txt rules. */
-function defaultEden(): EdenConfig {
+function defaultEden(): EdenConfig & { eventScript?: boolean } {
   return {
+    eventScript: false,
     rules: {
       enabled: true,
       costOfCarryPerUnitPerMinute: 1,
@@ -51,26 +59,18 @@ function defaultEden(): EdenConfig {
       positionCap: 100,
     },
     bots: {
-      hftMarketMakers: 2,
-      momentumTraders: 4,
+      ...EDEN_EVENT_BOTS,
       vegaSnipers: 0,
       parityArbers: 0,
-      spread: 1,
-      quoteSize: 10,
-      intensity: 0.5,
     },
     options: {
-      enabled: false,
+      ...EDEN_EVENT_OPTIONS,
       underlyings: [],
-      cycleMinutes: 5,
-      exerciseWindowSec: 15,
-      autoCycle: true,
-      strikeSteps: 1,
     },
-    auctionDurationSec: 30,
-    auctionWinnerFraction: 0.3,
-    premiumLeadSec: 10,
-    premiumAccessMinutes: 15,
+    auctionDurationSec: EDEN_EVENT_DEFAULTS.auctionDurationSec,
+    auctionWinnerFraction: EDEN_EVENT_DEFAULTS.auctionWinnerFraction,
+    premiumLeadSec: EDEN_EVENT_DEFAULTS.premiumLeadSec,
+    premiumAccessMinutes: EDEN_EVENT_DEFAULTS.premiumAccessMinutes,
   };
 }
 
@@ -107,7 +107,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
       intensity: 0.5,
     },
   );
-  const [eden, setEden] = useState<EdenConfig>(
+  const [eden, setEden] = useState<EdenConfig & { eventScript?: boolean }>(
     existing?.config.eden ?? defaultEden(),
   );
   const [startsAt, setStartsAt] = useState(
@@ -118,6 +118,36 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
   );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  function togglePlaybook(enabled: boolean) {
+    if (!enabled) {
+      setEden((e) => ({ ...e, eventScript: false }));
+      return;
+    }
+    setSymbols([structuredClone(EDEN_EVENT_AERIUM)]);
+    setCfg((c) => ({
+      ...c,
+      startingCash: 10000,
+      minPosition: -100,
+      maxPosition: 100,
+      maxOrderQuantity: 50,
+      maxOpenOrders: 25,
+      maxOrdersPerSecond: 8,
+      maxVolumePerMinute: 1000,
+      allowMargin: true,
+      autonomousPrice: true,
+    }));
+    setBots((b) => ({ ...b, marketMakers: 0, noiseTraders: 0 }));
+    const preset = defaultEden();
+    setEden({
+      ...preset,
+      eventScript: true,
+      bots: structuredClone(EDEN_EVENT_BOTS),
+      options: structuredClone(EDEN_EVENT_OPTIONS),
+      bonds: [],
+      etfs: [],
+    });
+  }
 
   function changeType(t: ChallengeType) {
     setType(t);
@@ -160,7 +190,15 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
         },
         scoring,
         startsAt: startsAt ? new Date(startsAt).toISOString() : null,
-        endsAt: endsAt ? new Date(endsAt).toISOString() : null,
+        endsAt:
+          type === "new_eden" && eden.eventScript && startsAt
+            ? new Date(
+                new Date(startsAt).getTime() +
+                  EDEN_EVENT_DURATION_MINUTES * 60000,
+              ).toISOString()
+            : endsAt
+              ? new Date(endsAt).toISOString()
+              : null,
       };
       if (existing) await patch(`/api/challenges/${existing.id}`, payload);
       else await post("/api/challenges", payload);
@@ -213,6 +251,50 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
               </Select>
             </Field>
           </div>
+          {type === "new_eden" && (
+            <section className="mt-4 space-y-2 border-t border-border pt-4">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-accent"
+                  checked={eden.eventScript ?? false}
+                  disabled={!!existing && existing.status !== "draft"}
+                  onChange={(e) => togglePlaybook(e.target.checked)}
+                />
+                New Eden playbook preset
+              </label>
+              <p className="max-w-prose text-xs text-muted">
+                Enabling replaces the starting instruments and economy settings:
+                AERIUM only at 1,000, 100-unit inventory cap, 50-unit order cap,
+                $1/unit/minute carry and 2x loans. Starting cash defaults to
+                10,000 (host-configurable).
+              </p>
+              <p className="max-w-prose text-xs text-muted">
+                Scripted mode runs a fixed 130-minute timeline: standard bond at
+                10m, pegged bond at 18m, NEURO at 30m, ORBITAL ETF (2 AERIUM + 1
+                NEURO) at 45m, halt 60-70m, options at 70m, tax vote at 80m,
+                dual-asset shock at 90m, grant 100-105m and close at 130m. ETF
+                windows last 30s every 10m; option cycles last 5m with 15s
+                exercise.
+              </p>
+              <p className="max-w-prose text-xs text-muted">
+                Ticker every 5m outside halftime. Auction rounds: 15, 30, 45,
+                75, 90, 105 and 120m; bidding opens 40s before the round and
+                closes 10s before its news. Top 30% pay their bid for 10s early
+                news over 15m. OTC replies allow 15s; accepted bargains bind
+                through a 5s settlement delay. Host mode (toggle off) has no
+                automatic timeline: the host opens markets, publishes news and
+                runs operations manually. Disabling keeps the current
+                configuration.
+              </p>
+              {eden.eventScript && (
+                <p className="text-xs text-warning">
+                  Do not manually duplicate scripted operations. A scheduled
+                  start sets the end to start + 130 minutes on save.
+                </p>
+              )}
+            </section>
+          )}
           <div className="mt-4">
             <Field label="Description">
               <Input
@@ -547,6 +629,46 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
               </Field>
             </div>
             <h3 className="mb-3 mt-5 border-t border-border pt-4 text-xs font-semibold uppercase tracking-wide text-muted">
+              Premium feed terms
+            </h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Auction duration (s)">
+                {numField(eden.auctionDurationSec, (n) =>
+                  setEden({
+                    ...eden,
+                    auctionDurationSec: Math.max(1, Math.round(n)),
+                  }),
+                )}
+              </Field>
+              <Field label="Winning fraction (0-1)">
+                {numField(
+                  eden.auctionWinnerFraction,
+                  (n) =>
+                    setEden({
+                      ...eden,
+                      auctionWinnerFraction: Math.max(0, Math.min(1, n)),
+                    }),
+                  0.05,
+                )}
+              </Field>
+              <Field label="Early news lead (s)">
+                {numField(eden.premiumLeadSec, (n) =>
+                  setEden({
+                    ...eden,
+                    premiumLeadSec: Math.max(1, Math.round(n)),
+                  }),
+                )}
+              </Field>
+              <Field label="Access duration (min)">
+                {numField(eden.premiumAccessMinutes, (n) =>
+                  setEden({
+                    ...eden,
+                    premiumAccessMinutes: Math.max(1, Math.round(n)),
+                  }),
+                )}
+              </Field>
+            </div>
+            <h3 className="mb-3 mt-5 border-t border-border pt-4 text-xs font-semibold uppercase tracking-wide text-muted">
               Bot ecosystem
             </h3>
             <div className="grid gap-4 sm:grid-cols-3">
@@ -629,6 +751,162 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                 )}
               </Field>
             </div>
+            <h3 className="mb-3 mt-5 border-t border-border pt-4 text-xs font-semibold uppercase tracking-wide text-muted">
+              Bond templates
+            </h3>
+            <p className="mb-3 text-xs text-muted">
+              Host mode: saving a template makes it available for purchase.
+              Scripted mode issues its own bonds at 10m and 18m.
+            </p>
+            {(eden.bonds ?? []).map((bond, i) => {
+              const update = (patch: Partial<typeof bond>) =>
+                setEden({
+                  ...eden,
+                  bonds: eden.bonds!.map((b, j) =>
+                    j === i ? { ...b, ...patch } : b,
+                  ),
+                });
+              return (
+                <fieldset
+                  key={i}
+                  disabled={eden.eventScript}
+                  aria-label={`Bond ${bond.name}`}
+                  className="grid gap-3 border-t border-border py-3 sm:grid-cols-3"
+                >
+                  <Field label="Bond ID">
+                    <Input
+                      value={bond.id}
+                      onChange={(e) => update({ id: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Name">
+                    <Input
+                      value={bond.name}
+                      onChange={(e) => update({ name: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Purchase price">
+                    {numField(bond.price, (n) => update({ price: n }), 0.01)}
+                  </Field>
+                  <Field label="Face value">
+                    {numField(
+                      bond.faceValue,
+                      (n) => update({ faceValue: n }),
+                      0.01,
+                    )}
+                  </Field>
+                  <Field label="Per-trader limit">
+                    {numField(bond.maxPerUser, (n) =>
+                      update({ maxPerUser: Math.max(1, Math.round(n)) }),
+                    )}
+                  </Field>
+                  <Field label="Coupon type">
+                    <Select
+                      value={bond.peggedYield ? "pegged" : "fixed"}
+                      onChange={(e) =>
+                        update(
+                          e.target.value === "pegged"
+                            ? {
+                                couponPer5Min: undefined,
+                                peggedYield: {
+                                  symbol: symbols[0]?.symbol ?? "AERIUM",
+                                  base: 2000,
+                                  divisor: 10,
+                                },
+                              }
+                            : { peggedYield: undefined, couponPer5Min: 500 },
+                        )
+                      }
+                    >
+                      <option value="fixed">Fixed / 5m</option>
+                      <option value="pegged">Pegged / 5m</option>
+                    </Select>
+                  </Field>
+                  {bond.peggedYield ? (
+                    <>
+                      <Field label="Peg symbol">
+                        <Select
+                          value={bond.peggedYield.symbol}
+                          onChange={(e) =>
+                            update({
+                              peggedYield: {
+                                ...bond.peggedYield!,
+                                symbol: e.target.value,
+                              },
+                            })
+                          }
+                        >
+                          {symbols.map((s) => (
+                            <option key={s.symbol}>{s.symbol}</option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="Base">
+                        {numField(bond.peggedYield.base, (n) =>
+                          update({
+                            peggedYield: { ...bond.peggedYield!, base: n },
+                          }),
+                        )}
+                      </Field>
+                      <Field label="Divisor (> 0)">
+                        {numField(bond.peggedYield.divisor, (n) =>
+                          update({
+                            peggedYield: { ...bond.peggedYield!, divisor: n },
+                          }),
+                        )}
+                      </Field>
+                      <p className="text-xs text-warning sm:col-span-3">
+                        Coupon = (base - market price) / divisor. Negative
+                        coupons debit the holder.
+                      </p>
+                    </>
+                  ) : (
+                    <Field label="Fixed coupon / 5m">
+                      {numField(
+                        bond.couponPer5Min ?? 0,
+                        (n) => update({ couponPer5Min: Math.max(0, n) }),
+                        0.01,
+                      )}
+                    </Field>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setEden({
+                        ...eden,
+                        bonds: eden.bonds!.filter((_, j) => j !== i),
+                      })
+                    }
+                  >
+                    Remove bond
+                  </Button>
+                </fieldset>
+              );
+            })}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={(eden.bonds?.length ?? 0) >= 8 || eden.eventScript}
+              onClick={() =>
+                setEden({
+                  ...eden,
+                  bonds: [
+                    ...(eden.bonds ?? []),
+                    {
+                      id: `bond_${Date.now()}`,
+                      name: "Standard Bond",
+                      price: 10000,
+                      faceValue: 10000,
+                      couponPer5Min: 500,
+                      maxPerUser: 1,
+                    },
+                  ],
+                })
+              }
+            >
+              Add bond
+            </Button>
           </div>
         </Panel>
       )}

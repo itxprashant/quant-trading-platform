@@ -20,6 +20,8 @@ export interface OptionMeta {
   /** Epoch ms the cycle was opened and when it closes (for time value). */
   openedAt: number;
   expiresAt: number;
+  /** Supplemental event hedges expire once instead of starting another cycle. */
+  autoRoll?: boolean;
 }
 
 /** Outcome of exercising an option series, for the runner to act on. */
@@ -38,6 +40,8 @@ export interface EngineConfig {
   minPosition: number;
   maxPosition: number;
   maxOrderQuantity: number;
+  /** New Eden absolute human position/working cap; absent preserves legacy sizing. */
+  positionCap?: number;
   /** Max resting orders per human trader. Bots are not counted. */
   maxOpenOrders?: number;
   allowMargin: boolean;
@@ -48,12 +52,54 @@ interface PositionState {
   avgCost: number;
 }
 
-interface AccountMetrics {
+export interface AccountMetrics {
   realizedPnl: number;
   volume: number;
   trades: number;
   spreadCapture: number;
   quoteUptimeMs: number;
+}
+
+export interface AccountSnapshot {
+  cash: number;
+  positions: Array<{ symbol: string; quantity: number; avgPrice: number }>;
+  loanDebt?: number;
+  metrics?: Partial<AccountMetrics>;
+}
+
+/** Versioned JSON checkpoint. Manager timers and runner cursors are separate. */
+export interface EngineState {
+  version: 1;
+  config: EngineConfig;
+  accounts: Array<{
+    userId: string;
+    cash: number;
+    positions: AccountSnapshot["positions"];
+    loanDebt: number;
+    metrics: AccountMetrics;
+  }>;
+  symbols: Array<{
+    config: SymbolConfig;
+    autonomous: boolean;
+    orders: RestingOrder[];
+  }>;
+  options: OptionMeta[];
+  prices: Record<string, number>;
+  fairValues: Record<string, number>;
+  frozen: boolean;
+  closedSymbols: string[];
+  cancelledIds: string[];
+  seq: number;
+  bookSequence: number;
+  volatilityMultiplier: number;
+  /** Older version-1 checkpoints predate accepted-deal reservations. */
+  reservations?: Array<{ id: string; userId: string; legs: SettlementLeg[] }>;
+}
+
+export interface SettlementLeg {
+  symbol: string;
+  quantity: number;
+  price: number;
 }
 
 interface Account {
@@ -86,6 +132,8 @@ export interface PlaceOrderCommand {
   force?: boolean;
   /** Bypass maxOrderQuantity (per-order and working-size) for admins. */
   admin?: boolean;
+  /** A priced IOC never rests; used for executable, price-bounded bot legs. */
+  timeInForce?: "IOC";
 }
 
 export interface CancelOrderCommand {
@@ -122,7 +170,7 @@ export function clampOrderQuantity(args: {
  */
 export class ChallengeEngine {
   readonly challengeId: string;
-  private readonly cfg: EngineConfig;
+  private cfg: EngineConfig;
   private readonly books = new Map<string, OrderBook>();
   private readonly prices = new Map<string, number>();
   private readonly fairValues = new Map<string, number>();
@@ -138,6 +186,13 @@ export class ChallengeEngine {
   private readonly cancelledIds = new Set<string>();
   /** When true, new placements are rejected; cancels still apply. */
   private frozen = false;
+  private readonly closedSymbols = new Set<string>();
+  private volatilityMultiplier = 1;
+  private checkpointRestored = false;
+  private readonly reservations = new Map<
+    string,
+    { userId: string; legs: SettlementLeg[] }
+  >();
 
   constructor(cfg: EngineConfig) {
     this.cfg = cfg;
@@ -152,6 +207,387 @@ export class ChallengeEngine {
 
   setFrozen(frozen: boolean): void {
     this.frozen = frozen;
+  }
+
+  /** Managers must not merge newer/stale DB projections over a full checkpoint. */
+  get restoredFromCheckpoint(): boolean {
+    return this.checkpointRestored;
+  }
+
+  exportState(): EngineState {
+    return structuredClone({
+      version: 1,
+      config: this.cfg,
+      accounts: [...this.accounts].map(([userId, account]) => ({
+        userId,
+        cash: account.cash,
+        positions: this.allPositions(userId),
+        loanDebt: account.loanDebt,
+        metrics: account.metrics,
+      })),
+      symbols: [...this.symbolCfg].map(([symbol, config]) => ({
+        config,
+        autonomous: this.autonomousSet.has(symbol),
+        orders: this.books.get(symbol)!.orders(),
+      })),
+      options: [...this.options.values()],
+      prices: Object.fromEntries(this.prices),
+      fairValues: Object.fromEntries(this.fairValues),
+      frozen: this.frozen,
+      closedSymbols: [...this.closedSymbols],
+      cancelledIds: [...this.cancelledIds],
+      seq: this.seq,
+      bookSequence: this.bookSequence,
+      volatilityMultiplier: this.volatilityMultiplier,
+      reservations: [...this.reservations].map(([id, reservation]) => ({
+        id,
+        ...reservation,
+      })),
+    });
+  }
+
+  /** Validate completely before replacing live state; never replay fills. */
+  restoreState(state: unknown): void {
+    function assert(condition: unknown, field: string): asserts condition {
+      if (!condition) throw new Error(`Invalid engine checkpoint: ${field}`);
+    }
+    const object = (v: unknown): v is Record<string, unknown> =>
+      typeof v === "object" && v !== null && !Array.isArray(v);
+    const text = (v: unknown): v is string =>
+      typeof v === "string" && v.length > 0;
+    const finite = (v: unknown): v is number =>
+      typeof v === "number" && Number.isFinite(v);
+    const counter = (v: unknown): v is number =>
+      finite(v) && Number.isSafeInteger(v) && v >= 0;
+    const symbolConfig = (v: unknown): boolean =>
+      object(v) &&
+      text(v.symbol) &&
+      finite(v.initialPrice) &&
+      v.initialPrice >= 0 &&
+      finite(v.volatility) &&
+      v.volatility >= 0 &&
+      finite(v.tickSize) &&
+      v.tickSize > 0 &&
+      (v.name === undefined || typeof v.name === "string");
+    const uniqueStrings = (v: unknown): v is string[] =>
+      Array.isArray(v) && v.every(text) && new Set(v).size === v.length;
+    assert(object(state), "object");
+    assert(state.version === 1, `unsupported version ${String(state.version)}`);
+    const cfg = state.config;
+    assert(
+      object(cfg) && cfg.challengeId === this.challengeId,
+      "challenge identity",
+    );
+    assert(
+      Array.isArray(cfg.symbols) &&
+        cfg.symbols.every(symbolConfig) &&
+        new Set(cfg.symbols.map((s) => s.symbol)).size === cfg.symbols.length,
+      "config.symbols",
+    );
+    assert(
+      finite(cfg.startingCash) &&
+        finite(cfg.minPosition) &&
+        finite(cfg.maxPosition) &&
+        cfg.minPosition <= cfg.maxPosition &&
+        counter(cfg.maxOrderQuantity) &&
+        cfg.maxOrderQuantity > 0 &&
+        typeof cfg.allowMargin === "boolean",
+      "config limits",
+    );
+    assert(
+      cfg.positionCap === undefined ||
+        (counter(cfg.positionCap) && cfg.positionCap > 0),
+      "positionCap",
+    );
+    assert(
+      cfg.maxOpenOrders === undefined ||
+        (counter(cfg.maxOpenOrders) && cfg.maxOpenOrders > 0),
+      "maxOpenOrders",
+    );
+    assert(
+      counter(state.seq) && counter(state.bookSequence),
+      "sequence counters",
+    );
+    assert(
+      typeof state.frozen === "boolean" &&
+        finite(state.volatilityMultiplier) &&
+        state.volatilityMultiplier > 0,
+      "market controls",
+    );
+    assert(
+      uniqueStrings(state.closedSymbols) && uniqueStrings(state.cancelledIds),
+      "symbol/cancel sets",
+    );
+    assert(
+      Array.isArray(state.accounts) &&
+        Array.isArray(state.symbols) &&
+        Array.isArray(state.options),
+      "accounts/symbols/options",
+    );
+    const users = new Set<string>();
+    for (const account of state.accounts) {
+      assert(
+        object(account) && text(account.userId) && !users.has(account.userId),
+        "account identity",
+      );
+      users.add(account.userId);
+      assert(
+        finite(account.cash) &&
+          finite(account.loanDebt) &&
+          account.loanDebt >= 0 &&
+          Array.isArray(account.positions),
+        "account balances",
+      );
+      const positions = new Set<string>();
+      for (const p of account.positions) {
+        assert(
+          object(p) &&
+            text(p.symbol) &&
+            !positions.has(p.symbol) &&
+            finite(p.quantity) &&
+            finite(p.avgPrice) &&
+            p.avgPrice >= 0,
+          "position",
+        );
+        positions.add(p.symbol);
+      }
+      assert(
+        object(account.metrics) &&
+          [
+            "realizedPnl",
+            "volume",
+            "trades",
+            "spreadCapture",
+            "quoteUptimeMs",
+          ].every((key) =>
+            finite((account.metrics as Record<string, unknown>)[key]),
+          ),
+        "account metrics",
+      );
+    }
+    const symbols = new Set<string>();
+    const orderIds = new Set<string>();
+    for (const entry of state.symbols) {
+      assert(
+        object(entry) &&
+          symbolConfig(entry.config) &&
+          object(entry.config) &&
+          text(entry.config.symbol),
+        "symbol config",
+      );
+      const symbol = entry.config.symbol;
+      assert(
+        !symbols.has(symbol) &&
+          typeof entry.autonomous === "boolean" &&
+          Array.isArray(entry.orders),
+        "symbol identity/book",
+      );
+      symbols.add(symbol);
+      for (const order of entry.orders) {
+        assert(
+          object(order) &&
+            text(order.id) &&
+            !orderIds.has(order.id) &&
+            text(order.userId) &&
+            (order.side === "buy" || order.side === "sell") &&
+            finite(order.price) &&
+            order.price > 0 &&
+            counter(order.remaining) &&
+            order.remaining > 0 &&
+            counter(order.seq) &&
+            order.seq <= state.seq,
+          "resting order",
+        );
+        orderIds.add(order.id);
+      }
+    }
+    const optionSymbols = new Set<string>();
+    for (const option of state.options) {
+      assert(
+        object(option) &&
+          text(option.symbol) &&
+          !optionSymbols.has(option.symbol) &&
+          text(option.underlying) &&
+          text(option.cycleId) &&
+          (option.optionType === "call" || option.optionType === "put") &&
+          finite(option.strike) &&
+          option.strike > 0 &&
+          finite(option.openedAt) &&
+          finite(option.expiresAt) &&
+          option.expiresAt > option.openedAt,
+        "option metadata",
+      );
+      assert(
+        option.autoRoll === undefined || typeof option.autoRoll === "boolean",
+        "option rollover",
+      );
+      optionSymbols.add(option.symbol);
+    }
+    for (const prices of [state.prices, state.fairValues]) {
+      assert(
+        object(prices) &&
+          Object.entries(prices).every(
+            ([symbol, price]) => text(symbol) && finite(price) && price >= 0,
+          ),
+        "prices/fair values",
+      );
+    }
+    assert(
+      [...symbols].every((symbol) =>
+        Object.hasOwn(state.prices as object, symbol),
+      ),
+      "missing listed price",
+    );
+    const reservations =
+      state.reservations === undefined ? [] : state.reservations;
+    assert(Array.isArray(reservations), "reservations");
+    const reservationIds = new Set<string>();
+    for (const reservation of reservations) {
+      assert(
+        object(reservation) &&
+          text(reservation.id) &&
+          !reservationIds.has(reservation.id) &&
+          text(reservation.userId) &&
+          Array.isArray(reservation.legs),
+        "reservation identity",
+      );
+      reservationIds.add(reservation.id);
+      for (const leg of reservation.legs) {
+        assert(
+          object(leg) &&
+            text(leg.symbol) &&
+            finite(leg.quantity) &&
+            Number.isSafeInteger(leg.quantity) &&
+            finite(leg.price) &&
+            leg.price >= 0 &&
+            Number.isFinite(leg.quantity * leg.price),
+          "reservation leg",
+        );
+      }
+    }
+
+    // Build separately so even failed hydration cannot partially replace state.
+    const saved = structuredClone(state) as unknown as EngineState;
+    const next = new ChallengeEngine(saved.config);
+    next.books.clear();
+    next.symbolCfg.clear();
+    next.prices.clear();
+    next.autonomousSet.clear();
+    for (const entry of saved.symbols) {
+      next.addSymbol(entry.config, { autonomous: entry.autonomous });
+      for (const order of entry.orders)
+        next.books.get(entry.config.symbol)!.add(order);
+    }
+    for (const option of saved.options) next.registerOption(option);
+    for (const account of saved.accounts)
+      next.restoreAccount(account.userId, account);
+    for (const [symbol, price] of Object.entries(saved.prices))
+      next.prices.set(symbol, price);
+    for (const [symbol, fv] of Object.entries(saved.fairValues))
+      next.fairValues.set(symbol, fv);
+    const replace = <K, V>(target: Map<K, V>, source: Map<K, V>): void => {
+      target.clear();
+      for (const [key, value] of source) target.set(key, value);
+    };
+    this.cfg = next.cfg;
+    replace(this.books, next.books);
+    replace(this.symbolCfg, next.symbolCfg);
+    replace(this.accounts, next.accounts);
+    replace(this.options, next.options);
+    replace(this.prices, next.prices);
+    replace(this.fairValues, next.fairValues);
+    this.autonomousSet.clear();
+    for (const symbol of next.autonomousSet) this.autonomousSet.add(symbol);
+    this.closedSymbols.clear();
+    for (const symbol of saved.closedSymbols) this.closedSymbols.add(symbol);
+    this.cancelledIds.clear();
+    for (const id of saved.cancelledIds) this.cancelledIds.add(id);
+    this.frozen = saved.frozen;
+    this.seq = saved.seq;
+    this.bookSequence = saved.bookSequence;
+    this.volatilityMultiplier = saved.volatilityMultiplier;
+    this.reservations.clear();
+    // Assignment may have breached capacity since acceptance; do not re-underwrite.
+    for (const reservation of saved.reservations ?? []) {
+      this.reservations.set(reservation.id, {
+        userId: reservation.userId,
+        legs: reservation.legs,
+      });
+    }
+    this.checkpointRestored = true;
+  }
+
+  setVolatilityMultiplier(multiplier: number): void {
+    if (!Number.isFinite(multiplier) || multiplier <= 0)
+      throw new Error("Invalid volatility multiplier");
+    this.volatilityMultiplier = multiplier;
+  }
+
+  isSymbolOpen(symbol: string, now = Date.now()): boolean {
+    const option = this.options.get(symbol);
+    return (
+      this.books.has(symbol) &&
+      !this.closedSymbols.has(symbol) &&
+      (!option || now < option.expiresAt)
+    );
+  }
+
+  closeSymbol(symbol: string, ts: number): EngineEvent[] {
+    this.closedSymbols.add(symbol);
+    return this.cancelSymbolOrders(symbol, ts);
+  }
+
+  /** Replace persisted state without replaying fills or charging starting cash. */
+  restoreAccount(userId: string, state: AccountSnapshot): void {
+    if (
+      !Number.isFinite(state.cash) ||
+      !Number.isFinite(state.loanDebt ?? 0) ||
+      (state.loanDebt ?? 0) < 0 ||
+      state.positions.some(
+        (p) =>
+          !Number.isFinite(p.quantity) ||
+          !Number.isFinite(p.avgPrice) ||
+          p.avgPrice < 0,
+      ) ||
+      Object.values(state.metrics ?? {}).some((v) => !Number.isFinite(v))
+    )
+      throw new Error("Invalid account snapshot");
+    const acct = this.ensureAccount(userId);
+    acct.cash = state.cash;
+    acct.loanDebt = state.loanDebt ?? 0;
+    acct.positions = new Map(
+      state.positions.map((p) => [
+        p.symbol,
+        { qty: p.quantity, avgCost: p.avgPrice },
+      ]),
+    );
+    acct.metrics = {
+      realizedPnl: 0,
+      volume: 0,
+      trades: 0,
+      spreadCapture: 0,
+      quoteUptimeMs: 0,
+      ...state.metrics,
+    };
+  }
+
+  /** Hydrate in persisted price-time order, without matching or emitting fills. */
+  restoreRestingOrder(symbol: string, order: RestingOrder): boolean {
+    const book = this.books.get(symbol);
+    if (
+      !book ||
+      this.closedSymbols.has(symbol) ||
+      !Number.isSafeInteger(order.remaining) ||
+      order.remaining <= 0 ||
+      !Number.isFinite(order.price) ||
+      order.price <= 0 ||
+      !Number.isSafeInteger(order.seq) ||
+      [...this.books.values()].some((b) => b.has(order.id))
+    )
+      return false;
+    book.add({ ...order });
+    this.seq = Math.max(this.seq, order.seq);
+    return true;
   }
 
   /* ----------------------------------------------------------------- *
@@ -181,6 +617,7 @@ export class ChallengeEngine {
 
   /** Remove an instrument and its book (e.g. an expired option series). */
   removeSymbol(symbol: string): void {
+    this.closedSymbols.delete(symbol);
     this.books.delete(symbol);
     this.prices.delete(symbol);
     this.symbolCfg.delete(symbol);
@@ -250,11 +687,184 @@ export class ChallengeEngine {
     deltaQty: number,
     price: number,
   ): void {
+    if (!Number.isFinite(deltaQty) || !Number.isFinite(price) || price < 0)
+      throw new Error("Invalid settlement");
     if (deltaQty === 0) {
       this.ensureAccount(userId);
       return;
     }
     this.applyFill(userId, symbol, deltaQty, price);
+  }
+
+  /** Reserve accepted deal terms without moving cash or positions. */
+  reserveSettlement(
+    id: string,
+    userId: string,
+    legs: SettlementLeg[],
+  ): boolean {
+    if (
+      typeof id !== "string" ||
+      !id ||
+      typeof userId !== "string" ||
+      !userId ||
+      legs.some(
+        (leg) =>
+          typeof leg.symbol !== "string" ||
+          !leg.symbol ||
+          !Number.isSafeInteger(leg.quantity) ||
+          !Number.isFinite(leg.price) ||
+          leg.price < 0 ||
+          !Number.isFinite(leg.quantity * leg.price),
+      )
+    )
+      return false;
+    const existing = this.reservations.get(id);
+    if (existing) {
+      return (
+        existing.userId === userId &&
+        existing.legs.length === legs.length &&
+        existing.legs.every((leg, index) => {
+          const other = legs[index]!;
+          return (
+            leg.symbol === other.symbol &&
+            leg.quantity === other.quantity &&
+            leg.price === other.price
+          );
+        })
+      );
+    }
+    const quantities = new Map<string, { buy: number; sell: number }>();
+    for (const leg of legs) {
+      if (!this.isSymbolOpen(leg.symbol)) return false;
+      const quantity = quantities.get(leg.symbol) ?? { buy: 0, sell: 0 };
+      if (leg.quantity > 0) quantity.buy += leg.quantity;
+      else quantity.sell -= leg.quantity;
+      if (
+        !Number.isSafeInteger(quantity.buy) ||
+        !Number.isSafeInteger(quantity.sell)
+      )
+        return false;
+      quantities.set(leg.symbol, quantity);
+    }
+    // Non-Eden challenges retain their shipped working-cap semantics.
+    if (this.cfg.positionCap !== undefined) {
+      const cap = userId.startsWith("bot:") ? undefined : this.cfg.positionCap;
+      for (const [symbol, quantity] of quantities) {
+        const position =
+          this.accounts.get(userId)?.positions.get(symbol)?.qty ?? 0;
+        const buys =
+          quantity.buy + this.reservedQuantity(userId, symbol, "buy");
+        const sells =
+          quantity.sell + this.reservedQuantity(userId, symbol, "sell");
+        if (
+          quantity.buy > 0 &&
+          (!Number.isSafeInteger(buys) ||
+            position + buys + this.openOrderQuantity(userId, symbol, "buy") >
+              (cap ?? this.cfg.maxPosition))
+        )
+          return false;
+        if (
+          quantity.sell > 0 &&
+          (!Number.isSafeInteger(sells) ||
+            position - sells - this.openOrderQuantity(userId, symbol, "sell") <
+              (cap === undefined ? this.cfg.minPosition : -cap))
+        )
+          return false;
+      }
+    }
+    this.reservations.set(id, {
+      userId,
+      legs: legs.map((leg) => ({ ...leg })),
+    });
+    return true;
+  }
+
+  releaseSettlement(id: string): void {
+    this.reservations.delete(id);
+  }
+
+  /** Validate legs against working orders and reservations; release this deal first. */
+  canSettleOffBook(userId: string, legs: SettlementLeg[]): boolean {
+    const changes = new Map<string, number>();
+    for (const leg of legs) {
+      if (
+        !this.isSymbolOpen(leg.symbol) ||
+        !Number.isFinite(leg.quantity) ||
+        !Number.isFinite(leg.price) ||
+        leg.price < 0
+      )
+        return false;
+      changes.set(leg.symbol, (changes.get(leg.symbol) ?? 0) + leg.quantity);
+    }
+    for (const [symbol, delta] of changes) {
+      if (delta === 0) continue;
+      const side = delta > 0 ? "buy" : "sell";
+      if (
+        Math.abs(delta) + this.openOrderQuantity(userId, symbol, side) >
+        this.capacity(userId, symbol, side)
+      )
+        return false;
+    }
+    return true;
+  }
+
+  settleOffBook(userId: string, legs: SettlementLeg[]): boolean {
+    if (!this.canSettleOffBook(userId, legs)) return false;
+    for (const leg of legs)
+      this.settleFill(userId, leg.symbol, leg.quantity, leg.price);
+    return true;
+  }
+
+  /** Physical, cash-neutral creation/redemption. No naked basket creation. */
+  exchangeBasket(
+    userId: string,
+    symbol: string,
+    basket: Array<{ symbol: string; weight: number }>,
+    action: "create" | "redeem",
+    quantity: number,
+  ): boolean {
+    if (
+      !Number.isSafeInteger(quantity) ||
+      quantity <= 0 ||
+      basket.length === 0 ||
+      (action !== "create" && action !== "redeem")
+    )
+      return false;
+    const weights = new Map<string, number>();
+    for (const leg of basket) {
+      if (
+        leg.symbol === symbol ||
+        !Number.isFinite(leg.weight) ||
+        leg.weight <= 0
+      )
+        return false;
+      weights.set(leg.symbol, (weights.get(leg.symbol) ?? 0) + leg.weight);
+    }
+    const direction = action === "create" ? 1 : -1;
+    const legs: SettlementLeg[] = [];
+    let nav = 0;
+    for (const [underlying, weight] of weights) {
+      const price = this.getPrice(underlying);
+      if (
+        price === undefined ||
+        (action === "create" &&
+          this.positionOf(userId, underlying) < weight * quantity)
+      )
+        return false;
+      nav += price * weight;
+      legs.push({
+        symbol: underlying,
+        quantity: -direction * weight * quantity,
+        price,
+      });
+    }
+    if (action === "redeem" && this.positionOf(userId, symbol) < quantity)
+      return false;
+    legs.push({ symbol, quantity: direction * quantity, price: nav });
+    const cash = this.cashOf(userId);
+    if (!this.settleOffBook(userId, legs)) return false;
+    this.ensureAccount(userId).cash = cash;
+    return true;
   }
 
   /**
@@ -271,18 +881,31 @@ export class ChallengeEngine {
   ): ExerciseResult {
     const meta = this.options.get(optionSymbol);
     const events: EngineEvent[] = [];
-    if (!meta || quantity <= 0) {
+    if (
+      !meta ||
+      !Number.isSafeInteger(quantity) ||
+      quantity <= 0 ||
+      ts < meta.expiresAt ||
+      ts >= meta.expiresAt + 15_000 ||
+      this.optionIntrinsic(optionSymbol) <= 0
+    ) {
       return { events, holderId, assigned: [], exercised: 0 };
     }
     const held = this.positionOf(holderId, optionSymbol);
-    const qty = Math.min(quantity, Math.max(0, held));
+    const shorts = this.shortHoldersOf(optionSymbol);
+    const qty = Math.min(
+      quantity,
+      Math.max(0, held),
+      shorts.reduce((sum, short) => sum + short.qty, 0),
+    );
     if (qty <= 0) return { events, holderId, assigned: [], exercised: 0 };
 
     const { underlying, optionType, strike } = meta;
     // Only worth exercising when in-the-money; closes the option at zero so the
     // premium already paid is realized as the option's cost.
-    const shorts = this.shortHoldersOf(optionSymbol);
     const assigned = proRataAssign(shorts, qty);
+    if (assigned.reduce((sum, a) => sum + a.qty, 0) !== qty)
+      return { events, holderId, assigned: [], exercised: 0 };
 
     // Holder leg: close the long option, take/deliver underlying at strike.
     this.settleFill(holderId, optionSymbol, -qty, 0);
@@ -384,13 +1007,16 @@ export class ChallengeEngine {
     return qty;
   }
 
-  getAccount(userId: string): { cash: number; positions: PositionState[] } {
+  getAccount(userId: string): {
+    cash: number;
+    positions: Array<PositionState & { symbol: string }>;
+  } {
     const acct = this.ensureAccount(userId);
     return {
       cash: acct.cash,
       positions: [...acct.positions.entries()]
         .filter(([, p]) => p.qty !== 0 || p.avgCost !== 0)
-        .map(([symbol, p]) => ({ symbol, ...p }) as never),
+        .map(([symbol, p]) => ({ symbol, ...p })),
     };
   }
 
@@ -429,7 +1055,11 @@ export class ChallengeEngine {
       marketValue,
       pnl,
       loanDebt: acct.loanDebt,
-      freeCash: freeCash({ cash: acct.cash, marketValue, loanDebt: acct.loanDebt }),
+      freeCash: freeCash({
+        cash: acct.cash,
+        marketValue,
+        loanDebt: acct.loanDebt,
+      }),
     };
   }
 
@@ -474,8 +1104,7 @@ export class ChallengeEngine {
   }
 
   /**
-   * Apply a loan repayment from cash, capped at the outstanding balance and at
-   * available cash. Returns the amount actually paid.
+   * Apply a loan repayment even if it makes cash negative, capped at debt.
    */
   repayLoan(userId: string, amount: number): number {
     const acct = this.ensureAccount(userId);
@@ -537,13 +1166,53 @@ export class ChallengeEngine {
   /* ----------------------------------------------------------------- *
    * Commands
    * ----------------------------------------------------------------- */
+  /** All legs fill their original requested size or no state/events escape. */
+  placeAtomicOrders(commands: PlaceOrderCommand[]): EngineEvent[] {
+    if (
+      commands.length === 0 ||
+      new Set(commands.map((cmd) => cmd.orderId)).size !== commands.length
+    )
+      return [];
+    const before = this.exportState();
+    const checkpointRestored = this.checkpointRestored;
+    let committed = false;
+    try {
+      const events: EngineEvent[] = [];
+      for (const cmd of commands) {
+        const leg = this.placeOrder({ ...cmd, timeInForce: "IOC" });
+        const filled = leg.some(
+          (event) =>
+            event.type === "order_update" &&
+            event.orderId === cmd.orderId &&
+            event.userId === cmd.userId &&
+            event.symbol === cmd.symbol &&
+            event.status === "filled" &&
+            event.quantity === cmd.quantity &&
+            event.remainingQuantity === 0,
+        );
+        if (!filled) return [];
+        events.push(...leg);
+      }
+      committed = true;
+      return events;
+    } catch {
+      return [];
+    } finally {
+      if (!committed) {
+        this.restoreState(before);
+        // A failed trade is not a restart; preserve the manager hydration flag.
+        this.checkpointRestored = checkpointRestored;
+      }
+    }
+  }
+
   placeOrder(cmd: PlaceOrderCommand): EngineEvent[] {
     const events: EngineEvent[] = [];
     const book = this.books.get(cmd.symbol);
-    if (!book) {
+    if (!book || !this.isSymbolOpen(cmd.symbol, cmd.ts)) {
       return [this.rejected(cmd, "unknown symbol")];
     }
-    if (cmd.quantity <= 0) {
+    if (!Number.isSafeInteger(cmd.quantity) || cmd.quantity <= 0) {
       return [this.rejected(cmd, "invalid quantity")];
     }
     if (this.frozen && !cmd.force) {
@@ -554,19 +1223,32 @@ export class ChallengeEngine {
     if (human && this.openOrderCount(cmd.userId) >= maxOpen) {
       return [this.rejected(cmd, "too many open orders")];
     }
-    if (cmd.orderType === "limit" && (cmd.price == null || cmd.price <= 0)) {
+    if (
+      cmd.orderType === "limit" &&
+      (cmd.price == null || !Number.isFinite(cmd.price) || cmd.price <= 0)
+    ) {
       return [this.rejected(cmd, "limit order requires price")];
     }
+    if (this.cancelledIds.has(cmd.orderId))
+      return [this.offBookCancelUpdate(cmd)];
+    if ([...this.books.values()].some((b) => b.has(cmd.orderId))) return [];
 
     let quantity = cmd.quantity;
-    if (human && !cmd.admin) {
+    if (human && (!cmd.admin || this.cfg.positionCap !== undefined)) {
       quantity = clampOrderQuantity({
         side: cmd.side,
-        requested: cmd.quantity,
+        requested:
+          this.cfg.positionCap === undefined || cmd.admin
+            ? cmd.quantity
+            : Math.min(cmd.quantity, this.cfg.maxOrderQuantity),
         position: this.positionOf(cmd.userId, cmd.symbol),
-        openBuyQty: book.remainingForUser(cmd.userId, "buy"),
-        openSellQty: book.remainingForUser(cmd.userId, "sell"),
-        maxOrderQuantity: this.cfg.maxOrderQuantity,
+        openBuyQty:
+          book.remainingForUser(cmd.userId, "buy") +
+          this.reservedQuantity(cmd.userId, cmd.symbol, "buy"),
+        openSellQty:
+          book.remainingForUser(cmd.userId, "sell") +
+          this.reservedQuantity(cmd.userId, cmd.symbol, "sell"),
+        maxOrderQuantity: this.cfg.positionCap ?? this.cfg.maxOrderQuantity,
       });
       if (quantity <= 0) {
         return [this.rejected(cmd, "no capacity")];
@@ -588,6 +1270,14 @@ export class ChallengeEngine {
         if (cmd.side === "sell" && best.price < cmd.price) break;
       }
 
+      // Cancel the older crossing order rather than generate a wash trade.
+      if (best.userId === cmd.userId) {
+        book.remove(best.id);
+        events.push(this.orderUpdate(best, symbol, "cancelled", cmd.ts));
+        touched.add(symbol);
+        continue;
+      }
+
       const takerCap = this.capacity(cmd.userId, symbol, cmd.side);
       if (takerCap <= 0) break; // taker at position limit
       const makerCap = this.capacity(best.userId, symbol, best.side);
@@ -606,7 +1296,13 @@ export class ChallengeEngine {
       lastTradePrice = tradePrice;
 
       // Maker (the resting order) earns the spread relative to pre-trade mid.
-      this.recordSpreadCapture(best.userId, best.side, midBefore, tradePrice, fill);
+      this.recordSpreadCapture(
+        best.userId,
+        best.side,
+        midBefore,
+        tradePrice,
+        fill,
+      );
 
       const buyerId = cmd.side === "buy" ? cmd.userId : best.userId;
       const sellerId = cmd.side === "buy" ? best.userId : cmd.userId;
@@ -634,13 +1330,25 @@ export class ChallengeEngine {
 
       // Maker order update.
       book.reduceBest(oppSide, fill);
-        events.push(this.orderUpdate(best, symbol, best.remaining <= 0 ? "filled" : "partially_filled", cmd.ts));
+      events.push(
+        this.orderUpdate(
+          best,
+          symbol,
+          best.remaining <= 0 ? "filled" : "partially_filled",
+          cmd.ts,
+        ),
+      );
       touched.add(symbol);
     }
 
     // Rest remainder for limit orders.
     let status: OrderStatus;
-    if (remaining > 0 && cmd.orderType === "limit" && cmd.price != null) {
+    if (
+      remaining > 0 &&
+      cmd.orderType === "limit" &&
+      cmd.price != null &&
+      cmd.timeInForce !== "IOC"
+    ) {
       if (this.cancelledIds.delete(cmd.orderId)) {
         status = "cancelled";
         remaining = 0;
@@ -659,7 +1367,7 @@ export class ChallengeEngine {
       }
     } else if (remaining > 0) {
       // Market remainder (or limit at-limit) is cancelled.
-      status = remaining === quantity ? "cancelled" : "partially_filled";
+      status = "cancelled";
     } else {
       status = "filled";
     }
@@ -707,13 +1415,40 @@ export class ChallengeEngine {
     return [this.offBookCancelUpdate(cmd)];
   }
 
+  cancelUserOrders(userId: string, ts: number): EngineEvent[] {
+    const events: EngineEvent[] = [];
+    for (const [symbol, book] of this.books) {
+      const orders = book.orders().filter((o) => o.userId === userId);
+      for (const order of orders) {
+        book.remove(order.id);
+        events.push(this.orderUpdate(order, symbol, "cancelled", ts));
+      }
+      if (orders.length) events.push(this.bookUpdate(symbol, ts));
+    }
+    return events;
+  }
+
+  cancelSymbolOrders(symbol: string, ts: number): EngineEvent[] {
+    const book = this.books.get(symbol);
+    if (!book) return [];
+    const events = book.orders().map((order) => {
+      book.remove(order.id);
+      return this.orderUpdate(order, symbol, "cancelled", ts);
+    });
+    events.push(this.bookUpdate(symbol, ts));
+    return events;
+  }
+
   /** Autonomous random-walk price movement for one symbol. */
   tickPrice(symbol: string, ts: number, rng = Math.random): EngineEvent | null {
     const cfg = this.symbolCfg.get(symbol);
     const cur = this.prices.get(symbol);
     if (!cfg || cur === undefined) return null;
-    const delta = (rng() * 2 - 1) * cfg.volatility;
-    const next = this.roundTick(Math.max(cfg.tickSize, cur + delta), cfg.tickSize);
+    const delta = (rng() * 2 - 1) * cfg.volatility * this.volatilityMultiplier;
+    const next = this.roundTick(
+      Math.max(cfg.tickSize, cur + delta),
+      cfg.tickSize,
+    );
     this.prices.set(symbol, next);
     return {
       type: "price_update",
@@ -739,7 +1474,8 @@ export class ChallengeEngine {
     const maxStep = (speed / 10) * cfg.volatility * 3;
     const dir = Math.sign(target - cur);
     const toward = Math.min(Math.abs(target - cur), maxStep) * dir;
-    const noise = (rng() * 2 - 1) * cfg.volatility * 0.3;
+    const noise =
+      (rng() * 2 - 1) * cfg.volatility * this.volatilityMultiplier * 0.3;
     const next = this.roundTick(
       Math.max(cfg.tickSize, cur + toward + noise),
       cfg.tickSize,
@@ -791,11 +1527,34 @@ export class ChallengeEngine {
   /* ----------------------------------------------------------------- *
    * Internals
    * ----------------------------------------------------------------- */
+  private reservedQuantity(
+    userId: string,
+    symbol: string,
+    side: OrderSide,
+  ): number {
+    if (this.cfg.positionCap === undefined) return 0;
+    let quantity = 0;
+    for (const reservation of this.reservations.values()) {
+      if (reservation.userId !== userId) continue;
+      for (const leg of reservation.legs) {
+        if (leg.symbol === symbol)
+          quantity += Math.max(
+            0,
+            side === "buy" ? leg.quantity : -leg.quantity,
+          );
+      }
+    }
+    return quantity;
+  }
+
   private capacity(userId: string, symbol: string, side: OrderSide): number {
     const pos = this.ensureAccount(userId).positions.get(symbol)?.qty ?? 0;
-    return side === "buy"
-      ? this.cfg.maxPosition - pos
-      : pos - this.cfg.minPosition;
+    const cap = userId.startsWith("bot:") ? undefined : this.cfg.positionCap;
+    const capacity =
+      side === "buy"
+        ? (cap ?? this.cfg.maxPosition) - pos
+        : pos - (cap === undefined ? this.cfg.minPosition : -cap);
+    return capacity - this.reservedQuantity(userId, symbol, side);
   }
 
   private applyFill(
@@ -851,7 +1610,10 @@ export class ChallengeEngine {
     const cfg = this.symbolCfg.get(symbol)!;
     const cur = this.prices.get(symbol) ?? tradePrice;
     const delta = (tradePrice - cur) * PRICE_TRADE_IMPACT * 50;
-    const next = this.roundTick(Math.max(cfg.tickSize, cur + delta), cfg.tickSize);
+    const next = this.roundTick(
+      Math.max(cfg.tickSize, cur + delta),
+      cfg.tickSize,
+    );
     this.prices.set(symbol, next);
     return {
       type: "price_update",

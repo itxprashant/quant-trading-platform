@@ -1,9 +1,16 @@
 import { and, desc, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { challengeNews, challenges, participants, users } from "@qtp/db";
+import {
+  challengeNews,
+  challenges,
+  engineCheckpoints,
+  participants,
+  users,
+} from "@qtp/db";
 import {
   defaultScoringFor,
   isNewsEmbargoed,
+  redisKeys,
   zChallengeStatus,
   zCreateChallengeInput,
   zNewsFeed,
@@ -24,24 +31,20 @@ import { slugify, validate } from "../util.js";
 
 export async function challengeRoutes(app: FastifyInstance): Promise<void> {
   // List challenges. Traders never see drafts.
-  app.get(
-    "/",
-    { preHandler: [app.optionalAuth] },
-    async (req) => {
-      const isAdmin = req.user?.role === "admin";
-      const rows = await app.db
-        .select({
-          challenge: challenges,
-          count: sql<number>`count(${participants.id})::int`,
-        })
-        .from(challenges)
-        .leftJoin(participants, eq(participants.challengeId, challenges.id))
-        .where(isAdmin ? undefined : ne(challenges.status, "draft"))
-        .groupBy(challenges.id)
-        .orderBy(desc(challenges.createdAt));
-      return rows.map((r) => serializeChallenge(r.challenge, r.count));
-    },
-  );
+  app.get("/", { preHandler: [app.optionalAuth] }, async (req) => {
+    const isAdmin = req.user?.role === "admin";
+    const rows = await app.db
+      .select({
+        challenge: challenges,
+        count: sql<number>`count(${participants.id})::int`,
+      })
+      .from(challenges)
+      .leftJoin(participants, eq(participants.challengeId, challenges.id))
+      .where(isAdmin ? undefined : ne(challenges.status, "draft"))
+      .groupBy(challenges.id)
+      .orderBy(desc(challenges.createdAt));
+    return rows.map((r) => serializeChallenge(r.challenge, r.count));
+  });
 
   // Fetch by id or slug. Drafts are admin-only (same visibility as the list).
   app.get(
@@ -90,10 +93,7 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
         where: eq(challenges.id, id),
       });
       if (!challenge) return reply.code(404).send({ error: "not_found" });
-      if (
-        challenge.status === "draft" &&
-        req.user?.role !== "admin"
-      ) {
+      if (challenge.status === "draft" && req.user?.role !== "admin") {
         return reply.code(404).send({ error: "not_found" });
       }
 
@@ -148,47 +148,76 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // Create (admin).
-  app.post(
-    "/",
-    { preHandler: [app.requireAdmin] },
-    async (req, reply) => {
-      const input = validate(zCreateChallengeInput, req.body, reply);
-      if (!input) return;
-      const scoring = input.scoring ?? defaultScoringFor(input.type);
-      let slug = slugify(input.name);
-      const dupe = await app.db.query.challenges.findFirst({
-        where: eq(challenges.slug, slug),
-      });
-      if (dupe) slug = `${slug}-${Date.now().toString(36).slice(-4)}`;
+  app.post("/", { preHandler: [app.requireAdmin] }, async (req, reply) => {
+    const input = validate(zCreateChallengeInput, req.body, reply);
+    if (!input) return;
+    const scoring = input.scoring ?? defaultScoringFor(input.type);
+    let slug = slugify(input.name);
+    const dupe = await app.db.query.challenges.findFirst({
+      where: eq(challenges.slug, slug),
+    });
+    if (dupe) slug = `${slug}-${Date.now().toString(36).slice(-4)}`;
 
-      const [created] = await app.db
-        .insert(challenges)
-        .values({
-          slug,
-          name: input.name,
-          description: input.description ?? null,
-          type: input.type,
-          status: "draft",
-          config: input.config,
-          scoring,
-          startsAt: input.startsAt ? new Date(input.startsAt) : null,
-          endsAt: input.endsAt ? new Date(input.endsAt) : null,
-          createdBy: req.user.sub,
-        })
-        .returning();
-      return reply.code(201).send(serializeChallenge(created!, 0));
-    },
-  );
+    const [created] = await app.db
+      .insert(challenges)
+      .values({
+        slug,
+        name: input.name,
+        description: input.description ?? null,
+        type: input.type,
+        status: "draft",
+        config: input.config,
+        scoring,
+        startsAt: input.startsAt ? new Date(input.startsAt) : null,
+        endsAt: input.endsAt ? new Date(input.endsAt) : null,
+        createdBy: req.user.sub,
+      })
+      .returning();
+    return reply.code(201).send(serializeChallenge(created!, 0));
+  });
 
   // Update config / metadata (admin).
-  app.patch(
-    "/:id",
-    { preHandler: [app.requireAdmin] },
-    async (req, reply) => {
-      const { id } = req.params as { id: string };
-      const input = validate(zUpdateChallengeInput, req.body, reply);
-      if (!input) return;
-      const [updated] = await app.db
+  app.patch("/:id", { preHandler: [app.requireAdmin] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const input = validate(zUpdateChallengeInput, req.body, reply);
+    if (!input) return;
+    const result = await app.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(challenges)
+        .where(eq(challenges.id, id))
+        .for("update");
+      if (!current) return { error: "not_found" } as const;
+      const checkpoint = await tx.query.engineCheckpoints.findFirst({
+        where: eq(engineCheckpoints.challengeId, current.id),
+        columns: { challengeId: true },
+      });
+      const started =
+        !!checkpoint || ["live", "paused", "ended"].includes(current.status);
+      if (started) {
+        const startsChanged =
+          input.startsAt !== undefined &&
+          (input.startsAt ? new Date(input.startsAt).getTime() : null) !==
+            (current.startsAt?.getTime() ?? null);
+        const endsChanged =
+          input.endsAt !== undefined &&
+          (input.endsAt ? new Date(input.endsAt).getTime() : null) !==
+            (current.endsAt?.getTime() ?? null);
+        const scriptChanged =
+          input.config !== undefined &&
+          !!input.config.eden?.eventScript !==
+            !!current.config.eden?.eventScript;
+        if (startsChanged || endsChanged || scriptChanged)
+          return { error: "event_clock_immutable" } as const;
+        if (
+          current.config.eden?.eventScript &&
+          (input.config !== undefined ||
+            (input.type !== undefined && input.type !== current.type))
+        ) {
+          return { error: "started_event_config_immutable" } as const;
+        }
+      }
+      const [updated] = await tx
         .update(challenges)
         .set({
           ...(input.name !== undefined ? { name: input.name } : {}),
@@ -207,10 +236,14 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
         })
         .where(eq(challenges.id, id))
         .returning();
-      if (!updated) return reply.code(404).send({ error: "not_found" });
-      return serializeChallenge(updated);
-    },
-  );
+      return { updated: updated! };
+    });
+    if ("error" in result)
+      return reply
+        .code(result.error === "not_found" ? 404 : 409)
+        .send({ error: result.error });
+    return serializeChallenge(result.updated);
+  });
 
   // Lifecycle transition (admin).
   app.post(
@@ -224,28 +257,60 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
         reply,
       );
       if (!body) return;
-      const [updated] = await app.db
-        .update(challenges)
-        .set({ status: body.status })
-        .where(eq(challenges.id, id))
-        .returning();
-      if (!updated) return reply.code(404).send({ error: "not_found" });
+      const start = body.status === "live" || body.status === "scheduled";
+      const existing = await app.db.query.challenges.findFirst({
+        where: eq(challenges.id, id),
+      });
+      if (!existing) return reply.code(404).send({ error: "not_found" });
+      const resetInProgress = async () =>
+        (await app.redis.get(redisKeys.engineLock(existing.id)))?.startsWith(
+          "reset:",
+        ) ?? false;
+      if (start && (await resetInProgress()))
+        return reply.code(409).send({ error: "reset_in_progress" });
+      const result = await app.db.transaction(async (tx) => {
+        const [current] = await tx
+          .select()
+          .from(challenges)
+          .where(eq(challenges.id, existing.id))
+          .for("update");
+        if (!current) return { error: "not_found" } as const;
+        if (start && (await resetInProgress()))
+          return { error: "reset_in_progress" } as const;
+        const [updated] = await tx
+          .update(challenges)
+          .set({ status: body.status })
+          .where(eq(challenges.id, current.id))
+          .returning();
+        if (!updated) return { error: "not_found" } as const;
 
-      if (body.status === "live") {
-        // Seed prices and register the challenge so an engine claims it.
-        for (const s of updated.config.symbols) {
-          const existing = await app.redis.get(
-            `qtp:price:${updated.id}:${s.symbol}`,
-          );
-          if (existing == null) {
-            await setPrice(app.redis, updated.id, s.symbol, s.initialPrice, Date.now());
+        if (body.status === "live") {
+          // Seed prices and register the challenge so an engine claims it.
+          for (const s of updated.config.symbols) {
+            const existing = await app.redis.get(
+              `qtp:price:${updated.id}:${s.symbol}`,
+            );
+            if (existing == null) {
+              await setPrice(
+                app.redis,
+                updated.id,
+                s.symbol,
+                s.initialPrice,
+                Date.now(),
+              );
+            }
           }
+          await markChallengeActive(app.redis, updated.id);
+        } else if (body.status === "ended" || body.status === "paused") {
+          await markChallengeInactive(app.redis, updated.id);
         }
-        await markChallengeActive(app.redis, updated.id);
-      } else if (body.status === "ended" || body.status === "paused") {
-        await markChallengeInactive(app.redis, updated.id);
-      }
-      return serializeChallenge(updated);
+        return { updated };
+      });
+      if ("error" in result)
+        return reply
+          .code(result.error === "not_found" ? 404 : 409)
+          .send({ error: result.error });
+      return serializeChallenge(result.updated);
     },
   );
 
@@ -259,7 +324,11 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
         where: eq(challenges.id, id),
       });
       if (!challenge) return reply.code(404).send({ error: "not_found" });
-      if (challenge.status === "draft" || challenge.status === "ended") {
+      if (
+        challenge.status === "draft" ||
+        challenge.status === "ended" ||
+        (challenge.endsAt && challenge.endsAt.getTime() <= Date.now())
+      ) {
         return reply.code(409).send({ error: "challenge_not_joinable" });
       }
       await app.db
@@ -276,13 +345,9 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // Internal: which challenges are active right now.
-  app.get(
-    "/_active/list",
-    { preHandler: [app.requireAdmin] },
-    async () => {
-      return listActiveChallenges(app.redis);
-    },
-  );
+  app.get("/_active/list", { preHandler: [app.requireAdmin] }, async () => {
+    return listActiveChallenges(app.redis);
+  });
 
   // Avoid unused import warnings for composed helpers.
   void and;

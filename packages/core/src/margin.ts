@@ -18,12 +18,11 @@ export interface FreeCashInput {
 }
 
 /**
- * Free cash is the trader's true solvency: settled cash plus the liquidation
- * value of inventory, minus what they owe the bank. A margin call fires when
- * this crosses the threshold (default 0).
+ * Margin is cash-only. Inventory and unpaid debt affect wealth, not available
+ * cash; debt affects margin when its scheduled payment is deducted.
  */
 export function freeCash(i: FreeCashInput): number {
-  return i.cash + i.marketValue - i.loanDebt;
+  return i.cash;
 }
 
 /** True when free cash has fallen to/below the margin threshold. */
