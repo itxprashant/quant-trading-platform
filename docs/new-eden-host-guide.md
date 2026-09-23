@@ -24,6 +24,7 @@ The live operations panels appear once the challenge is `live` or `paused`:
 | Panel | What it drives |
 |-------|----------------|
 | **Live price controls** | Drift a symbol toward a target, or hard-set a price |
+| **Trader accounts** | Set an enrolled trader's cash and inventory directly (live only) |
 | **Eden host console** | Options cycles, ETF windows, Deal Desk, premium auction, policy vote, government grant |
 | **Live news** | Signal / noise headlines, fair-value deltas, volatility events, embargo |
 
@@ -115,8 +116,29 @@ The bank runs on the engine clock — no per-minute host action required:
 - **Margin calls** fire when free cash crosses `marginCallThreshold`; if
   `forcedLiquidation` is on, positions are flattened at market.
 
-Tune these via `config.eden.rules` at setup. There is no live override beyond
-prices / FV / news.
+Tune these via `config.eden.rules` at setup. The rules themselves have no live
+override beyond prices / FV / news.
+
+**Manual account override.** To correct a balance or hand out or remove
+inventory, use the **Trader accounts** panel:
+
+| Action | UI | API |
+|--------|----|-----|
+| List enrolled traders' stored cash and positions | Trader accounts (auto) | `GET /accounts` |
+| Set a trader's cash and/or per-symbol quantity | Trader accounts → **Apply changes** | `POST /accounts/:userId` `{ cash?, positions?: [{ symbol, quantity, avgPrice? }] }` |
+
+Values are **absolute**. Only the cash and symbols you send are changed, and
+anything the trader filled on those fields in the meantime is replaced. The
+engine applies the edit through the command stream, so it survives restarts.
+Loan debt and trading metrics are left alone. A position that keeps its sign
+keeps its average cost; a new or flipped one is costed at `avgPrice` or the
+current mark. Margin rules apply to the result immediately, so setting cash too
+low can trigger a margin call. The trader gets an alert and a refreshed
+portfolio.
+
+The API refuses edits when the challenge is not live (`409 challenge_not_live`),
+when the user is not enrolled (`404 not_enrolled`), or when a symbol is neither
+listed nor held (`400 unknown_symbol`).
 
 ---
 
@@ -245,6 +267,7 @@ All under `POST /api/admin/:challengeId` unless noted (admin JWT required):
 /news                          { message, level, kind, fvEffects?, momentum?, volEvent?, embargoSec? }
 /fair-value                    { symbol, fairValue }      (GET to read)
 /tradeable                     { symbol, tradeable }
+/accounts/:userId              { cash?, positions?: [{ symbol, quantity, avgPrice? }] }   (GET /accounts to read)
 /options/open
 /options/close                 { cycleId }
 /etf-window                    { etfSymbol, open }

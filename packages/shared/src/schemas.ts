@@ -603,6 +603,41 @@ export const zCreateOtcInput = z.object({
 });
 export type CreateOtcInput = z.infer<typeof zCreateOtcInput>;
 
+/* ---- Host account override ---- */
+/** Absolute values; omitted cash or symbols are left as they are. */
+export const zAdminAccountEditInput = z
+  .object({
+    cash: z.number().finite().min(-1e12).max(1e12).optional(),
+    positions: z
+      .array(
+        z.object({
+          symbol: z.string().min(1).max(64),
+          quantity: z.number().int().min(-1_000_000).max(1_000_000),
+          avgPrice: z.number().finite().nonnegative().optional(),
+        }),
+      )
+      .max(100)
+      .refine(
+        (rows) => new Set(rows.map((r) => r.symbol)).size === rows.length,
+        "duplicate symbol",
+      )
+      .optional(),
+  })
+  .refine(
+    (v) => v.cash !== undefined || (v.positions?.length ?? 0) > 0,
+    "nothing to change",
+  );
+export type AdminAccountEditInput = z.infer<typeof zAdminAccountEditInput>;
+
+export interface AdminAccountView {
+  userId: string;
+  username: string;
+  displayName: string;
+  cash: number;
+  loanDebt: number;
+  positions: Array<{ symbol: string; quantity: number; avgPrice: number }>;
+}
+
 /* ---- Blind auctions (premium feed) ---- */
 export const zAuction = z.object({
   id: z.string().uuid(),

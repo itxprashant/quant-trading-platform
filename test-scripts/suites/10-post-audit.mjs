@@ -139,6 +139,62 @@ export async function suitePostAudit(t, ctx) {
     );
   });
 
+  await t.test("admin sets a trader's cash and inventory directly", async () => {
+    const admin = { token: ctx.admin.token };
+    const created = await http.post(
+      "/api/challenges",
+      {
+        name: `E2E Accounts ${nowId("")}`,
+        type: "directional",
+        config: directionalConfig({ startingCash: 1000 }),
+      },
+      admin,
+    );
+    ctx.createdIds.push(created.id);
+    const cid = created.id;
+    try {
+      await http.post(`/api/challenges/${cid}/status`, { status: "live" }, admin);
+      await http.post(`/api/challenges/${cid}/join`, {}, { token: ctx.t1.token });
+      await awaitEngine(ctx.admin.token, ctx.t1.token, cid, "E2EA");
+
+      const r = await http.request("POST", `/api/admin/${cid}/accounts/${ctx.t1.user.id}`, {
+        token: ctx.admin.token,
+        body: { cash: 4321.5, positions: [{ symbol: "E2EA", quantity: 7 }, { symbol: "E2EB", quantity: -3 }] },
+      });
+      t.eq(r.status, 202, `edit returned ${r.status} ${r.body?.error ?? ""}`);
+      const p = await poll(
+        async () => {
+          const pf = await http.get(`/api/portfolio/${cid}`, { token: ctx.t1.token });
+          return pf.cash === 4321.5 && qty(pf, "E2EA") === 7 ? pf : null;
+        },
+        { label: "edited portfolio" },
+      );
+      t.eq(qty(p, "E2EB"), -3);
+      const { accounts } = await http.get(`/api/admin/${cid}/accounts`, admin);
+      const row = accounts.find((a) => a.userId === ctx.t1.user.id);
+      t.ok(row?.cash === 4321.5 && qty(row, "E2EA") === 7, `admin view shows ${JSON.stringify(row)}`);
+
+      await t.throws(
+        () => http.post(`/api/admin/${cid}/accounts/${ctx.t2.user.id}`, { cash: 1 }, admin),
+        { status: 404, error: "not_enrolled" },
+      );
+      await t.throws(
+        () => http.post(`/api/admin/${cid}/accounts/${ctx.t1.user.id}`, { positions: [{ symbol: "NOPE", quantity: 1 }] }, admin),
+        { status: 400, error: "unknown_symbol" },
+      );
+      await t.throws(
+        () => http.post(`/api/admin/${cid}/accounts/${ctx.t1.user.id}`, { cash: 1 }, { token: ctx.t1.token }),
+        { status: 403 },
+      );
+    } finally {
+      await http.post(`/api/challenges/${cid}/status`, { status: "ended" }, admin);
+    }
+    await t.throws(
+      () => http.post(`/api/admin/${cid}/accounts/${ctx.t1.user.id}`, { cash: 1 }, admin),
+      { status: 409, error: "challenge_not_live" },
+    );
+  });
+
   await t.test("an ended, finalized challenge cannot be set live again", async () => {
     const id = ctx.noMargin?.id;
     if (!id) return t.skip("re-live", "no-margin challenge missing");

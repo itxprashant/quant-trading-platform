@@ -15,6 +15,7 @@ import { get, post } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
 import { AdminGuard } from "@/components/AdminGuard";
 import { ChallengeForm } from "@/components/admin/ChallengeForm";
+import { AccountEditor } from "@/components/admin/AccountEditor";
 import { EdenHostConsole } from "@/components/admin/EdenHostConsole";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
@@ -971,6 +972,7 @@ function EditInner() {
                   <FreezeControls challenge={challenge} onChange={load} />
                   <AddInstrumentControls challenge={challenge} />
                 </div>
+                <AccountEditor challenge={challenge} />
                 {challenge.type === "new_eden" && (
                   <EdenHostConsole challenge={challenge} />
                 )}

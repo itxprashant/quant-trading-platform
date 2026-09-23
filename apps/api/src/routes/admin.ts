@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   auctions,
@@ -28,18 +28,21 @@ import {
   EDEN_EVENT_DURATION_MINUTES,
   EDEN_EVENT_OPTIONS,
   edenEventStateAt,
+  zAdminAccountEditInput,
   zCreateOtcInput,
   zEdenConfig,
   zEdenOptionsConfig,
   zEtfConfig,
   zPostNewsInput,
   zSymbolConfig,
+  type AdminAccountView,
   type ChallengeConfig,
   type EngineCommand,
 } from "@qtp/shared";
 import { redisKeys } from "@qtp/shared";
 import {
   getFairValues,
+  getListedSymbols,
   publishBroadcast,
   publishCommand,
   pushNews,
@@ -558,6 +561,123 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { offer };
   });
 
+  // Every enrolled trader's persisted cash and inventory, for the account editor.
+  app.get("/:challengeId/accounts", async (req, reply) => {
+    const params = validate(
+      z.object({ challengeId: z.string().uuid() }),
+      req.params,
+      reply,
+    );
+    if (!params) return;
+    const [rows, held] = await Promise.all([
+      app.db
+        .select({
+          userId: participants.userId,
+          username: users.username,
+          displayName: users.displayName,
+          cash: participants.cash,
+          loanDebt: participants.loanDebt,
+        })
+        .from(participants)
+        .innerJoin(users, eq(users.id, participants.userId))
+        .where(eq(participants.challengeId, params.challengeId))
+        .orderBy(users.username),
+      app.db
+        .select({
+          userId: positions.userId,
+          symbol: positions.symbol,
+          quantity: positions.quantity,
+          avgPrice: positions.avgPrice,
+        })
+        .from(positions)
+        .where(eq(positions.challengeId, params.challengeId)),
+    ]);
+    const accounts: AdminAccountView[] = rows.map((row) => ({
+      ...row,
+      positions: held
+        .filter((p) => p.userId === row.userId && p.quantity !== 0)
+        .map(({ symbol, quantity, avgPrice }) => ({
+          symbol,
+          quantity,
+          avgPrice,
+        })),
+    }));
+    return { accounts };
+  });
+
+  // Set a trader's cash and/or inventory absolutely; the engine applies it.
+  app.post("/:challengeId/accounts/:userId", async (req, reply) => {
+    const params = validate(
+      z.object({ challengeId: z.string().uuid(), userId: z.string().uuid() }),
+      req.params,
+      reply,
+    );
+    if (!params) return;
+    const body = validate(zAdminAccountEditInput, req.body, reply);
+    if (!body) return;
+    const { challengeId, userId } = params;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+    // Only a running engine applies the command; queued edits would land later.
+    if (challenge.status !== "live" || challenge.finalizedAt) {
+      return reply.code(409).send({ error: "challenge_not_live" });
+    }
+    const participant = await app.db.query.participants.findFirst({
+      where: and(
+        eq(participants.challengeId, challengeId),
+        eq(participants.userId, userId),
+      ),
+    });
+    if (!participant) return reply.code(404).send({ error: "not_enrolled" });
+    if (body.positions?.length) {
+      const [listed, held] = await Promise.all([
+        getListedSymbols(app.redis, challengeId),
+        app.db
+          .select({ symbol: positions.symbol })
+          .from(positions)
+          .where(
+            and(
+              eq(positions.challengeId, challengeId),
+              eq(positions.userId, userId),
+            ),
+          ),
+      ]);
+      const known = new Set([
+        ...challenge.config.symbols.map((s) => s.symbol),
+        ...listed,
+        ...held.map((p) => p.symbol),
+      ]);
+      const unknown = body.positions.find((p) => !known.has(p.symbol));
+      if (unknown) {
+        return reply
+          .code(400)
+          .send({ error: "unknown_symbol", symbol: unknown.symbol });
+      }
+    }
+    const cmd: EngineCommand = {
+      type: "admin_set_account",
+      challengeId,
+      userId,
+      ...(body.cash !== undefined ? { cash: body.cash } : {}),
+      ...(body.positions?.length ? { positions: body.positions } : {}),
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challengeId, cmd);
+    req.log.info(
+      {
+        adminId: req.user.sub,
+        challengeId,
+        userId,
+        cash: body.cash,
+        positions: body.positions,
+      },
+      "admin account edit",
+    );
+    return reply.code(202).send({ ok: true });
+  });
+
   // Open / close an ETF create-redeem window.
   app.post("/:challengeId/etf-window", async (req, reply) => {
     const { challengeId } = req.params as { challengeId: string };
@@ -840,8 +960,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
             config,
             status: "draft",
             frozen: false,
-          finalizedAt: null,
-          finalResults: null,
+            finalizedAt: null,
+            finalResults: null,
             startsAt: null,
             endsAt: null,
           })

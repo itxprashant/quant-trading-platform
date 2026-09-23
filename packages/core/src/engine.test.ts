@@ -490,6 +490,64 @@ describe("ChallengeEngine matching", () => {
   });
 });
 
+describe("setAccount (host override)", () => {
+  function traded() {
+    const e = makeEngine({ startingCash: 1_000 });
+    e.placeOrder({ orderId: "s", userId: "alice", symbol: "X1", side: "sell", orderType: "limit", quantity: 10, price: 100, ts: 1 });
+    e.placeOrder({ orderId: "b", userId: "bob", symbol: "X1", side: "buy", orderType: "market", quantity: 10, ts: 2 });
+    return e;
+  }
+
+  it("sets cash and inventory absolutely and keeps trading metrics", () => {
+    const e = traded();
+    const before = e.exportState().accounts.find((a) => a.userId === "bob")!;
+    e.setAccount("bob", {
+      cash: 5_000,
+      positions: [{ symbol: "X1", quantity: 25 }],
+    });
+    expect(e.portfolioOf("bob")).toMatchObject({
+      cash: 5_000,
+      positions: [{ symbol: "X1", quantity: 25, avgPrice: 100 }],
+    });
+    const after = e.exportState().accounts.find((a) => a.userId === "bob")!;
+    expect(after.metrics).toEqual(before.metrics);
+  });
+
+  it("leaves omitted fields untouched", () => {
+    const e = traded();
+    e.setAccount("bob", { cash: 42 });
+    expect(e.portfolioOf("bob").positions[0]).toMatchObject({ quantity: 10 });
+    e.setAccount("bob", { positions: [{ symbol: "X1", quantity: 3 }] });
+    expect(e.portfolioOf("bob").cash).toBe(42);
+  });
+
+  it("costs a new or flipped position at the mark unless given a price", () => {
+    const e = traded();
+    e.setPrice("X1", 120);
+    e.setAccount("bob", { positions: [{ symbol: "X1", quantity: -5 }] });
+    expect(e.portfolioOf("bob").positions[0]).toMatchObject({ quantity: -5, avgPrice: 120 });
+    e.setAccount("carol", { positions: [{ symbol: "X1", quantity: 4, avgPrice: 90 }] });
+    expect(e.portfolioOf("carol").positions[0]).toMatchObject({ quantity: 4, avgPrice: 90 });
+  });
+
+  it("keeps a zeroed position so persistence overwrites it", () => {
+    const e = traded();
+    e.setAccount("bob", { positions: [{ symbol: "X1", quantity: 0 }] });
+    expect(e.portfolioOf("bob").positions).toEqual([]);
+    expect(e.allPositions("bob")).toEqual([{ symbol: "X1", quantity: 0, avgPrice: 0 }]);
+  });
+
+  it("rejects unknown symbols, fractional quantities and bad cash without side effects", () => {
+    const e = traded();
+    expect(() => e.setAccount("bob", { cash: 1, positions: [{ symbol: "NOPE", quantity: 1 }] })).toThrow();
+    expect(() => e.setAccount("bob", { positions: [{ symbol: "X1", quantity: 1.5 }] })).toThrow();
+    expect(() => e.setAccount("bob", { cash: Number.NaN })).toThrow();
+    expect(() => e.setAccount("dave", { cash: Infinity })).toThrow();
+    expect(e.portfolioOf("bob").cash).toBeCloseTo(0);
+    expect(e.accountIds()).not.toContain("dave");
+  });
+});
+
 describe("allowMargin: false", () => {
   const cash = { startingCash: 1_000, allowMargin: false };
 

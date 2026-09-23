@@ -116,6 +116,22 @@ export type EngineCommand =
       ts: number;
     }
   | {
+      /**
+       * Host override: set a trader's cash and/or per-symbol inventory to
+       * absolute values. Omitted fields and symbols are left untouched.
+       */
+      type: "admin_set_account";
+      challengeId: string;
+      userId: string;
+      cash?: number;
+      positions?: Array<{
+        symbol: string;
+        quantity: number;
+        avgPrice?: number;
+      }>;
+      ts: number;
+    }
+  | {
       /** Settle a binding OTC deal (multi-leg atomic transfer). */
       type: "execute_otc";
       challengeId: string;

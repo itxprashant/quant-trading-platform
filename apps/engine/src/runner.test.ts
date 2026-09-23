@@ -770,6 +770,59 @@ describe("ChallengeRunner integration boundaries", () => {
     expect(f.redis.set).not.toHaveBeenCalled();
     expect(f.transaction).toHaveBeenCalledOnce();
   });
+
+  it("persists a host account edit in the checkpoint and notifies the trader", async () => {
+    const f = fixture();
+    let events: EngineEvent[] = [];
+    await f.runtime.enqueue(async () => {
+      events = await f.runtime.process({
+        type: "admin_set_account",
+        challengeId: "challenge",
+        userId: USER,
+        cash: 2500,
+        positions: [{ symbol: "A", quantity: 7 }],
+        ts: START,
+      });
+    });
+    expect(f.tables.participants).toEqual([
+      expect.objectContaining({ userId: USER, cash: 2500 }),
+    ]);
+    expect(f.tables.positions).toEqual([
+      expect.objectContaining({ userId: USER, symbol: "A", quantity: 7, avgPrice: 100 }),
+    ]);
+    expect(f.commits.at(-1)!.state.accounts).toEqual([
+      expect.objectContaining({ userId: USER, cash: 2500 }),
+    ]);
+    expect(bus.publishBroadcast).toHaveBeenCalledWith(f.redis, "challenge", [
+      expect.objectContaining({
+        target: USER,
+        msg: expect.objectContaining({ type: "portfolio" }),
+      }),
+    ]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "alert",
+        userId: USER,
+        message: "The host adjusted your account: cash 2500.00, A 7.",
+      }),
+    ]);
+  });
+
+  it("drops an account edit for an unknown symbol without changing the account", async () => {
+    const f = fixture();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const events = await f.runtime.process({
+      type: "admin_set_account",
+      challengeId: "challenge",
+      userId: USER,
+      cash: 1,
+      positions: [{ symbol: "NOPE", quantity: 1 }],
+      ts: START,
+    });
+    expect(events).toEqual([]);
+    expect(f.engine.accountIds()).not.toContain(USER);
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe("EventTimeline catch-up boundary", () => {

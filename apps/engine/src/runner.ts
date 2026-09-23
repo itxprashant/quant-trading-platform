@@ -753,6 +753,8 @@ export class ChallengeRunner {
       case "force_liquidate":
         if (this.frozen) return [];
         return this.liquidate(cmd.userId, cmd.reason, cmd.ts);
+      case "admin_set_account":
+        return this.setAccount(cmd);
       case "set_fair_value": {
         const fv = this.engine.setFairValue(cmd.symbol, cmd.fairValue);
         return [
@@ -1064,6 +1066,39 @@ export class ChallengeRunner {
         },
       },
     ]);
+  }
+
+  /** Apply a host account override, persist it, and tell the trader. */
+  private async setAccount(
+    cmd: Extract<EngineCommand, { type: "admin_set_account" }>,
+  ): Promise<EngineEvent[]> {
+    try {
+      this.engine.setAccount(cmd.userId, {
+        cash: cmd.cash,
+        positions: cmd.positions,
+      });
+    } catch (err) {
+      console.warn(
+        `[${this.challenge.slug}] rejected account edit for ${cmd.userId}`,
+        err,
+      );
+      return [];
+    }
+    const changes = [
+      ...(cmd.cash !== undefined ? [`cash ${cmd.cash.toFixed(2)}`] : []),
+      ...(cmd.positions ?? []).map((p) => `${p.symbol} ${p.quantity}`),
+    ];
+    await this.refreshPortfolios([cmd.userId], cmd.ts);
+    return [
+      {
+        type: "alert",
+        challengeId: this.challenge.id,
+        userId: cmd.userId,
+        level: "warning",
+        message: `The host adjusted your account: ${changes.join(", ")}.`,
+        ts: cmd.ts,
+      },
+    ];
   }
 
   /** Flatten a trader's positions at market and emit a margin-call notice. */

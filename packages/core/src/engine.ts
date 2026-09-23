@@ -677,6 +677,48 @@ export class ChallengeEngine {
   }
 
   /**
+   * Host override: set cash and/or per-symbol inventory absolutely, without
+   * touching loan debt or trading metrics. A position that keeps its sign
+   * keeps its average cost; otherwise it is costed at `avgPrice` or the mark.
+   */
+  setAccount(
+    userId: string,
+    edit: {
+      cash?: number;
+      positions?: Array<{ symbol: string; quantity: number; avgPrice?: number }>;
+    },
+  ): void {
+    const held = this.accounts.get(userId)?.positions;
+    const rows = edit.positions ?? [];
+    if (
+      (edit.cash !== undefined && !Number.isFinite(edit.cash)) ||
+      rows.some(
+        (p) =>
+          // Held symbols stay editable after delisting so they can be zeroed.
+          !(this.books.has(p.symbol) || held?.has(p.symbol)) ||
+          !Number.isSafeInteger(p.quantity) ||
+          (p.avgPrice !== undefined &&
+            (!Number.isFinite(p.avgPrice) || p.avgPrice < 0)),
+      )
+    )
+      throw new Error("Invalid account edit");
+    const acct = this.ensureAccount(userId);
+    if (edit.cash !== undefined) acct.cash = edit.cash;
+    for (const p of rows) {
+      const cur = acct.positions.get(p.symbol) ?? { qty: 0, avgCost: 0 };
+      const sameSign =
+        cur.qty !== 0 && Math.sign(cur.qty) === Math.sign(p.quantity);
+      const avgCost =
+        p.quantity === 0
+          ? 0
+          : (p.avgPrice ??
+            (sameSign ? cur.avgCost : (this.prices.get(p.symbol) ?? 0)));
+      // Zero rows stay in the map so persistence overwrites the stored quantity.
+      acct.positions.set(p.symbol, { qty: p.quantity, avgCost });
+    }
+  }
+
+  /**
    * Apply an off-book settlement fill (option exercise/assignment, OTC, ETF
    * create/redeem). Mutates cash, position, avg cost and realized PnL exactly
    * like a matched trade, but without touching any order book.

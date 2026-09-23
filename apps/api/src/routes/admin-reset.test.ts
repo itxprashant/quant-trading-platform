@@ -29,7 +29,16 @@ vi.doMock("../../../../packages/db/dist/index.js", () =>
       "trades",
       "users",
       "voteProposals",
-    ].map((name) => [name, { name, id: "id", challengeId: "challengeId" }]),
+    ].map((name) => [
+      name,
+      {
+        name,
+        id: "id",
+        challengeId: "challengeId",
+        userId: "userId",
+        symbol: "symbol",
+      },
+    ]),
   ),
 );
 vi.doMock("../../node_modules/drizzle-orm/index.js", () => ({
@@ -37,10 +46,15 @@ vi.doMock("../../node_modules/drizzle-orm/index.js", () => ({
     typeof row[key] === "string"
       ? row[key].toLowerCase() === String(expected).toLowerCase()
       : row[key] === expected,
+  and:
+    (...filters: any[]) =>
+    (row: any) =>
+      filters.every((f) => f(row)),
   desc: (key: string) => key,
 }));
 vi.doMock("../../../../packages/bus/dist/index.js", () => ({
   getFairValues: vi.fn(),
+  getListedSymbols: vi.fn(async () => ["ORBITAL"]),
   publishBroadcast: vi.fn(),
   publishCommand: vi.fn(),
   pushNews: vi.fn(),
@@ -60,6 +74,7 @@ const { publishCommand } =
 
 const ID = "aaaaaaaa-0000-4000-a000-000000000001";
 const OTHER = "bbbbbbbb-0000-4000-a000-000000000002";
+const TRADER = "cccccccc-0000-4000-a000-000000000003";
 const deletedTables = [
   "trades",
   "orders",
@@ -157,15 +172,23 @@ async function fixture(status = "paused") {
         findFirst: async ({ where }: any) =>
           structuredClone(tables.challenges!.find(where)),
       },
+      participants: {
+        findFirst: async ({ where }: any) =>
+          structuredClone(tables.participants!.find(where)),
+      },
     },
     select: () => ({
       from: (table: any) => ({
-        where: (filter: any) => ({
-          for: async () => {
-            trace.push("row-lock");
-            return structuredClone(tables[table.name]!.filter(filter));
-          },
-        }),
+        where: (filter: any) =>
+          Object.assign(
+            Promise.resolve(structuredClone(tables[table.name]!.filter(filter))),
+            {
+              for: async () => {
+                trace.push("row-lock");
+                return structuredClone(tables[table.name]!.filter(filter));
+              },
+            },
+          ),
       }),
     }),
     update: (table: any) => ({
@@ -243,7 +266,12 @@ async function fixture(status = "paused") {
     post: (path: string, ...args: any[]) => handlers.set(path, args.at(-1)),
   };
   await adminRoutes(app);
-  const request = async (path: string, body: unknown, id = ID) => {
+  const request = async (
+    path: string,
+    body: unknown,
+    id = ID,
+    params: Record<string, string> = {},
+  ) => {
     const reply: any = {
       statusCode: 200,
       payload: undefined,
@@ -257,7 +285,12 @@ async function fixture(status = "paused") {
       },
     };
     const result = await handlers.get(path)(
-      { params: { challengeId: id }, body },
+      {
+        params: { challengeId: id, ...params },
+        body,
+        user: { sub: "admin" },
+        log: { info: vi.fn() },
+      },
       reply,
     );
     return { statusCode: reply.statusCode, body: reply.payload ?? result };
@@ -273,6 +306,8 @@ async function fixture(status = "paused") {
     openOptions: (body: unknown = {}) =>
       request("/:challengeId/options/open", body),
     freeze: (frozen: boolean) => request("/:challengeId/freeze", { frozen }),
+    editAccount: (body: unknown, userId = TRADER) =>
+      request("/:challengeId/accounts/:userId", body, ID, { userId }),
     beforeTransaction: (run: () => void) => {
       beforeTransaction = run;
     },
@@ -367,6 +402,92 @@ describe("admin freeze during a scripted event", () => {
     const f = await scripted(20);
     expect((await f.freeze(false)).body).toEqual({ ok: true, frozen: false });
     expect(f.tables.challenges![0].frozen).toBe(false);
+  });
+});
+
+describe("admin account edit", () => {
+  async function live() {
+    const f = await fixture("live");
+    f.tables.challenges![0].finalizedAt = null;
+    f.tables.participants!.push({ challengeId: ID, userId: TRADER, cash: 1 });
+    return f;
+  }
+
+  it("queues an absolute cash and inventory edit for the engine", async () => {
+    const f = await live();
+    expect(
+      await f.editAccount({
+        cash: 2500,
+        positions: [
+          { symbol: "AERIUM", quantity: 12 },
+          { symbol: "ORBITAL", quantity: 0 },
+        ],
+      }),
+    ).toEqual({ statusCode: 202, body: { ok: true } });
+    expect(publishCommand).toHaveBeenCalledWith(
+      f.redis,
+      ID,
+      expect.objectContaining({
+        type: "admin_set_account",
+        challengeId: ID,
+        userId: TRADER,
+        cash: 2500,
+        positions: [
+          { symbol: "AERIUM", quantity: 12 },
+          { symbol: "ORBITAL", quantity: 0 },
+        ],
+      }),
+    );
+  });
+
+  it("allows zeroing a held symbol that is no longer listed", async () => {
+    const f = await live();
+    f.tables.positions!.push({ challengeId: ID, userId: TRADER, symbol: "OLD" });
+    expect(
+      (await f.editAccount({ positions: [{ symbol: "OLD", quantity: 0 }] }))
+        .statusCode,
+    ).toBe(202);
+  });
+
+  it.each([
+    ["an empty edit", {}],
+    ["a fractional quantity", { positions: [{ symbol: "AERIUM", quantity: 1.5 }] }],
+    [
+      "duplicate symbols",
+      {
+        positions: [
+          { symbol: "AERIUM", quantity: 1 },
+          { symbol: "AERIUM", quantity: 2 },
+        ],
+      },
+    ],
+  ])("rejects %s", async (_label: string, body: unknown) => {
+    const f = await live();
+    expect((await f.editAccount(body)).statusCode).toBe(400);
+    expect(publishCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown symbols, non-participants and challenges that are not live", async () => {
+    const f = await live();
+    expect(
+      await f.editAccount({ positions: [{ symbol: "NOPE", quantity: 1 }] }),
+    ).toEqual({
+      statusCode: 400,
+      body: { error: "unknown_symbol", symbol: "NOPE" },
+    });
+    expect(await f.editAccount({ cash: 1 }, OTHER)).toEqual({
+      statusCode: 404,
+      body: { error: "not_enrolled" },
+    });
+    f.tables.challenges![0].status = "paused";
+    expect(await f.editAccount({ cash: 1 })).toEqual({
+      statusCode: 409,
+      body: { error: "challenge_not_live" },
+    });
+    f.tables.challenges![0].status = "live";
+    f.tables.challenges![0].finalizedAt = new Date();
+    expect((await f.editAccount({ cash: 1 })).statusCode).toBe(409);
+    expect(publishCommand).not.toHaveBeenCalled();
   });
 });
 
