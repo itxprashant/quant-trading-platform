@@ -102,6 +102,13 @@ function ticksToLine(points: PricePoint[]): LineData<UTCTimestamp>[] {
     .map(([time, value]) => ({ time: time as UTCTimestamp, value }));
 }
 
+function liveBarSec(point: PricePoint, chartMode: ChartMode): number {
+  if (chartMode === "candle") {
+    return Math.floor(point.timestamp / 1000 / CANDLE_SEC) * CANDLE_SEC;
+  }
+  return Math.floor(point.timestamp / 1000);
+}
+
 export function PriceChart({
   challengeId,
   symbol,
@@ -140,11 +147,13 @@ export function PriceChart({
     if (priceSeries === "last") return lastPrice;
     const mid = book ? midFromBook(book.bids, book.asks) : null;
     if (mid == null) return lastPrice;
+    // Mid is computed from the current book — do not reuse last-trade time
+    // (thin markets like ORBITAL can go long between prints).
     return {
       symbol,
       price: mid,
       change: lastPrice?.change ?? 0,
-      timestamp: lastPrice?.timestamp ?? Date.now(),
+      timestamp: Date.now(),
     };
   }, [priceSeries, lastPrice, book, symbol]);
 
@@ -307,8 +316,18 @@ export function PriceChart({
 
   // Append live ticks.
   useEffect(() => {
-    if (!live || !seriesRef.current) return;
+    if (!live || !seriesRef.current || historyStatus === "loading") return;
     setHasData(true);
+
+    const chartMode = modeRef.current;
+    const nextSec = liveBarSec(live, chartMode);
+    const lastSec =
+      chartMode === "candle"
+        ? (currentCandleRef.current?.time as number | undefined)
+        : historyRef.current.at(-1)
+          ? liveBarSec(historyRef.current.at(-1)!, chartMode)
+          : undefined;
+    if (lastSec != null && nextSec < lastSec) return;
 
     const prev = historyRef.current.at(-1);
     if (prev && live.timestamp - prev.timestamp > SESSION_GAP_MS) {
@@ -352,7 +371,7 @@ export function PriceChart({
         value: live.price,
       });
     }
-  }, [live, applyHistory]);
+  }, [live, applyHistory, historyStatus]);
 
   return (
     <div className="flex h-full min-w-0 flex-col">
