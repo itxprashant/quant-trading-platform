@@ -100,10 +100,10 @@ export function DealDesk({
 
   if (!offer)
     return feedback ? (
-      <div className="fixed inset-x-0 bottom-0 z-50 flex justify-center p-4">
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center p-4">
         <section
           aria-label="Deal desk result"
-          className="flex w-full max-w-md items-start gap-3 rounded-lg border border-border bg-surface p-4 shadow-md"
+          className="pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-lg border border-border bg-surface p-4 shadow-md"
         >
           <p role="status" className="flex-1 text-xs text-muted">
             {feedback.message}
@@ -181,10 +181,10 @@ export function DealDesk({
   const netCash = otcNetCash(offer.cashToTrader, previewLegs);
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 flex justify-center p-4 sm:bottom-4">
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center p-4 sm:bottom-4">
       <section
         aria-label="OTC deal desk"
-        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-lg border border-accent/40 bg-surface shadow-md"
+        className="pointer-events-auto max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-lg border border-accent/40 bg-surface shadow-md"
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
           <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">

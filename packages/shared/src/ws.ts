@@ -92,6 +92,12 @@ export type ServerMessage =
       challengeId: string;
       data: { frozen: boolean };
     }
+  | {
+      /** Host toggled whether non-admins may see rankings. */
+      type: "leaderboard_visibility";
+      challengeId: string;
+      data: { hidden: boolean };
+    }
   | { type: "otc_offer"; challengeId: string; data: OtcOffer }
   | {
       type: "otc_result";

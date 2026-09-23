@@ -54,8 +54,14 @@ fluid 52-96px scale with tight tracking. No display fonts in controls.
   ruled workspace explanations and two market-discipline diagrams.
 - Arena: searchable, filterable event rows with real counts, dates, and status;
   format guidance lives beside the list, not inside every event.
-- Trading: chart and ticket share the first desktop row; depth, portfolio, and
-  orders follow. Rankings and advanced New Eden instruments remain available.
+- Trading: three columns on desktop. Left: instrument list and compact
+  rankings. Center: depth, portfolio, and ticket share one row; the chart sits
+  below and the trader can hide it; then orders, options (series table with a
+  docked ticket and book), bonds and ETFs, bank, and votes. Right: the news
+  feed, which stays fixed while the center column scrolls. Event timers sit in
+  the top bar. New headlines and the premium auction appear as corner cards.
+  Below 1280px the news moves into the center column; below 1024px the
+  sidebars stack.
 - Authentication: split introduction and form, stacked on small screens.
 - Organizer: filterable operations table; configuration and live controls are
   separate groups, with a persistent save action.

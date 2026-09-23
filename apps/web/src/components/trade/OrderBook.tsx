@@ -22,15 +22,17 @@ function Side({
   rows,
   side,
   max,
+  depth,
   onPick,
 }: {
   rows: { level: PriceLevel; total: number }[];
   side: "bid" | "ask";
   max: number;
+  depth: number;
   onPick?: (price: number) => void;
 }) {
   const isBid = side === "bid";
-  const slots = Array.from({ length: BOOK_DEPTH }, (_, i) => rows[i] ?? null);
+  const slots = Array.from({ length: depth }, (_, i) => rows[i] ?? null);
 
   return (
     <div className="min-w-0 flex-1">
@@ -136,13 +138,16 @@ export function OrderBook({
   snapshot,
   onPick,
   embedded = false,
+  depth = BOOK_DEPTH,
 }: {
   snapshot?: OrderBookSnapshot;
   onPick?: (price: number) => void;
   embedded?: boolean;
+  /** Visible levels per side; the ladder always renders this many rows. */
+  depth?: number;
 }) {
-  const bids = cumulative(snapshot?.bids ?? []);
-  const asks = cumulative(snapshot?.asks ?? []);
+  const bids = cumulative((snapshot?.bids ?? []).slice(0, depth));
+  const asks = cumulative((snapshot?.asks ?? []).slice(0, depth));
   const max = Math.max(1, bids.at(-1)?.total ?? 0, asks.at(-1)?.total ?? 0);
   const bestBid = snapshot?.bids[0]?.price;
   const bestAsk = snapshot?.asks[0]?.price;
@@ -163,9 +168,9 @@ export function OrderBook({
         )}
       </PanelHeader>
       <div className="flex flex-1 gap-px overflow-x-auto py-2">
-        <Side rows={bids} side="bid" max={max} onPick={onPick} />
+        <Side rows={bids} side="bid" max={max} depth={depth} onPick={onPick} />
         <div className="w-px bg-border" />
-        <Side rows={asks} side="ask" max={max} onPick={onPick} />
+        <Side rows={asks} side="ask" max={max} depth={depth} onPick={onPick} />
       </div>
       <p className="border-t border-border px-3 py-2 text-[11px] text-muted">
         {!snapshot

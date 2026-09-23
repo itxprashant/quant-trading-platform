@@ -52,7 +52,11 @@ export interface RealtimeState {
   trades: TradePrint[];
   portfolio: Portfolio | null;
   leaderboard: LeaderboardEntry[];
+  /** null until the gateway reports the host's visibility setting. */
+  leaderboardHidden: boolean | null;
   news: NewsItem[];
+  /** Latest headline delivered live (never from a snapshot); drives toasts. */
+  lastNews: { item: NewsItem; seq: number } | null;
   lastOrder: OrderEvent | null;
   /** Targeted trader alerts (margin warnings, liquidations, deal pushes). */
   alerts: AlertMsg[];
@@ -107,14 +111,22 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, portfolio: msg.data };
     case "leaderboard":
       return { ...state, leaderboard: msg.data };
-    case "news":
+    case "leaderboard_visibility":
+      return { ...state, leaderboardHidden: msg.data.hidden };
+    case "news": {
+      // Premium holders receive a scripted headline early and again at release.
+      const seen = state.news.some((n) => n.id === msg.data.id);
       return {
         ...state,
         news: [
           msg.data,
           ...state.news.filter((n) => n.id !== msg.data.id),
         ].slice(0, NEWS_MAX),
+        lastNews: seen
+          ? state.lastNews
+          : { item: msg.data, seq: (state.lastNews?.seq ?? 0) + 1 },
       };
+    }
     case "news_feed":
       return { ...state, news: msg.data.slice(0, NEWS_MAX) };
     case "order":
@@ -203,7 +215,9 @@ const initial: RealtimeState = {
   trades: [],
   portfolio: null,
   leaderboard: [],
+  leaderboardHidden: null,
   news: [],
+  lastNews: null,
   lastOrder: null,
   alerts: [],
   fairValues: new Map(),

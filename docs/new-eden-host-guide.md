@@ -28,6 +28,15 @@ The live operations panels appear once the challenge is `live` or `paused`:
 | **Eden host console** | Options cycles, ETF windows, Deal Desk, premium auction, policy vote, government grant |
 | **Live news** | Signal / noise headlines, fair-value deltas, volatility events, embargo |
 
+The page header also has a **Leaderboard: Visible / Hidden** toggle, available
+in every status (`POST /leaderboard-visibility` `{ hidden }`). While hidden,
+traders see "Rankings are hidden by the host" in place of the table: the REST
+leaderboard answers `403 leaderboard_hidden` and the gateway drops live
+leaderboard updates for non-admins. Final rankings stay hidden after the event
+until you reveal them (traders still see their own PnL and score in the
+portfolio). Admins keep the full table, marked "Hidden from traders". Scoring
+keeps running either way.
+
 Below, every mechanic lists its **UI control** and the **API** call it issues.
 All admin endpoints are under `POST /api/admin/:challengeId/...` and require an
 admin JWT.
@@ -200,6 +209,12 @@ is automatic at expiry (in-process timer) — the manual resolve is a backstop.
 While a winner holds premium access, embargoed headlines (`embargoSec`) reach
 them immediately and everyone else only after the embargo lifts.
 
+On the trading screen, an open round appears as a bid card in the bottom-left
+corner, and its countdown shows in the top-bar timers. The card shows the result
+to each bidder. Winners see a **Premium** badge on the news feed. Their early
+headlines carry an **Early · public in Ns** tag and pop up as bottom-right
+toasts, and the same headline is not shown twice when it goes public.
+
 ---
 
 ## 11. Policy votes & government grants
@@ -278,6 +293,7 @@ All under `POST /api/admin/:challengeId` unless noted (admin JWT required):
 /vote/:proposalId/close
 /grant                         { symbol, description, prize, durationSec }
 /grant/:grantId/award
+/leaderboard-visibility        { hidden }
 /reset
 ```
 

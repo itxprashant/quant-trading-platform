@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowUpRight, ChevronLeft } from "lucide-react";
+import { ArrowUpRight, ChevronLeft, Eye, EyeOff } from "lucide-react";
 import type {
   Challenge,
   NewsFeed,
@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusBadge } from "@/components/ui/Badge";
+import { cn } from "@/lib/cn";
 
 function LiveControls({ challenge }: { challenge: Challenge }) {
   const [symbol, setSymbol] = useState(
@@ -199,6 +200,63 @@ function FreezeControls({
         )}
       </div>
     </Panel>
+  );
+}
+
+function LeaderboardVisibilityToggle({
+  challenge,
+  onChange,
+}: {
+  challenge: Challenge;
+  onChange: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const hidden = challenge.leaderboardHidden ?? false;
+
+  async function toggle() {
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/api/admin/${challenge.id}/leaderboard-visibility`, {
+        hidden: !hidden,
+      });
+      await onChange();
+    } catch {
+      setError("Could not update leaderboard visibility.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={toggle}
+        disabled={busy}
+        aria-pressed={hidden}
+        aria-label="Hide leaderboard from traders"
+        className={cn(
+          "inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50",
+          hidden
+            ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15"
+            : "border-border bg-surface hover:bg-surface-2",
+        )}
+      >
+        {hidden ? (
+          <EyeOff className="size-3.5" aria-hidden />
+        ) : (
+          <Eye className="size-3.5" aria-hidden />
+        )}
+        Leaderboard: {hidden ? "Hidden" : "Visible"}
+      </button>
+      {error && (
+        <p role="alert" className="text-[11px] text-down">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -908,12 +966,18 @@ function EditInner() {
                     </span>
                   )}
                 </div>
-                <Link
-                  href={`/challenges/${challenge.id}`}
-                  className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-medium hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  Open trading view <ArrowUpRight className="size-3.5" />
-                </Link>
+                <div className="flex flex-wrap items-start gap-2">
+                  <LeaderboardVisibilityToggle
+                    challenge={challenge}
+                    onChange={load}
+                  />
+                  <Link
+                    href={`/challenges/${challenge.id}`}
+                    className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-medium hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Open trading view <ArrowUpRight className="size-3.5" />
+                  </Link>
+                </div>
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted">
                 <span>

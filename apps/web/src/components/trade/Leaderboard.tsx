@@ -78,30 +78,72 @@ export function Leaderboard({
   meId,
   metric = "score",
   mm = false,
+  compact = false,
+  hidden = false,
+  isAdmin = false,
+  className,
 }: {
   entries: LeaderboardEntry[];
   meId?: string;
   metric?: "score" | "pnl";
   mm?: boolean;
+  /** Sidebar variant: top 10, no spread column, no minimum width. */
+  compact?: boolean;
+  /** Host has withheld rankings from traders. */
+  hidden?: boolean;
+  isAdmin?: boolean;
+  className?: string;
 }) {
+  if (hidden && !isAdmin) {
+    return (
+      <Panel className={cn("min-w-0 overflow-hidden", className)}>
+        <PanelHeader title="Leaderboard" />
+        <p className="px-3 py-6 text-center text-xs text-faint">
+          Rankings are hidden by the host.
+        </p>
+      </Panel>
+    );
+  }
+  const showSpread = mm && !compact;
+  const limit = compact ? 10 : 12;
   const me = entries.find((e) => e.userId === meId);
-  const top = entries.slice(0, 12);
-  const cols = mm
-    ? "grid-cols-[24px_minmax(80px,1fr)_96px_96px]"
-    : "grid-cols-[24px_minmax(80px,1fr)_104px]";
+  const top = entries.slice(0, limit);
+  const cols = compact
+    ? "grid-cols-[24px_minmax(0,1fr)_minmax(72px,auto)]"
+    : showSpread
+      ? "grid-cols-[24px_minmax(80px,1fr)_96px_96px]"
+      : "grid-cols-[24px_minmax(80px,1fr)_104px]";
+  const minWidth = compact
+    ? ""
+    : showSpread
+      ? "min-w-[360px]"
+      : "min-w-[280px]";
 
   return (
-    <Panel className="flex h-full min-w-0 flex-col overflow-hidden">
+    <Panel
+      className={cn("flex h-full min-w-0 flex-col overflow-hidden", className)}
+    >
       <PanelHeader title="Leaderboard">
-        <span className="text-[11px] text-muted">{entries.length} traders</span>
+        {hidden ? (
+          <span className="rounded-sm border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+            Hidden from traders
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted">
+            {entries.length} traders
+          </span>
+        )}
       </PanelHeader>
       <div
         tabIndex={0}
         role="region"
         aria-label="Trader rankings"
-        className="max-h-[320px] flex-1 overflow-auto focus-visible:outline-offset-[-2px]"
+        className={cn(
+          "flex-1 overflow-auto focus-visible:outline-offset-[-2px]",
+          !compact && "max-h-[320px]",
+        )}
       >
-        <div className={cn(mm ? "min-w-[360px]" : "min-w-[280px]")}>
+        <div className={minWidth}>
           <div
             className={cn(
               "sticky top-0 z-10 grid gap-3 bg-surface-2 px-3 py-2 text-[10px] uppercase tracking-wide text-muted",
@@ -110,7 +152,7 @@ export function Leaderboard({
           >
             <span className="w-6 text-center">#</span>
             <span>Trader</span>
-            {mm && <span className="text-right">Spread</span>}
+            {showSpread && <span className="text-right">Spread</span>}
             <span className="text-right">
               {metric === "pnl" ? "PnL" : "Score"}
             </span>
@@ -127,21 +169,21 @@ export function Leaderboard({
                 highlight={e.userId === meId}
                 cols={cols}
                 metric={metric}
-                mm={mm}
+                mm={showSpread}
               />
             ))
           )}
         </div>
       </div>
-      {me && me.rank > 12 && (
+      {me && me.rank > limit && (
         <div
           tabIndex={0}
           role="region"
           aria-label="Your ranking"
           className="overflow-x-auto border-t border-border focus-visible:outline-offset-[-2px]"
         >
-          <div className={mm ? "min-w-[360px]" : "min-w-[280px]"}>
-            <Row e={me} highlight cols={cols} metric={metric} mm={mm} />
+          <div className={minWidth}>
+            <Row e={me} highlight cols={cols} metric={metric} mm={showSpread} />
           </div>
         </div>
       )}

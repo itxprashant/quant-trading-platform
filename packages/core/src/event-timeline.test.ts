@@ -10,15 +10,17 @@ import {
 } from "../../../apps/engine/src/event-timeline.js";
 import {
   EDEN_EVENT_ACTIONS,
-  EDEN_EVENT_BONDS,
   EDEN_EVENT_NEWS,
   EDEN_EVENT_OTC,
-  edenEventStateAt,
   type EdenEventAction,
 } from "../../shared/src/eden-event.js";
+import { edenEventStateAt } from "../../shared/src/eden-clock.js";
+import { EDEN_EVENT_BONDS } from "../../shared/src/eden-presets.js";
 
 vi.mock("../../shared/dist/index.js", async (original) => ({
   ...(await original<object>()),
+  ...(await import("../../shared/src/eden-clock.js")),
+  ...(await import("../../shared/src/eden-presets.js")),
   ...(await import("../../shared/src/eden-event.js")),
 }));
 const bus = vi.hoisted(() => ({

@@ -24,6 +24,7 @@ export function serializeChallenge(
     createdAt: c.createdAt.toISOString(),
     participantCount,
     frozen: c.frozen ?? false,
+    leaderboardHidden: c.leaderboardHidden ?? false,
   };
 }
 

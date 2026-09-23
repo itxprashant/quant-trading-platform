@@ -258,6 +258,8 @@ export const zChallenge = z.object({
   createdAt: z.string(),
   participantCount: z.number().int().optional(),
   frozen: z.boolean().default(false),
+  /** Host switch: rankings are withheld from non-admins while true. */
+  leaderboardHidden: z.boolean().default(false),
 });
 export type Challenge = z.infer<typeof zChallenge>;
 

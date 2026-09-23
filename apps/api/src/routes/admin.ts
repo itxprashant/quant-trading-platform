@@ -323,6 +323,31 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, frozen: body.frozen };
   });
 
+  // Hide or reveal rankings for non-admins. Scoring keeps running either way.
+  app.post("/:challengeId/leaderboard-visibility", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(z.object({ hidden: z.boolean() }), req.body, reply);
+    if (!body) return;
+    if (!(await challengeExists(challengeId)))
+      return reply.code(404).send({ error: "not_found" });
+
+    await app.db
+      .update(challenges)
+      .set({ leaderboardHidden: body.hidden })
+      .where(eq(challenges.id, challengeId));
+    await publishBroadcast(app.redis, challengeId, [
+      {
+        target: "all",
+        msg: {
+          type: "leaderboard_visibility",
+          challengeId,
+          data: { hidden: body.hidden },
+        },
+      },
+    ]);
+    return { ok: true, hidden: body.hidden };
+  });
+
   // Lock / unlock a symbol for trading (dynamic asset introduction).
   app.post("/:challengeId/tradeable", async (req, reply) => {
     const { challengeId } = req.params as { challengeId: string };

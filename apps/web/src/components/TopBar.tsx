@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ArrowUpRight, LogOut, Menu, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
@@ -37,15 +37,36 @@ export function Brand() {
 
 export function TopBar({
   center,
+  fluid = false,
   className,
 }: {
+  /** Inline between nav and account from 1440px; its own scrollable row below. */
   center?: ReactNode;
+  /** Span the full viewport instead of the 1600px content column. */
+  fluid?: boolean;
   className?: string;
 }) {
   const { user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const ref = useRef<HTMLElement>(null);
+
+  // Sticky page regions offset themselves by `var(--topbar-h)`.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const sync = () =>
+      root.style.setProperty("--topbar-h", `${el.offsetHeight}px`);
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--topbar-h");
+    };
+  }, []);
   const links = [
     { href: "/challenges", label: "Arena" },
     ...(user?.role === "admin"
@@ -55,12 +76,18 @@ export function TopBar({
 
   return (
     <header
+      ref={ref}
       className={cn(
         "sticky top-0 z-30 border-b border-border bg-bg",
         className,
       )}
     >
-      <div className="mx-auto flex min-h-17 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-8">
+      <div
+        className={cn(
+          "mx-auto flex min-h-17 flex-wrap items-center justify-between gap-x-4 px-4 sm:px-8",
+          !fluid && "max-w-[1600px]",
+        )}
+      >
         <div className="flex shrink-0 items-center gap-10">
           <Brand />
           <nav
@@ -98,7 +125,7 @@ export function TopBar({
           </nav>
         </div>
         {center && (
-          <div className="hidden min-w-0 flex-1 justify-center xl:flex">
+          <div className="flex min-w-0 flex-1 justify-center overflow-x-auto scrollbar-hide empty:hidden max-[1439px]:order-last max-[1439px]:basis-full max-[1439px]:justify-start max-[1439px]:border-t max-[1439px]:border-border max-[1439px]:py-2">
             {center}
           </div>
         )}

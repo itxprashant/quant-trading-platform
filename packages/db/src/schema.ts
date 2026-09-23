@@ -105,6 +105,8 @@ export const challenges = pgTable(
     finalResults: jsonb("final_results").$type<LeaderboardEntry[]>(),
     /** Live-market halt: engine stays up, books stay intact, cancels only. */
     frozen: boolean("frozen").notNull().default(false),
+    /** Rankings withheld from non-admins (REST and WebSocket) while true. */
+    leaderboardHidden: boolean("leaderboard_hidden").notNull().default(false),
     createdBy: uuid("created_by").references(() => users.id, {
       onDelete: "set null",
     }),

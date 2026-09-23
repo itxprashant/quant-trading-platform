@@ -1,91 +1,32 @@
 import type {
   BondTemplate,
-  EdenBotConfig,
   EdenOptionsConfig,
   EtfConfig,
   SymbolConfig,
 } from "./schemas.js";
+import {
+  EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC,
+  EDEN_EVENT_AUCTION_MINUTES,
+  EDEN_EVENT_AUCTION_OPEN_LEAD_SEC,
+  EDEN_EVENT_DURATION_MINUTES,
+  EDEN_EVENT_ETF_LIST_MINUTE,
+  EDEN_EVENT_ETF_WINDOW_MINUTES,
+  EDEN_EVENT_ETF_WINDOW_SEC,
+  EDEN_EVENT_HALFTIME_END_MINUTE,
+  EDEN_EVENT_HALFTIME_START_MINUTE,
+  EDEN_EVENT_OPTIONS_OPEN_MINUTE,
+  EDEN_EVENT_PREMIUM_ACCESS_MINUTES,
+  EDEN_EVENT_PREMIUM_LEAD_SEC,
+} from "./eden-clock.js";
+import {
+  EDEN_EVENT_BONDS,
+  EDEN_EVENT_ETF,
+  EDEN_EVENT_NEURO,
+  EDEN_EVENT_OPTIONS,
+} from "./eden-presets.js";
 
 /** Versioned IDs are durable receipts. Never renumber actions in a running event. */
 export const EDEN_EVENT_VERSION = "eden-v1";
-export const EDEN_EVENT_DURATION_MINUTES = 130;
-export const EDEN_EVENT_AUCTION_MINUTES = [
-  15, 30, 45, 75, 90, 105, 120,
-] as const;
-
-export const EDEN_EVENT_AERIUM: SymbolConfig = {
-  symbol: "AERIUM",
-  name: "Aerium",
-  initialPrice: 1000,
-  volatility: 4,
-  tickSize: 0.5,
-};
-export const EDEN_EVENT_NEURO: SymbolConfig = {
-  symbol: "NEURO",
-  name: "Neuro-Chips",
-  initialPrice: 500,
-  volatility: 2,
-  tickSize: 0.5,
-};
-export const EDEN_EVENT_ETF: EtfConfig = {
-  symbol: "ORBITAL",
-  name: "Orbital-Station ETF",
-  basket: [
-    { symbol: "AERIUM", weight: 2 },
-    { symbol: "NEURO", weight: 1 },
-  ],
-};
-export const EDEN_EVENT_BONDS: BondTemplate[] = [
-  {
-    id: "standard",
-    name: "Standard Bond",
-    price: 10000,
-    faceValue: 10000,
-    couponPer5Min: 500,
-    maxPerUser: 1,
-  },
-  {
-    id: "aerium_pegged",
-    name: "Aerium-Pegged Yield Bond",
-    price: 10000,
-    faceValue: 10000,
-    peggedYield: { symbol: "AERIUM", base: 2000, divisor: 10 },
-    maxPerUser: 1,
-  },
-];
-export const EDEN_EVENT_OPTIONS: EdenOptionsConfig = {
-  enabled: false,
-  underlyings: ["AERIUM"],
-  cycleMinutes: 5,
-  exerciseWindowSec: 15,
-  autoCycle: true,
-  strikeSteps: 1,
-};
-export const EDEN_EVENT_BOTS: EdenBotConfig = {
-  hftMarketMakers: 2,
-  momentumTraders: 4,
-  vegaSnipers: 1,
-  parityArbers: 1,
-  spread: 1,
-  quoteSize: 10,
-  intensity: 0.5,
-};
-export const EDEN_EVENT_DEFAULTS = {
-  auctionDurationSec: 30,
-  auctionWinnerFraction: 0.3,
-  premiumLeadSec: 10,
-  premiumAccessMinutes: 15,
-  otcReplySec: 15,
-  otcBargainDelaySec: 5,
-  etfWindowSec: 30,
-  voteDurationSec: 60,
-  taxRate: 0.15,
-  taxTopFraction: 0.1,
-  taxBottomFraction: 0.2,
-  grantPrize: 10000,
-  assignmentGraceSec: 30,
-  borderPenaltyFraction: 0.2,
-} as const;
 
 export type EdenFairValueEffect = Readonly<{
   symbol: string;
@@ -448,10 +389,16 @@ function buildSchedule(): readonly EdenEventAction[] {
     kind: "list_underlying",
     config: EDEN_EVENT_NEURO,
   });
-  add("list/orbital", 45 * 60, { kind: "list_etf", config: EDEN_EVENT_ETF });
-  add("freeze", 60 * 60, { kind: "freeze", reason: "halftime" });
-  add("unfreeze", 70 * 60, { kind: "unfreeze" });
-  add("options/open", 70 * 60, {
+  add("list/orbital", EDEN_EVENT_ETF_LIST_MINUTE * 60, {
+    kind: "list_etf",
+    config: EDEN_EVENT_ETF,
+  });
+  add("freeze", EDEN_EVENT_HALFTIME_START_MINUTE * 60, {
+    kind: "freeze",
+    reason: "halftime",
+  });
+  add("unfreeze", EDEN_EVENT_HALFTIME_END_MINUTE * 60, { kind: "unfreeze" });
+  add("options/open", EDEN_EVENT_OPTIONS_OPEN_MINUTE * 60, {
     kind: "options_open",
     config: { ...EDEN_EVENT_OPTIONS, enabled: true },
   });
@@ -460,10 +407,12 @@ function buildSchedule(): readonly EdenEventAction[] {
     const round = {
       roundId: `${EDEN_EVENT_VERSION}/auction/${minute}`,
       roundMinute: minute,
-      closesAtSecond: minute * 60 - 10,
-      premiumUntilSecond: (minute + 15) * 60 - 10,
+      closesAtSecond: minute * 60 - EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC,
+      premiumUntilSecond:
+        (minute + EDEN_EVENT_PREMIUM_ACCESS_MINUTES) * 60 -
+        EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC,
     };
-    add(`auction/${minute}/open`, minute * 60 - 40, {
+    add(`auction/${minute}/open`, minute * 60 - EDEN_EVENT_AUCTION_OPEN_LEAD_SEC, {
       kind: "auction_open",
       ...round,
     });
@@ -497,7 +446,7 @@ function buildSchedule(): readonly EdenEventAction[] {
   add("volatility/triple", 120 * 60, { kind: "bot_volatility", multiplier: 3 });
 
   for (const item of EDEN_EVENT_NEWS) {
-    add(`news/${item.minute}/premium`, item.minute * 60 - 10, {
+    add(`news/${item.minute}/premium`, item.minute * 60 - EDEN_EVENT_PREMIUM_LEAD_SEC, {
       kind: "news",
       audience: "premium",
       news: item,
@@ -518,9 +467,8 @@ function buildSchedule(): readonly EdenEventAction[] {
     });
   }
   // Anchored to the ETF's 45-minute introduction, not process startup.
-  for (let minute = 45; minute < 130; minute += 10) {
-    if (minute >= 60 && minute < 70) continue;
-    const closesAtSecond = minute * 60 + 30;
+  for (const minute of EDEN_EVENT_ETF_WINDOW_MINUTES) {
+    const closesAtSecond = minute * 60 + EDEN_EVENT_ETF_WINDOW_SEC;
     add(`etf/${minute}/open`, minute * 60, {
       kind: "etf_window",
       symbol: "ORBITAL",
@@ -534,12 +482,12 @@ function buildSchedule(): readonly EdenEventAction[] {
       closesAtSecond,
     });
   }
-  add("end", 130 * 60, { kind: "end" });
+  add("end", EDEN_EVENT_DURATION_MINUTES * 60, { kind: "end" });
   // Stable sort preserves deliberate same-time ordering (auction resolve before premium).
   return actions.sort((a, b) => a.atSecond - b.atSecond);
 }
 
-export const EDEN_EVENT_ACTIONS = buildSchedule();
+export const EDEN_EVENT_ACTIONS = /*#__PURE__*/ buildSchedule();
 
 /** Pure selector; completed IDs are stable action strings, not runtime database UUIDs. */
 export function dueEdenEventActions(
@@ -551,46 +499,4 @@ export function dueEdenEventActions(
   return EDEN_EVENT_ACTIONS.filter(
     (action) => action.atSecond <= elapsedSeconds && !completed.has(action.id),
   );
-}
-
-/** Rehydrate structural state without replaying already-receipted financial effects. */
-export function edenEventStateAt(elapsedSeconds: number) {
-  if (!Number.isFinite(elapsedSeconds))
-    throw new RangeError("elapsedSeconds must be finite");
-  const minute = elapsedSeconds / 60;
-  const phase =
-    minute < 0
-      ? "pending"
-      : minute < 60
-        ? "session_one"
-        : minute < 70
-          ? "halftime"
-          : minute < 130
-            ? "session_two"
-            : "ended";
-  return {
-    phase,
-    frozen: phase === "pending" || phase === "halftime" || phase === "ended",
-    symbols:
-      minute < 0
-        ? []
-        : minute < 30
-          ? ["AERIUM"]
-          : minute < 45
-            ? ["AERIUM", "NEURO"]
-            : ["AERIUM", "NEURO", "ORBITAL"],
-    bondIds:
-      minute < 10
-        ? []
-        : minute < 18
-          ? ["standard"]
-          : ["standard", "aerium_pegged"],
-    optionsEnabled: minute >= 70 && minute < 130,
-    etfWindowOpen:
-      minute >= 45 &&
-      minute < 130 &&
-      phase !== "halftime" &&
-      (elapsedSeconds - 45 * 60) % 600 < 30,
-    botVolatilityMultiplier: minute >= 120 ? 3 : 1,
-  } as const;
 }

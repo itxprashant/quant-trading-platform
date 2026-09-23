@@ -38,6 +38,13 @@ const redis = createRedis(env.redisUrl);
 
 /** challengeId -> set of connections subscribed to it. */
 const registry = new Map<string, Set<Conn>>();
+/** Challenges whose host has withheld rankings from non-admins. */
+const hiddenLeaderboards = new Set<string>();
+
+function setLeaderboardHidden(challengeId: string, hidden: boolean): void {
+  if (hidden) hiddenLeaderboards.add(challengeId);
+  else hiddenLeaderboards.delete(challengeId);
+}
 
 const fanout = new Fanout(env.redisUrl, dispatch);
 
@@ -48,6 +55,9 @@ function dispatch(challengeId: string, envelopes: BroadcastEnvelope[]): void {
   const conns = registry.get(challengeId);
   if (!conns || conns.size === 0) return;
   for (const env_ of envelopes) {
+    if (env_.msg.type === "leaderboard_visibility") {
+      setLeaderboardHidden(challengeId, env_.msg.data.hidden);
+    }
     // Embargoed live news: premium subscribers see it immediately, everyone
     // else only after the embargo lifts (the premium-feed lead time).
     if (
@@ -110,6 +120,12 @@ function send(conn: Conn, msg: ServerMessage): void {
   if (conn.ws.readyState !== WebSocket.OPEN) return;
   // Host-only information must not leak through live broadcasts or snapshots.
   if (msg.type === "fair_value" && !conn.isAdmin) return;
+  if (
+    msg.type === "leaderboard" &&
+    !conn.isAdmin &&
+    hiddenLeaderboards.has(msg.challengeId)
+  )
+    return;
   if (conn.ws.bufferedAmount > env.maxBufferedBytes) {
     // Slow consumer: drop the connection rather than buffer unbounded.
     metrics.messagesDropped += 1;
@@ -236,6 +252,14 @@ async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
 async function subscribe(conn: Conn, challengeId: string): Promise<void> {
   if (conn.subs.has(challengeId)) return;
   conn.subs.add(challengeId);
+  // Load the flag before registering so no leaderboard broadcast slips through.
+  const row = await db.query.challenges.findFirst({
+    where: eq(challenges.id, challengeId),
+    columns: { leaderboardHidden: true },
+  });
+  const leaderboardHidden = row?.leaderboardHidden ?? false;
+  setLeaderboardHidden(challengeId, leaderboardHidden);
+  if (!conn.subs.has(challengeId)) return;
   let set = registry.get(challengeId);
   if (!set) {
     set = new Set();
@@ -248,6 +272,11 @@ async function subscribe(conn: Conn, challengeId: string): Promise<void> {
     type: "market_status",
     challengeId,
     data: { frozen: await isMarketFrozen(redis, challengeId) },
+  });
+  send(conn, {
+    type: "leaderboard_visibility",
+    challengeId,
+    data: { hidden: leaderboardHidden },
   });
   await sendSnapshot(conn, challengeId);
 }
