@@ -17,7 +17,7 @@ export function nowId(prefix = "e2e") {
  * ------------------------------------------------------------------ */
 export class HttpError extends Error {
   constructor(status, body, path, method) {
-    super(`${method} ${path} → ${status}`);
+    super(`${method} ${path} → ${status}${body?.error ? ` ${body.error}` : ""}`);
     this.status = status;
     this.body = body;
     this.path = path;
@@ -122,6 +122,18 @@ export async function awaitEngine(_adminToken, traderToken, challengeId, symbol)
       await http.del(`/api/orders/${id}`, { token: traderToken }).catch(() => {});
     }
   }
+}
+
+/** Wait until the caller's order reaches one of `statuses`. */
+export async function waitStatus(token, challengeId, orderId, statuses, label = "order status") {
+  return poll(
+    async () => {
+      const rows = await http.get("/api/orders", { token, query: { challengeId } });
+      const o = rows.find((r) => r.id === orderId);
+      return o && statuses.includes(o.status) ? o : null;
+    },
+    { timeout: 20_000, interval: 400, label },
+  );
 }
 
 export async function poll(fn, { timeout = 15_000, interval = 400, label = "condition" } = {}) {
@@ -319,6 +331,59 @@ export function edenConfig(overrides = {}) {
       premiumAccessMinutes: 5,
     },
     ...overrides,
+  };
+}
+
+/** Mirrors the admin form's "New Eden playbook preset" (scripted 130-minute event). */
+export function scriptedEdenConfig() {
+  return {
+    symbols: [
+      { symbol: "AERIUM", name: "Aerium", initialPrice: 1000, volatility: 4, tickSize: 0.5 },
+    ],
+    startingCash: 10_000,
+    minPosition: -100,
+    maxPosition: 100,
+    maxOrderQuantity: 50,
+    maxOpenOrders: 25,
+    maxOrdersPerSecond: 8,
+    maxVolumePerMinute: 1000,
+    allowMargin: true,
+    autonomousPrice: true,
+    bots: { marketMakers: 0, noiseTraders: 0, spread: 0.5, quoteSize: 5, intensity: 0.5 },
+    eden: {
+      eventScript: true,
+      rules: {
+        enabled: true,
+        costOfCarryPerUnitPerMinute: 1,
+        loanRepayMultiplier: 2,
+        marginCallThreshold: 0,
+        forcedLiquidation: true,
+        positionCap: 100,
+      },
+      bots: {
+        hftMarketMakers: 2,
+        momentumTraders: 4,
+        vegaSnipers: 1,
+        parityArbers: 1,
+        spread: 1,
+        quoteSize: 10,
+        intensity: 0.5,
+      },
+      options: {
+        enabled: false,
+        underlyings: ["AERIUM"],
+        cycleMinutes: 5,
+        exerciseWindowSec: 15,
+        autoCycle: true,
+        strikeSteps: 1,
+      },
+      bonds: [],
+      etfs: [],
+      auctionDurationSec: 30,
+      auctionWinnerFraction: 0.3,
+      premiumLeadSec: 10,
+      premiumAccessMinutes: 15,
+    },
   };
 }
 

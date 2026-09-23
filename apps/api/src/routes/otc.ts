@@ -2,7 +2,6 @@ import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   challenges,
-  orders,
   otcOffers,
   participants,
   positions,
@@ -209,6 +208,7 @@ export async function otcRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // Preliminary cap check only; the engine rechecks after the bargaining delay.
+      // Working orders are ignored because the engine's reservation cancels them.
       // Cash is deliberately not a guard: an accepted deal can trigger a margin call.
       if (challenge.type === "new_eden") {
         const changes = new Map<string, number>();
@@ -230,25 +230,7 @@ export async function otcRoutes(app: FastifyInstance): Promise<void> {
                 eq(positions.symbol, symbol),
               ),
             );
-          const side = delta > 0 ? "buy" : "sell";
-          const [working] = await app.db
-            .select({
-              quantity: sql<number>`coalesce(sum(${orders.remainingQuantity}), 0)`,
-            })
-            .from(orders)
-            .where(
-              and(
-                eq(orders.challengeId, challengeId),
-                eq(orders.userId, req.user.sub),
-                eq(orders.symbol, symbol),
-                eq(orders.side, side),
-                inArray(orders.status, ["open", "partially_filled"]),
-              ),
-            );
-          const projected =
-            (position?.quantity ?? 0) +
-            delta +
-            Math.sign(delta) * Number(working?.quantity ?? 0);
+          const projected = (position?.quantity ?? 0) + delta;
           if (
             (delta > 0 && projected > cap) ||
             (delta < 0 && projected < -cap)

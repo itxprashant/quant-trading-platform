@@ -289,7 +289,35 @@ describe("manager checkpoint transactions", () => {
     expect(
       p.commits[0]!.state.accounts.find((a) => a.userId === "buyer")!.cash,
     ).toBe(9000);
-    expect(manager.bondValueOf("buyer")).toBe(1100);
+    expect(manager.bondValueOf("buyer")).toBe(1000);
+    manager.stop();
+  });
+
+  it("refuses a purchase that would overdraw cash", async () => {
+    const f = fixtures();
+    const manager = new MarketsManager(
+      f.engine,
+      f.redis as any,
+      f.db as any,
+      f.challenge as any,
+      [{ ...standard, id: "whale", price: 50_000, faceValue: 50_000 }],
+      [],
+      60000,
+      f.emit,
+      f.refresh,
+    );
+    await manager.start();
+    await manager.purchaseBond("buyer", "whale", 1, 1);
+    expect(f.engine.cashOf("buyer")).toBe(10000);
+    expect(f.tables.holdings).toHaveLength(0);
+    expect(manager.bondValueOf("buyer")).toBe(0);
+    expect(f.emit).toHaveBeenCalledWith([
+      expect.objectContaining({
+        type: "alert",
+        userId: "buyer",
+        message: expect.stringContaining("Insufficient free cash"),
+      }),
+    ]);
     manager.stop();
   });
 
@@ -870,7 +898,7 @@ describe("bond holdings", () => {
       manager.stop();
     },
   );
-  it("serializes competing purchases and preserves per-unit face value on restart", async () => {
+  it("serializes competing purchases and carries principal at cost across restarts", async () => {
     const f = fixtures();
     const bond = {
       id: "standard",
@@ -899,12 +927,12 @@ describe("bond holdings", () => {
     expect(f.tables.holdings).toHaveLength(1);
     expect(f.tables.holdings![0].quantity).toBe(2);
     expect(f.engine.cashOf("u")).toBe(8000);
-    expect(manager.bondValueOf("u")).toBe(2200);
+    expect(manager.bondValueOf("u")).toBe(2000);
     await manager.payCoupons(2);
     expect(f.engine.cashOf("u")).toBe(8100);
     manager.stop();
     await manager.start();
-    expect(manager.bondValueOf("u")).toBe(2200);
+    expect(manager.bondValueOf("u")).toBe(2000);
     manager.stop();
   });
 

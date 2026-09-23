@@ -255,6 +255,21 @@ export class ChallengeRunner {
         .set({ endsAt: this.challenge.endsAt })
         .where(eq(challenges.id, this.challenge.id));
     }
+    // A scripted market opens at minute 0 (`market_open`), even if the host
+    // flips the challenge live before startsAt.
+    if (
+      this.edenEnabled &&
+      this.eden?.eventScript &&
+      !this.frozen &&
+      Date.now() < this.challenge.startsAt.getTime()
+    ) {
+      this.frozen = true;
+      this.challenge.frozen = true;
+      await this.db
+        .update(challenges)
+        .set({ frozen: true })
+        .where(eq(challenges.id, this.challenge.id));
+    }
     const checkpoint = await this.db.query.engineCheckpoints.findFirst({
       where: eq(engineCheckpoints.challengeId, this.challenge.id),
     });

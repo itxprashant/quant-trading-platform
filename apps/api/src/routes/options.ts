@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { challenges } from "@qtp/db";
+import { challenges, participants } from "@qtp/db";
 import { getOptionContracts, getPrice, publishCommand } from "@qtp/bus";
 import { intrinsicValue, type OptionType } from "@qtp/core";
 import { zExerciseOptionInput, type EngineCommand } from "@qtp/shared";
@@ -53,6 +53,13 @@ export async function optionRoutes(app: FastifyInstance): Promise<void> {
       if (challenge.frozen) {
         return reply.code(409).send({ error: "market_frozen" });
       }
+      const participant = await app.db.query.participants.findFirst({
+        where: and(
+          eq(participants.challengeId, input.challengeId),
+          eq(participants.userId, req.user.sub),
+        ),
+      });
+      if (!participant) return reply.code(403).send({ error: "not_enrolled" });
       const contracts = await getOptionContracts(app.redis, input.challengeId);
       const series = contracts.find((c) => c.symbol === input.symbol);
       if (!series) return reply.code(400).send({ error: "unknown_symbol" });

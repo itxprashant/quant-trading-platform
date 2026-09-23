@@ -14,6 +14,10 @@
  *   ADMIN_PASSWORD   default admin1234
  *   TRADER_PASSWORD  default trader1234
  *   SKIP_CLEANUP=1   leave e2e challenges live (not recommended)
+ *   SKIP_SCRIPT=1    skip the scripted New Eden timeline (~5.5 min on real clock)
+ *   ONLY=a,b         run a subset: public, auth, challenges, trading, realtime,
+ *                    admin, eden, edge, post-audit, script (later suites reuse
+ *                    fixtures from earlier ones and skip or fail without them)
  */
 
 import { API, WS, createHarness, http, login } from "./lib.mjs";
@@ -25,6 +29,8 @@ import { suiteRealtime } from "./suites/05-realtime.mjs";
 import { suiteAdmin } from "./suites/06-admin.mjs";
 import { suiteNewEden } from "./suites/07-new-eden.mjs";
 import { suiteEdge } from "./suites/08-edge.mjs";
+import { startScriptedEden, suiteScriptedEden } from "./suites/09-eden-script.mjs";
+import { suitePostAudit } from "./suites/10-post-audit.mjs";
 
 const ADMIN_USER = process.env.ADMIN_USER ?? "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin1234";
@@ -83,16 +89,23 @@ async function main() {
     findings: [],
   };
 
+  const only = process.env.ONLY?.split(",").map((s) => s.trim());
+  const want = (name) => !only || only.includes(name);
+  const script = process.env.SKIP_SCRIPT !== "1" && want("script");
+
   try {
     await setup(ctx);
-    await suitePublic(t);
-    await suiteAuth(t, ctx);
-    await suiteChallenges(t, ctx);
-    await suiteTrading(t, ctx);
-    await suiteRealtime(t, ctx);
-    await suiteAdmin(t, ctx);
-    await suiteNewEden(t, ctx);
-    await suiteEdge(t, ctx);
+    if (script) await startScriptedEden(ctx);
+    if (want("public")) await suitePublic(t);
+    if (want("auth")) await suiteAuth(t, ctx);
+    if (want("challenges")) await suiteChallenges(t, ctx);
+    if (want("trading")) await suiteTrading(t, ctx);
+    if (want("realtime")) await suiteRealtime(t, ctx);
+    if (want("admin")) await suiteAdmin(t, ctx);
+    if (want("eden")) await suiteNewEden(t, ctx);
+    if (want("edge")) await suiteEdge(t, ctx);
+    if (want("post-audit")) await suitePostAudit(t, ctx);
+    if (script) await suiteScriptedEden(t, ctx);
   } catch (err) {
     console.error("\nSuite aborted:", err);
     t.results.push({

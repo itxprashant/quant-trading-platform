@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { bondHoldings, challenges } from "@qtp/db";
+import { bondHoldings, challenges, participants } from "@qtp/db";
 import {
   getEtfWindows,
   getPrice,
@@ -82,6 +82,20 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
         (b) => b.id === input.bondId,
       );
       if (!tpl) return reply.code(400).send({ error: "unknown_bond" });
+      const participant = await app.db.query.participants.findFirst({
+        where: and(
+          eq(participants.challengeId, input.challengeId),
+          eq(participants.userId, req.user.sub),
+        ),
+      });
+      if (!participant) return reply.code(403).send({ error: "not_enrolled" });
+      // Preliminary only: the engine rechecks cash at debit.
+      if (
+        !Number.isFinite(participant.cash) ||
+        participant.cash < tpl.price * input.quantity
+      ) {
+        return reply.code(409).send({ error: "insufficient_cash" });
+      }
       const existing = await app.db
         .select()
         .from(bondHoldings)
@@ -162,6 +176,13 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
         (e) => e.symbol === input.etfSymbol,
       );
       if (!listed) return reply.code(400).send({ error: "unknown_etf" });
+      const participant = await app.db.query.participants.findFirst({
+        where: and(
+          eq(participants.challengeId, input.challengeId),
+          eq(participants.userId, req.user.sub),
+        ),
+      });
+      if (!participant) return reply.code(403).send({ error: "not_enrolled" });
       if (
         !(await isEtfWindowOpen(app.redis, input.challengeId, input.etfSymbol))
       ) {

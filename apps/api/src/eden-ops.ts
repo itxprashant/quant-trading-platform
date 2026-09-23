@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   auctions,
@@ -27,6 +27,7 @@ export async function resolveAuctionRound(
   app: FastifyInstance,
   challengeId: string,
   auctionId: string,
+  { closeNow = false }: { closeNow?: boolean } = {},
 ): Promise<void> {
   const auction = await app.db.query.auctions.findFirst({
     where: and(
@@ -35,6 +36,19 @@ export async function resolveAuctionRound(
     ),
   });
   if (!auction || auction.status !== "open") return;
+  // The engine ignores rounds that have not expired; a host override closes
+  // bidding first so it resolves now instead of silently waiting.
+  if (closeNow)
+    await app.db
+      .update(auctions)
+      .set({ expiresAt: new Date() })
+      .where(
+        and(
+          eq(auctions.id, auctionId),
+          eq(auctions.status, "open"),
+          gt(auctions.expiresAt, new Date()),
+        ),
+      );
 
   await publishCommand(app.redis, challengeId, {
     type: "resolve_auction",
@@ -137,6 +151,7 @@ export async function awardGrantMission(
   app: FastifyInstance,
   challengeId: string,
   grantId: string,
+  { closeNow = false }: { closeNow?: boolean } = {},
 ): Promise<void> {
   const grant = await app.db.query.grantMissions.findFirst({
     where: and(
@@ -145,6 +160,22 @@ export async function awardGrantMission(
     ),
   });
   if (!grant || grant.status !== "open") return;
+  // As with auctions, the engine only awards expired missions.
+  if (closeNow) {
+    const now = new Date();
+    const [closed] = await app.db
+      .update(grantMissions)
+      .set({ expiresAt: now })
+      .where(
+        and(
+          eq(grantMissions.id, grantId),
+          eq(grantMissions.status, "open"),
+          gt(grantMissions.expiresAt, now),
+        ),
+      )
+      .returning({ expiresAt: grantMissions.expiresAt });
+    if (closed) grant.expiresAt = closed.expiresAt;
+  }
 
   const cmd: EngineCommand = {
     type: "award_grant",

@@ -235,7 +235,7 @@ export async function portfolioRoutes(app: FastifyInstance): Promise<void> {
           undefined);
 
       marketValue += bondRows.reduce(
-        (sum, b) => sum + Math.max(0, b.quantity) * b.faceValue,
+        (sum, b) => sum + Math.max(0, b.quantity) * b.price,
         0,
       );
       const loanDebt = isEden

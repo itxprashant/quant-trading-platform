@@ -1278,9 +1278,15 @@ export class ChallengeEngine {
         continue;
       }
 
-      const takerCap = this.capacity(cmd.userId, symbol, cmd.side);
-      if (takerCap <= 0) break; // taker at position limit
-      const makerCap = this.capacity(best.userId, symbol, best.side);
+      const takerCap = Math.min(
+        this.capacity(cmd.userId, symbol, cmd.side),
+        cmd.force ? Infinity : this.fundable(cmd.userId, cmd.side, best.price),
+      );
+      if (takerCap <= 0) break; // taker at position or cash limit
+      const makerCap = Math.min(
+        this.capacity(best.userId, symbol, best.side),
+        this.fundable(best.userId, best.side, best.price),
+      );
       if (makerCap <= 0) {
         // Maker can no longer trade within limits; pull their order.
         book.remove(best.id);
@@ -1555,6 +1561,14 @@ export class ChallengeEngine {
         ? (cap ?? this.cfg.maxPosition) - pos
         : pos - (cap === undefined ? this.cfg.minPosition : -cap);
     return capacity - this.reservedQuantity(userId, symbol, side);
+  }
+
+  /** Units a human buyer can pay for in cash when margin is disabled. */
+  private fundable(userId: string, side: OrderSide, price: number): number {
+    if (this.cfg.allowMargin || side !== "buy" || userId.startsWith("bot:"))
+      return Infinity;
+    if (!(price > 0)) return Infinity;
+    return Math.max(0, Math.floor(this.cashOf(userId) / price + 1e-9));
   }
 
   private applyFill(

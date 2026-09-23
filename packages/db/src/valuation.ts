@@ -187,8 +187,9 @@ export async function getChallengeValuation(
     const account = accounts.get(bond.userId);
     if (!account || challenge.type !== "new_eden") continue;
     account.bonds.push(bond);
-    // Coupons already flow into cash. Only outstanding principal belongs here.
-    account.bondValue += Math.max(0, bond.quantity) * bond.faceValue;
+    // Coupons already flow into cash. Only outstanding principal, at cost, belongs
+    // here: bonds never mature in-event, so face value would be unearned PnL.
+    account.bondValue += Math.max(0, bond.quantity) * bond.price;
   }
   for (const account of accounts.values()) {
     account.marketValue = account.positionValue + account.bondValue;

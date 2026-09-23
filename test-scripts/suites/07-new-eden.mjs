@@ -1,4 +1,4 @@
-import { http, edenConfig, nowId, poll, sleep, awaitEngine } from "../lib.mjs";
+import { http, edenConfig, nowId, poll, sleep, awaitEngine, waitStatus } from "../lib.mjs";
 
 export async function suiteNewEden(t, ctx) {
   t.suite("New Eden economy");
@@ -12,11 +12,14 @@ export async function suiteNewEden(t, ctx) {
         type: "new_eden",
         config: edenConfig(),
         scoring: { kind: "directional", pnlWeight: 1 },
+        // Loans amortize to endsAt and are refused without one.
+        endsAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
       },
       { token: ctx.admin.token },
     );
     t.eq(created.type, "new_eden");
     t.ok(created.config.eden?.rules?.enabled);
+    t.ok(created.endsAt, "endsAt should persist");
     ctx.eden = created;
     ctx.createdIds.push(created.id);
     const live = await http.post(
@@ -28,6 +31,7 @@ export async function suiteNewEden(t, ctx) {
     ctx.eden = live;
     await http.post(`/api/challenges/${created.id}/join`, {}, { token: ctx.t1.token });
     await http.post(`/api/challenges/${created.id}/join`, {}, { token: ctx.t2.token });
+    await http.post(`/api/challenges/${created.id}/join`, {}, { token: ctx.t3.token });
   });
 
   const cid = () => ctx.eden.id;
@@ -87,7 +91,8 @@ export async function suiteNewEden(t, ctx) {
       { timeout: 20_000, label: "loan reflected on portfolio" },
     );
     t.approx(after.loanDebt, 800, 1e-4);
-    t.approx(after.freeCash, after.cash + after.marketValue - after.loanDebt, 1e-4);
+    // Eden margin is cash-based: free cash is cash, not equity.
+    t.approx(after.freeCash, after.cash, 1e-4);
     t.ok(after.loans.some((l) => l.id === res.loan.id));
     ctx.loanId = res.loan.id;
   });
@@ -192,7 +197,7 @@ export async function suiteNewEden(t, ctx) {
     );
   });
 
-  await t.test("open ETF window → create 1 ORB at NAV", async () => {
+  await t.test("ETF create without the basket is refused (physical delivery)", async () => {
     await http.post(
       `/api/admin/${cid()}/etf-window`,
       { etfSymbol: "ORB", open: true },
@@ -206,20 +211,93 @@ export async function suiteNewEden(t, ctx) {
       },
       { timeout: 12_000, label: "ETF window open" },
     );
-    const before = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t1.token });
     await http.post(
       "/api/markets/etfs/trade",
       { challengeId: cid(), etfSymbol: "ORB", action: "create", quantity: 1 },
-      { token: ctx.t1.token },
+      { token: ctx.t3.token },
     );
-    const after = await poll(
+    await sleep(2500);
+    const p = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t3.token });
+    t.ok(
+      !p.positions.some((x) => x.symbol === "ORB" && x.quantity !== 0),
+      "ORB was minted without delivering AERIUM + 2 HELION",
+    );
+  });
+
+  await t.test("ETF create/redeem swaps the basket at NAV without moving cash", async () => {
+    // t3 buys the basket (1 AERIUM + 2 HELION) from t2, then converts it.
+    const legs = [
+      { symbol: "AERIUM", quantity: 1, price: 1000 },
+      { symbol: "HELION", quantity: 2, price: 250 },
+    ];
+    for (const leg of legs) {
+      const sell = await http.post(
+        "/api/orders",
+        { challengeId: cid(), symbol: leg.symbol, side: "sell", type: "limit", ...leg },
+        { token: ctx.t2.token },
+      );
+      await waitStatus(ctx.t2.token, cid(), sell.orderId, ["open"], `t2 ${leg.symbol} ask`);
+      const buy = await http.post(
+        "/api/orders",
+        { challengeId: cid(), symbol: leg.symbol, side: "buy", type: "limit", ...leg },
+        { token: ctx.t3.token },
+      );
+      await waitStatus(ctx.t3.token, cid(), buy.orderId, ["filled"], `t3 ${leg.symbol} fill`);
+    }
+    const qty = (p, s) => p.positions.find((x) => x.symbol === s)?.quantity ?? 0;
+    const seeded = await poll(
       async () => {
-        const p = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t1.token });
-        return p.positions.some((x) => x.symbol === "ORB" && x.quantity >= 1) ? p : null;
+        const p = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t3.token });
+        return qty(p, "AERIUM") === 1 && qty(p, "HELION") === 2 ? p : null;
+      },
+      { timeout: 15_000, label: "t3 holds the basket" },
+    );
+
+    await http.post(
+      "/api/markets/etfs/trade",
+      { challengeId: cid(), etfSymbol: "ORB", action: "create", quantity: 1 },
+      { token: ctx.t3.token },
+    );
+    const created = await poll(
+      async () => {
+        const p = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t3.token });
+        return qty(p, "ORB") === 1 ? p : null;
       },
       { timeout: 15_000, label: "ETF created" },
     );
-    t.ok(after.cash < before.cash, "create should debit cash at NAV");
+    t.eq(qty(created, "AERIUM"), 0, "create should take the AERIUM leg");
+    t.eq(qty(created, "HELION"), 0, "create should take both HELION units");
+    t.approx(created.cash, seeded.cash, 5, "create should not move cash beyond carry");
+
+    await http.post(
+      "/api/markets/etfs/trade",
+      { challengeId: cid(), etfSymbol: "ORB", action: "redeem", quantity: 1 },
+      { token: ctx.t3.token },
+    );
+    const redeemed = await poll(
+      async () => {
+        const p = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t3.token });
+        return qty(p, "ORB") === 0 && qty(p, "AERIUM") === 1 ? p : null;
+      },
+      { timeout: 15_000, label: "ETF redeemed" },
+    );
+    t.eq(qty(redeemed, "HELION"), 2, "redeem should return both HELION units");
+
+    // Hand the basket back so later grant tests start from flat books.
+    for (const leg of legs) {
+      const sell = await http.post(
+        "/api/orders",
+        { challengeId: cid(), symbol: leg.symbol, side: "sell", type: "limit", ...leg },
+        { token: ctx.t3.token },
+      );
+      await waitStatus(ctx.t3.token, cid(), sell.orderId, ["open"], `t3 ${leg.symbol} ask`);
+      const buy = await http.post(
+        "/api/orders",
+        { challengeId: cid(), symbol: leg.symbol, side: "buy", type: "limit", ...leg },
+        { token: ctx.t2.token },
+      );
+      await waitStatus(ctx.t2.token, cid(), buy.orderId, ["filled"], `t2 ${leg.symbol} buyback`);
+    }
     await http.post(
       `/api/admin/${cid()}/etf-window`,
       { etfSymbol: "ORB", open: false },
@@ -301,10 +379,47 @@ export async function suiteNewEden(t, ctx) {
       { action: "accept" },
       { token: ctx.t1.token },
     );
-    t.eq(accepted.result, "settled");
+    // HTTP acceptance is provisional; the engine confirms and settles.
+    t.eq(accepted.result, "accepted");
+    const helion = (p) => p.positions.find((x) => x.symbol === "HELION")?.quantity ?? 0;
+    const settled = await poll(
+      async () => {
+        const open = await http.get(`/api/otc/${cid()}`, { token: ctx.t1.token });
+        if (open.some((o) => o.id === acceptOffer.offer.id)) return null;
+        const p = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t1.token });
+        return helion(p) === 2 ? p : null;
+      },
+      { timeout: 15_000, label: "OTC accept settled (+2 HELION)" },
+    );
+    t.eq(helion(settled), 2);
 
-    const pending = await http.get(`/api/otc/${cid()}`, { token: ctx.t1.token });
-    t.ok(!pending.some((o) => o.id === acceptOffer.offer.id && o.status === "pending"));
+    // Countering at exactly fair value never trips the reject probability.
+    const bargainOffer = await http.post(
+      `/api/admin/${cid()}/otc`,
+      {
+        userId: ctx.t1.user.id,
+        description: "E2E bargain at fair",
+        legs: [{ symbol: "HELION", quantity: 1, price: 250 }],
+        cashToTrader: 0,
+        expiresSec: 30,
+      },
+      { token: ctx.admin.token },
+    );
+    const bargained = await http.post(
+      `/api/otc/${bargainOffer.offer.id}/respond`,
+      { action: "bargain", counterCash: 0 },
+      { token: ctx.t1.token },
+    );
+    t.eq(bargained.result, "accepted");
+    const delayMs = Date.parse(bargained.settleAt) - Date.now();
+    t.ok(delayMs > 2_500 && delayMs <= 6_000, `bargain should settle ~5s later, got ${delayMs}ms`);
+    await poll(
+      async () => {
+        const p = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t1.token });
+        return helion(p) === 3 ? p : null;
+      },
+      { timeout: 20_000, label: "bargain settled after delay (+1 HELION)" },
+    );
 
     await t.throws(
       () =>
@@ -344,6 +459,34 @@ export async function suiteNewEden(t, ctx) {
       { amount: 80 },
       { token: ctx.t1.token },
     );
+    if (ctx.fresh2) {
+      await t.throws(
+        () =>
+          http.post(
+            `/api/auctions/${opened.auctionId}/bid`,
+            { amount: 5 },
+            { token: ctx.fresh2.token },
+          ),
+        { status: 403, error: "not_enrolled" },
+      );
+    }
+    await t.throws(
+      () =>
+        http.post(
+          `/api/auctions/${opened.auctionId}/bid`,
+          { amount: 1e9 },
+          { token: ctx.t2.token },
+        ),
+      { status: 409, error: "insufficient_cash" },
+    );
+
+    // Loan installments move cash and debt together, so cash + debt isolates the bid charge.
+    const wealth = async (u) => {
+      const p = await http.get(`/api/portfolio/${cid()}`, { token: u.token });
+      return p.cash + (p.loanDebt ?? 0);
+    };
+    const t1Before = await wealth(ctx.t1);
+    const t2Before = await wealth(ctx.t2);
 
     await http.post(
       `/api/admin/${cid()}/auction/${opened.auctionId}/resolve`,
@@ -367,6 +510,17 @@ export async function suiteNewEden(t, ctx) {
     t.eq(loser.myBid.won, false);
     t.eq(loser.premium, false);
     ctx.auctionId = opened.auctionId;
+
+    // Paid auction: only the winner pays, and pays their own bid.
+    const t1After = await poll(
+      async () => {
+        const w = await wealth(ctx.t1);
+        return w <= t1Before - 75 ? w : null;
+      },
+      { timeout: 10_000, label: "winner charged the 80 bid" },
+    );
+    t.approx(t1Before - t1After, 80, 5);
+    t.approx(await wealth(ctx.t2), t2Before, 5);
   });
 
   await t.test("bid after resolve is 409 auction_closed", async () => {
@@ -445,6 +599,17 @@ export async function suiteNewEden(t, ctx) {
       { token: ctx.admin.token },
     );
     t.ok(opened.proposalId);
+    if (ctx.fresh2) {
+      await t.throws(
+        () =>
+          http.post(
+            `/api/votes/${opened.proposalId}/vote`,
+            { choice: "no" },
+            { token: ctx.fresh2.token },
+          ),
+        { status: 403, error: "not_enrolled" },
+      );
+    }
     await http.post(
       `/api/votes/${opened.proposalId}/vote`,
       { choice: "yes" },
@@ -495,7 +660,7 @@ export async function suiteNewEden(t, ctx) {
   });
 
   await t.test("grant: largest holder wins the prize", async () => {
-    // Seed a HELION long for t2 via a crossed trade against t1 (who is short from OTC).
+    // t1 hands its 3 OTC HELION to t2, leaving t2 the only positive holder.
     const sell = await http.post(
       "/api/orders",
       {

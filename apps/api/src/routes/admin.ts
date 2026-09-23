@@ -21,10 +21,13 @@ import {
   trades,
   users,
   voteProposals,
+  type Challenge,
 } from "@qtp/db";
 import {
   EDEN_EVENT_AERIUM,
+  EDEN_EVENT_DURATION_MINUTES,
   EDEN_EVENT_OPTIONS,
+  edenEventStateAt,
   zCreateOtcInput,
   zEdenConfig,
   zEdenOptionsConfig,
@@ -54,6 +57,28 @@ import {
   resolveAuctionRound,
   scheduleEdenResolver,
 } from "../eden-ops.js";
+
+/** Whether a scripted event is in its pre-open or halftime halt. */
+function scriptedHaltAt(challenge: Challenge, now: number): boolean {
+  const eden = challenge.config.eden;
+  if (
+    challenge.type !== "new_eden" ||
+    !eden?.eventScript ||
+    !eden.rules.enabled ||
+    !challenge.startsAt
+  )
+    return false;
+  const start = challenge.startsAt.getTime();
+  if (now < start) return true;
+  if (!challenge.endsAt) return false;
+  // The engine pins endsAt to startsAt + the scripted duration.
+  const minuteMs =
+    (challenge.endsAt.getTime() - start) / EDEN_EVENT_DURATION_MINUTES;
+  return (
+    minuteMs > 0 &&
+    edenEventStateAt(((now - start) / minuteMs) * 60).phase === "halftime"
+  );
+}
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", app.requireAdmin);
@@ -241,6 +266,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     if (!challenge) return reply.code(404).send({ error: "not_found" });
     if (challenge.status !== "live") {
       return reply.code(409).send({ error: "challenge_not_live" });
+    }
+    // The script does not re-freeze, so an unfreeze here would end its halt early.
+    if (!body.frozen && scriptedHaltAt(challenge, Date.now())) {
+      return reply.code(409).send({ error: "scripted_halt" });
     }
 
     await app.db
@@ -606,7 +635,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       challengeId: string;
       auctionId: string;
     };
-    await resolveAuctionRound(app, challengeId, auctionId);
+    await resolveAuctionRound(app, challengeId, auctionId, { closeNow: true });
     return { ok: true };
   });
 
@@ -732,7 +761,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       challengeId: string;
       grantId: string;
     };
-    await awardGrantMission(app, challengeId, grantId);
+    await awardGrantMission(app, challengeId, grantId, { closeNow: true });
     return { ok: true };
   });
 

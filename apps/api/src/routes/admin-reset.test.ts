@@ -272,6 +272,7 @@ async function fixture(status = "paused") {
     call: (id = ID) => request("/:challengeId/reset", undefined, id),
     openOptions: (body: unknown = {}) =>
       request("/:challengeId/options/open", body),
+    freeze: (frozen: boolean) => request("/:challengeId/freeze", { frozen }),
     beforeTransaction: (run: () => void) => {
       beforeTransaction = run;
     },
@@ -331,6 +332,41 @@ describe("admin option opening", () => {
     });
     expect(publishCommand).not.toHaveBeenCalled();
     expect(f.tables.challenges![0].config.eden.options.enabled).toBe(false);
+  });
+});
+
+describe("admin freeze during a scripted event", () => {
+  const MINUTE = 60_000;
+  async function scripted(elapsedMinutes: number) {
+    const f = await fixture("live");
+    const start = Date.now() - elapsedMinutes * MINUTE;
+    Object.assign(f.tables.challenges![0], {
+      type: "new_eden",
+      finalizedAt: null,
+      startsAt: new Date(start),
+      endsAt: new Date(start + 130 * MINUTE),
+    });
+    return f;
+  }
+
+  it.each([
+    ["before the scripted open", -5],
+    ["during halftime", 65],
+  ])("refuses a manual unfreeze %s", async (_label: string, elapsed: number) => {
+    const f = await scripted(elapsed);
+    expect(await f.freeze(false)).toEqual({
+      statusCode: 409,
+      body: { error: "scripted_halt" },
+    });
+    expect(f.tables.challenges![0].frozen).toBe(true);
+    expect(publishCommand).not.toHaveBeenCalled();
+    expect((await f.freeze(true)).statusCode).toBe(200);
+  });
+
+  it("allows a manual unfreeze during a trading session", async () => {
+    const f = await scripted(20);
+    expect((await f.freeze(false)).body).toEqual({ ok: true, frozen: false });
+    expect(f.tables.challenges![0].frozen).toBe(false);
   });
 });
 

@@ -276,6 +276,29 @@ describe("reset-aware lifecycle starts", () => {
     expect(f.trace).not.toContain("updated");
   });
 
+  it.each(["live", "scheduled", "paused", "draft"])(
+    "refuses to reopen an ended challenge as %s",
+    async (status: string) => {
+      const f = await fixture("ended");
+      expect(await f.status(status)).toEqual({
+        statusCode: 409,
+        body: { error: "challenge_ended" },
+      });
+      expect(f.row().status).toBe("ended");
+      expect(markChallengeActive).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses to reopen a finalized row but still lets it be ended", async () => {
+    const f = await fixture("live");
+    f.row().finalizedAt = new Date(END);
+    expect((await f.status("live")).body).toEqual({
+      error: "challenge_ended",
+    });
+    expect((await f.status("ended")).statusCode).toBe(200);
+    expect(f.row().status).toBe("ended");
+  });
+
   it("allows normal engine ownership and seeds prices before releasing the row lock", async () => {
     const f = await fixture("paused");
     f.cache.set(redisKeys.engineLock(ID), "engine:normal-owner");

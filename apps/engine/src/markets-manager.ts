@@ -30,8 +30,9 @@ import type { DbTransaction, Persistence } from "./persistence.js";
  *  - Bonds: bought from the bank for a cash outlay; pay a coupon every 5 game
  *    minutes — either fixed, or the inverse-pegged Aerium yield `(base − price)
  *    / divisor` that bleeds when the underlying spikes (the structural-exploit
- *    trap). Face value is an illiquid asset (counts toward net worth, not free
- *    cash) so locking cash into bonds shrinks margin headroom.
+ *    trap). Bonds never mature in-event, so principal is carried at purchase
+ *    price: an illiquid asset (counts toward net worth, not free cash) so
+ *    locking cash into bonds shrinks margin headroom. Face value is not PnL.
  *  - ETFs: a synthetic whose fair value tracks a weighted spot basket (NAV).
  *    It trades in the open market, and a periodic 30-second window lets traders
  *    create/redeem units at NAV to arbitrage market dislocations.
@@ -107,7 +108,7 @@ export class MarketsManager {
     if (this.running) return;
     this.running = true;
     this.bondValue.clear();
-    // Restore aggregate bond face value so net worth survives restarts.
+    // Restore aggregate bond principal so net worth survives restarts.
     const rows = await this.db
       .select()
       .from(bondHoldingsT)
@@ -116,7 +117,7 @@ export class MarketsManager {
       if (r.quantity > 0) {
         this.bondValue.set(
           r.userId,
-          (this.bondValue.get(r.userId) ?? 0) + r.faceValue * r.quantity,
+          (this.bondValue.get(r.userId) ?? 0) + r.price * r.quantity,
         );
       }
     }
@@ -362,6 +363,25 @@ export class MarketsManager {
       return;
     }
     const cost = tpl.price * quantity;
+    const rules = this.challenge.config.eden?.rules;
+    const headroom = this.engine.freeCashOf(userId) - cost;
+    // Bonds cannot be liquidated, so a purchase must neither overdraw cash nor
+    // itself trigger a margin call.
+    if (
+      !Number.isFinite(headroom) ||
+      headroom < 0 ||
+      (this.challenge.type === "new_eden" &&
+        rules?.enabled &&
+        headroom <= rules.marginCallThreshold)
+    ) {
+      await this.alert(
+        userId,
+        `Insufficient free cash: ${quantity} × ${tpl.name} costs $${cost.toFixed(0)}.`,
+        "warning",
+        ts,
+      );
+      return;
+    }
     const holdingId = existing[0]?.id;
     await this.write(async (tx) => {
       if (holdingId) {
@@ -386,7 +406,7 @@ export class MarketsManager {
     this.bondValue.set(
       userId,
       (this.bondValue.get(userId) ?? 0) +
-        (existing[0]?.faceValue ?? tpl.faceValue) * quantity,
+        (existing[0]?.price ?? tpl.price) * quantity,
     );
     this.persistence?.markUsers([userId]);
     await this.alert(

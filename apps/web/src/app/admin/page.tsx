@@ -312,6 +312,7 @@ function AdminInner() {
                         </Link>
                         {c.status !== "live" &&
                           c.status !== "scheduled" &&
+                          c.status !== "ended" &&
                           c.startsAt &&
                           new Date(c.startsAt).getTime() > Date.now() && (
                             <Button
@@ -324,7 +325,7 @@ function AdminInner() {
                               <CalendarClock className="size-3.5" /> Schedule
                             </Button>
                           )}
-                        {c.status !== "live" && (
+                        {c.status !== "live" && c.status !== "ended" && (
                           <Button
                             size="sm"
                             variant="secondary"

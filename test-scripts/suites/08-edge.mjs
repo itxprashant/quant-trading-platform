@@ -1,4 +1,4 @@
-import { directionalConfig, http, nowId, poll, sleep } from "../lib.mjs";
+import { directionalConfig, http, nowId, poll, sleep, waitStatus } from "../lib.mjs";
 
 export async function suiteEdge(t, ctx) {
   t.suite("Edge cases / logic");
@@ -15,67 +15,66 @@ export async function suiteEdge(t, ctx) {
     );
   });
 
-  await t.test("self-crossing orders (same user) fill or rest without crashing", async () => {
+  await t.test("self-cross cancels the older resting order instead of trading", async () => {
     const cid = ctx.dir.id;
+    const before = await http.get(`/api/portfolio/${cid}`, { token: ctx.t1.token });
+    const posBefore = before.positions.find((p) => p.symbol === "E2EA")?.quantity ?? 0;
     const sell = await http.post(
       "/api/orders",
       { challengeId: cid, symbol: "E2EA", side: "sell", type: "limit", quantity: 1, price: 90 },
       { token: ctx.t1.token },
     );
-    await sleep(500);
+    await waitStatus(ctx.t1.token, cid, sell.orderId, ["open"], "own ask rests");
     const buy = await http.post(
       "/api/orders",
       { challengeId: cid, symbol: "E2EA", side: "buy", type: "limit", quantity: 1, price: 90 },
       { token: ctx.t1.token },
     );
-    const row = await poll(
-      async () => {
-        const orders = await http.get("/api/orders", {
-          token: ctx.t1.token,
-          query: { challengeId: cid },
-        });
-        const b = orders.find((o) => o.id === buy.orderId);
-        return b && b.status !== "open" ? b : null;
-      },
-      { timeout: 12_000, label: "self-cross resolves" },
-    );
-    t.ok(["filled", "cancelled", "rejected"].includes(row.status));
+    await waitStatus(ctx.t1.token, cid, sell.orderId, ["cancelled"], "older ask cancelled");
+    const row = await waitStatus(ctx.t1.token, cid, buy.orderId, ["open"], "new bid rests");
+    t.eq(row.remainingQuantity, 1, "no wash trade should fill the new bid");
+    const after = await http.get(`/api/portfolio/${cid}`, { token: ctx.t1.token });
+    t.eq(after.positions.find((p) => p.symbol === "E2EA")?.quantity ?? 0, posBefore);
+    await http.del(`/api/orders/${buy.orderId}`, { token: ctx.t1.token }).catch(() => {});
   });
 
-  await t.test("position cap: engine refuses inventory beyond maxPosition", async () => {
+  await t.test("exposure cap: position + working size is capped at maxOrderQuantity", async () => {
     const cid = ctx.dir.id;
-    // maxPosition is 50. Seed a large resting offer and take it.
+    const cap = ctx.dir.config.maxOrderQuantity;
+    const taker = ctx.fresh ?? ctx.t3;
+    const qty = async () => {
+      const p = await http.get(`/api/portfolio/${cid}`, { token: taker.token });
+      return p.positions.find((x) => x.symbol === "E2EA")?.quantity ?? 0;
+    };
+    const start = await qty();
+    const room = cap - start;
+    t.ok(room > 0, `taker already at the cap (${start})`);
     const sell = await http.post(
       "/api/orders",
-      { challengeId: cid, symbol: "E2EA", side: "sell", type: "limit", quantity: 20, price: 2 },
-      { token: ctx.t1.token },
+      { challengeId: cid, symbol: "E2EA", side: "sell", type: "limit", quantity: room, price: 2 },
+      { token: ctx.t2.token },
     );
-    await sleep(400);
-    await http.post(
+    await waitStatus(ctx.t2.token, cid, sell.orderId, ["open"], "maker ask rests");
+    const buy = await http.post(
       "/api/orders",
-      { challengeId: cid, symbol: "E2EA", side: "buy", type: "limit", quantity: 20, price: 2 },
-      { token: ctx.fresh?.token ?? ctx.t2.token },
+      { challengeId: cid, symbol: "E2EA", side: "buy", type: "limit", quantity: room + 5, price: 2 },
+      { token: taker.token },
     );
-    await sleep(800);
-    const extraSell = await http.post(
-      "/api/orders",
-      { challengeId: cid, symbol: "E2EA", side: "sell", type: "limit", quantity: 20, price: 2 },
-      { token: ctx.t1.token },
+    t.eq(buy.quantity, room, "API should clamp to the remaining room");
+    await waitStatus(taker.token, cid, buy.orderId, ["filled"], "taker fills to the cap");
+    await t.throws(
+      () =>
+        http.post(
+          "/api/orders",
+          { challengeId: cid, symbol: "E2EA", side: "buy", type: "limit", quantity: 1, price: 2 },
+          { token: taker.token },
+        ),
+      { status: 409, error: "no_capacity" },
     );
-    await sleep(400);
-    const extraBuy = await http.post(
-      "/api/orders",
-      { challengeId: cid, symbol: "E2EA", side: "buy", type: "limit", quantity: 20, price: 2 },
-      { token: ctx.fresh?.token ?? ctx.t2.token },
-    );
-    await sleep(800);
-    const takerTok = ctx.fresh?.token ?? ctx.t2.token;
-    const pf = await http.get(`/api/portfolio/${cid}`, { token: takerTok });
-    const qty = pf.positions.find((p) => p.symbol === "E2EA")?.quantity ?? 0;
-    t.ok(qty <= 50, `inventory ${qty} exceeded maxPosition 50`);
-    void sell;
-    void extraSell;
-    void extraBuy;
+    const held = await poll(async () => ((await qty()) === cap ? cap : null), {
+      label: `taker holds ${cap}`,
+    });
+    t.ok(held <= ctx.dir.config.maxPosition, `inventory ${held} exceeded maxPosition`);
   });
 
   await t.test("OTC offer expires and cannot be accepted", async () => {

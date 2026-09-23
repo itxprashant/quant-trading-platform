@@ -370,7 +370,9 @@ function otc(minute: number): EdenOtcOffer {
     id: `${EDEN_EVENT_VERSION}/otc/${minute}`,
     minute,
     title: offer?.title ?? "Deal Desk: Aerium liquidity block",
-    legs: offer?.legs ?? [leg("AERIUM", 10, "fair_value", 1)],
+    // Sized well below starting cash: at minute 2.5 every trader still holds
+    // exactly that, and a cash-exhausting fill is an instant margin call.
+    legs: offer?.legs ?? [leg("AERIUM", 5, "fair_value", 1)],
     original: !!offer,
     tradingRequired: true,
     playerChoosesQuantity: minute === 112.5,

@@ -489,3 +489,37 @@ describe("ChallengeEngine matching", () => {
     expect(Math.abs(total)).toBeLessThan(1e-9);
   });
 });
+
+describe("allowMargin: false", () => {
+  const cash = { startingCash: 1_000, allowMargin: false };
+
+  it("stops a taker buy at what its cash can fund", () => {
+    const e = makeEngine(cash);
+    e.placeOrder({ orderId: "s", userId: "alice", symbol: "X1", side: "sell", orderType: "limit", quantity: 20, price: 100, ts: 1 });
+    const evts = e.placeOrder({ orderId: "b", userId: "bob", symbol: "X1", side: "buy", orderType: "market", quantity: 20, ts: 2 });
+    expect(trades(evts).reduce((sum, t) => sum + t.quantity, 0)).toBe(10);
+    expect(e.portfolioOf("bob").cash).toBeCloseTo(0);
+    expect(e.snapshot("X1").asks[0]).toMatchObject({ price: 100, quantity: 10 });
+  });
+
+  it("pulls a resting bid its owner can no longer fund", () => {
+    const e = makeEngine(cash);
+    e.placeOrder({ orderId: "s1", userId: "alice", symbol: "X1", side: "sell", orderType: "limit", quantity: 10, price: 100, ts: 1 });
+    e.placeOrder({ orderId: "b1", userId: "bob", symbol: "X1", side: "buy", orderType: "limit", quantity: 10, price: 100, ts: 2 });
+    expect(e.portfolioOf("bob").cash).toBeCloseTo(0);
+    e.placeOrder({ orderId: "b2", userId: "bob", symbol: "X1", side: "buy", orderType: "limit", quantity: 8, price: 90, ts: 3 });
+    expect(e.snapshot("X1").bids[0]).toMatchObject({ price: 90, quantity: 8 });
+    const evts = e.placeOrder({ orderId: "s2", userId: "carol", symbol: "X1", side: "sell", orderType: "market", quantity: 8, ts: 4 });
+    expect(trades(evts)).toHaveLength(0);
+    expect(e.snapshot("X1").bids).toHaveLength(0);
+    expect(e.portfolioOf("bob").positions[0]).toMatchObject({ quantity: 10 });
+  });
+
+  it("leaves short sales and bots unconstrained", () => {
+    const e = makeEngine(cash);
+    e.placeOrder({ orderId: "s", userId: "alice", symbol: "X1", side: "sell", orderType: "limit", quantity: 30, price: 100, ts: 1 });
+    const evts = e.placeOrder({ orderId: "b", userId: "bot:mm", symbol: "X1", side: "buy", orderType: "market", quantity: 30, ts: 2 });
+    expect(trades(evts).reduce((sum, t) => sum + t.quantity, 0)).toBe(30);
+    expect(e.portfolioOf("alice").cash).toBe(4_000);
+  });
+});

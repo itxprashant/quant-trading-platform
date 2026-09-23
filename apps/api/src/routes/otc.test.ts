@@ -299,7 +299,20 @@ describe("bailout choice responses", () => {
     expect(f.offer.choices).toHaveLength(2);
   });
 
-  it("uses the selected position and working orders for cap checks", async () => {
+  it("uses the selected position for cap checks", async () => {
+    const f = await fixture();
+    f.positions.push({ challengeId, userId, symbol: "NEURO", quantity: -98 });
+    const response = await f.respond({
+      action: "accept",
+      choiceSymbol: "NEURO",
+      choiceQuantity: 3,
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe("position_cap_exceeded");
+    expect(f.offer.status).toBe("pending");
+  });
+
+  it("ignores working orders that the engine reservation cancels", async () => {
     const f = await fixture();
     f.positions.push({ challengeId, userId, symbol: "NEURO", quantity: -80 });
     f.orders.push({
@@ -315,9 +328,8 @@ describe("bailout choice responses", () => {
       choiceSymbol: "NEURO",
       choiceQuantity: 3,
     });
-    expect(response.statusCode).toBe(409);
-    expect(response.json().error).toBe("position_cap_exceeded");
-    expect(f.offer.status).toBe("pending");
+    expect(response.statusCode).toBe(200);
+    expect(f.offer.status).toBe("accepted");
   });
 
   it("bargains selected economics and cannot cancel accepted legs during the delay", async () => {

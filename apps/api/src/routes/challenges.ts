@@ -275,6 +275,13 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
           .where(eq(challenges.id, existing.id))
           .for("update");
         if (!current) return { error: "not_found" } as const;
+        // Final results are immutable and the engine never reclaims a finalized
+        // row, so reopening one would accept orders nobody matches. Reset instead.
+        if (
+          (current.status === "ended" || current.finalizedAt != null) &&
+          body.status !== "ended"
+        )
+          return { error: "challenge_ended" } as const;
         if (start && (await resetInProgress()))
           return { error: "reset_in_progress" } as const;
         const [updated] = await tx
