@@ -302,6 +302,7 @@ async function fixture(status = "paused") {
     trace,
     db,
     redis,
+    request,
     call: (id = ID) => request("/:challengeId/reset", undefined, id),
     openOptions: (body: unknown = {}) =>
       request("/:challengeId/options/open", body),
@@ -403,6 +404,32 @@ describe("admin freeze during a scripted event", () => {
     expect((await f.freeze(false)).body).toEqual({ ok: true, frozen: false });
     expect(f.tables.challenges![0].frozen).toBe(false);
   });
+});
+
+describe("admin Eden controls on a missing challenge", () => {
+  const bodies = {
+    otc: {
+      userId: TRADER,
+      description: "ghost",
+      legs: [{ symbol: "AERIUM", quantity: 1, price: 1 }],
+    },
+    vote: { title: "ghost", description: "ghost" },
+    grant: { symbol: "AERIUM", description: "ghost", prize: 1 },
+  };
+
+  it.each(Object.entries(bodies))(
+    "%s returns 404 before writing anything",
+    async (path: string, body: unknown) => {
+      const f = await fixture("live");
+      for (const id of [OTHER, "not-a-uuid"]) {
+        expect(await f.request(`/:challengeId/${path}`, body, id)).toEqual({
+          statusCode: 404,
+          body: { error: "not_found" },
+        });
+      }
+      expect(publishCommand).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("admin account edit", () => {

@@ -86,6 +86,14 @@ function scriptedHaltAt(challenge: Challenge, now: number): boolean {
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", app.requireAdmin);
 
+  // Malformed ids never match; querying them would make Postgres throw.
+  const challengeExists = async (challengeId: string) =>
+    z.string().uuid().safeParse(challengeId).success &&
+    !!(await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, challengeId),
+      columns: { id: true },
+    }));
+
   // List users.
   app.get("/users", async () => {
     const rows = await app.db
@@ -527,6 +535,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       reply,
     );
     if (!body) return;
+    if (!(await challengeExists(challengeId))) {
+      return reply.code(404).send({ error: "not_found" });
+    }
     const expiresAt = new Date(Date.now() + body.expiresSec * 1000);
     const [row] = await app.db
       .insert(otcOffers)
@@ -774,6 +785,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       reply,
     );
     if (!body) return;
+    if (!(await challengeExists(challengeId))) {
+      return reply.code(404).send({ error: "not_found" });
+    }
     const expiresAt = new Date(Date.now() + body.durationSec * 1000);
     const [row] = await app.db
       .insert(voteProposals)
@@ -837,6 +851,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       reply,
     );
     if (!body) return;
+    if (!(await challengeExists(challengeId))) {
+      return reply.code(404).send({ error: "not_found" });
+    }
     const expiresAt = new Date(Date.now() + body.durationSec * 1000);
     const [row] = await app.db
       .insert(grantMissions)
