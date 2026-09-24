@@ -81,7 +81,7 @@ The seed also creates a **New Eden Exchange** challenge (`scheduled`, preset **o
 
 ### Production
 
-- Deployed stack at `https://quantstorm-2026.site` (or your instance)
+- Deployed stack at `https://quanta.devclub.in` (or your instance)
 - Admin login with production credentials
 - All services (`api`, `engine`, `gateway`, `web`) running the same build
 - **`ENGINE_MINUTE_MS=60000`** on every engine instance (default if unset)
@@ -107,7 +107,7 @@ Use `trader1` … `trader8` from `pnpm db:seed`. For more pre-made accounts, inc
 **Option C — bulk register via API**
 
 ```bash
-API_URL=http://localhost:8000   # or https://quantstorm-2026.site
+API_URL=http://localhost:8000   # or https://quanta.devclub.in
 
 for i in $(seq 1 20); do
   curl -sS -X POST "$API_URL/api/auth/register" \
@@ -365,13 +365,13 @@ Confirm with real players:
 
 ## 11. Production deployment notes
 
-For a production simulation on `quantstorm-2026.site`:
+For a production simulation on `quanta.devclub.in`:
 
 1. Merge to `main` and wait for **Publish Docker Images** CI.
 2. Deploy: `REGISTRY=quantadevclub.azurecr.io IMAGE_TAG=sha-$(git rev-parse --short HEAD) ./scripts/registry-vm-deploy.sh`
 3. Confirm `ENGINE_MINUTE_MS` is consistent across engine containers.
 4. Create or reset the New Eden challenge in admin, set it to host mode, and set production `startsAt`.
-5. Share player link: `https://quantstorm-2026.site/challenges/[id]`
+5. Share player link: `https://quanta.devclub.in/challenges/[id]`
 6. Enroll players via §4.2 before the open.
 
 If schema changed, run migrate via compose (`db:push` in migrate image) before writers start — see [`EVENT-IMPLEMENTATION.md`](./EVENT-IMPLEMENTATION.md).

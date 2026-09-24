@@ -59,4 +59,4 @@ sudo docker compose -f docker-compose.prod.yml restart nginx 2>/dev/null || true
 sudo docker compose -f docker-compose.prod.yml ps
 REMOTE
 
-echo "==> Live at ${PUBLIC_BASE_URL:-https://quantstorm-2026.site} (images: ${REGISTRY}/*:${IMAGE_TAG})"
+echo "==> Live at ${PUBLIC_BASE_URL:-https://quanta.devclub.in} (images: ${REGISTRY}/*:${IMAGE_TAG})"

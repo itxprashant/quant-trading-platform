@@ -6,7 +6,7 @@ Guide for AI coding agents working in this repository. Read this before making c
 
 **Quantstorm** is a competitive quant trading challenge platform: market-making contests, directional PnL races, and the scripted **New Eden Exchange** tournament format. Participants trade synthetic instruments in real time; organizers run events via an admin UI.
 
-- **Production URL:** https://quantstorm-2026.site
+- **Production URL:** https://quanta.devclub.in
 - **GitHub:** https://github.com/itxprashant/quant-trading-platform
 - **Stack:** TypeScript monorepo (pnpm + turbo), Next.js 15, Fastify, Postgres 17, Redis 7, Docker
 - **Design bar:** Dark trading-terminal aesthetic — see `PRODUCT.md` and `DESIGN.md`. Data-first, dense, no generic SaaS or neon crypto clichés.
@@ -89,7 +89,7 @@ flowchart LR
     NSG[NSG :22 :80 :443]
   end
 
-  DNS[quantstorm-2026.site] --> NSG --> VM
+  DNS[quanta.devclub.in] --> NSG --> VM
   Git --> CI
   Git --> Pub --> ACR
   ACR -->|docker pull| VM
@@ -97,7 +97,7 @@ flowchart LR
 
 | Layer | Components |
 |-------|------------|
-| **DNS / TLS** | `quantstorm-2026.site` → `20.205.227.58`; Let's Encrypt via certbot |
+| **DNS / TLS** | `quanta.devclub.in` → `20.205.227.58`; Let's Encrypt via certbot |
 | **Reverse proxy** | nginx — `/` → web, `/api/` → api, `/ws` → gateway |
 | **App containers** | migrate, api, gateway, engine, scoring, web |
 | **Data containers** | postgres (volume `qtp-pgdata`), redis (volume `qtp-redisdata`) |
@@ -575,7 +575,7 @@ Use a **non-scripted** challenge for load tests; do not load-test a live New Ede
 | VM | `quanta-b2ms` (`Standard_D2s_v3`, 8 GB) |
 | Region | `southeastasia` |
 | Public IP | `20.205.227.58` |
-| Domain | `quantstorm-2026.site` (HTTPS via Let's Encrypt) |
+| Domain | `quanta.devclub.in` (HTTPS via Let's Encrypt) |
 | SSH | `ssh -i ~/.ssh/quanta_azure azureuser@20.205.227.58` |
 | ACR | `quantadevclub.azurecr.io` |
 
@@ -643,7 +643,7 @@ See `scripts/changed-services.sh` and `scripts/lib/service-graph.sh` for depende
 | `./scripts/azure-deploy.sh` | Provision VM + initial deploy |
 | `./scripts/setup-ci-registry.sh` | Create ACR, VM docker login |
 | `./scripts/setup-github-secrets.sh` | Push ACR creds to GitHub Actions |
-| `./scripts/setup-https.sh --remote` | Certbot + TLS for `quantstorm-2026.site` |
+| `./scripts/setup-https.sh --remote` | Certbot + TLS for `quanta.devclub.in` |
 
 Full registry docs: `infra/azure/CI-REGISTRY.md`
 
@@ -668,8 +668,8 @@ Full registry docs: `infra/azure/CI-REGISTRY.md`
 GitHub Actions variables (repo settings):
 
 - `ACR_LOGIN_SERVER` = `quantadevclub.azurecr.io`
-- `NEXT_PUBLIC_API_URL` = `https://quantstorm-2026.site`
-- `NEXT_PUBLIC_WS_URL` = `wss://quantstorm-2026.site`
+- `NEXT_PUBLIC_API_URL` = `https://quanta.devclub.in`
+- `NEXT_PUBLIC_WS_URL` = `wss://quanta.devclub.in`
 
 Secrets: `ACR_USERNAME`, `ACR_PASSWORD`
 
@@ -731,7 +731,7 @@ Backend entrypoints: `api` → `dist/server.js`; others → `dist/index.js` (set
 | `DATABASE_URL` | api, engine, gateway, scoring, migrate | Postgres connection string |
 | `REDIS_URL` | api, gateway, engine, scoring | Redis connection |
 | `JWT_SECRET` | api, gateway | Must match across services |
-| `CORS_ORIGINS` | api | Production: `https://quantstorm-2026.site` |
+| `CORS_ORIGINS` | api | Production: `https://quanta.devclub.in` |
 | `NEXT_PUBLIC_API_URL` | web (build) | Baked at Docker build |
 | `NEXT_PUBLIC_WS_URL` | web (build) | Use `wss://` in production |
 | `ENGINE_TICK_MS` | engine | Autonomous price tick (default 1000 ms prod) |

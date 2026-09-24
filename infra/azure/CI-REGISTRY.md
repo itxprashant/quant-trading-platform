@@ -35,8 +35,8 @@ az acr show --name "$ACR_NAME" --query loginServer -o tsv
 | Name | Example |
 |------|---------|
 | `ACR_LOGIN_SERVER` | `quantadevclub.azurecr.io` |
-| `NEXT_PUBLIC_API_URL` | `https://quantstorm-2026.site` |
-| `NEXT_PUBLIC_WS_URL` | `wss://quantstorm-2026.site` |
+| `NEXT_PUBLIC_API_URL` | `https://quanta.devclub.in` |
+| `NEXT_PUBLIC_WS_URL` | `wss://quanta.devclub.in` |
 
 **Secrets**:
 

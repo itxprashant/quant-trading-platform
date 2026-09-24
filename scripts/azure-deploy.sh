@@ -22,7 +22,7 @@ VM_NAME="${VM_NAME:-quanta-b2ms}"
 VM_SIZE="${VM_SIZE:-Standard_B2ms}"
 ADMIN_USER="${ADMIN_USER:-azureuser}"
 DEPLOY_DIR="${DEPLOY_DIR:-/home/${ADMIN_USER}/quanta}"
-DOMAIN="${DOMAIN:-quantstorm-2026.site}"
+DOMAIN="${DOMAIN:-quanta.devclub.in}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://${DOMAIN}}"
 
 echo "==> Azure deploy: $VM_NAME ($VM_SIZE) in $LOCATION"

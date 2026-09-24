@@ -3,8 +3,8 @@
  * No extra dependencies — Node 22+ (global fetch + WebSocket).
  */
 
-export const API = process.env.API_URL ?? "https://quantstorm-2026.site";
-export const WS = process.env.WS_URL ?? "wss://quantstorm-2026.site";
+export const API = process.env.API_URL ?? "https://quanta.devclub.in";
+export const WS = process.env.WS_URL ?? "wss://quanta.devclub.in";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

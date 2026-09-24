@@ -2,7 +2,7 @@
 # Obtain Let's Encrypt certs via certbot (webroot) and enable HTTPS in nginx.
 #
 # Prerequisites:
-#   - DNS A record: quantstorm-2026.site → VM public IP
+#   - DNS A record: quanta.devclub.in → VM public IP
 #   - Stack running with bootstrap nginx (port 80)
 #   - Azure NSG allows 80 and 443
 #
@@ -18,7 +18,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-DOMAIN="${DOMAIN:-quantstorm-2026.site}"
+DOMAIN="${DOMAIN:-quanta.devclub.in}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 ENV_FILE="${ENV_FILE:-.env}"

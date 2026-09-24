@@ -2,14 +2,14 @@
 /**
  * Production feature + edge-case suite for Quantstorm.
  *
- * Default target: https://quantstorm-2026.site
+ * Default target: https://quanta.devclub.in
  *
  * Creates isolated E2E challenges, exercises trader + admin + New Eden flows,
  * then ends those challenges. Does not reset or trade on existing live events.
  *
  * Env:
- *   API_URL          default https://quantstorm-2026.site
- *   WS_URL           default wss://quantstorm-2026.site
+ *   API_URL          default https://quanta.devclub.in
+ *   WS_URL           default wss://quanta.devclub.in
  *   ADMIN_USER       default admin
  *   ADMIN_PASSWORD   default admin1234
  *   TRADER_PASSWORD  default trader1234

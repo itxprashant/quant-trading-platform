@@ -16,7 +16,7 @@ set -euo pipefail
 
 RESOURCE_GROUP="${RESOURCE_GROUP:-quanta-rg}"
 VM_NAME="${VM_NAME:-quanta-b2ms}"
-PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://quantstorm-2026.site}"
+PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://quanta.devclub.in}"
 
 usage() {
   sed -n '4,12p' "$0" | sed 's/^# \?//'
