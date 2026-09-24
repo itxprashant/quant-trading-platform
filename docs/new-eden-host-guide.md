@@ -24,7 +24,7 @@ The live operations panels appear once the challenge is `live` or `paused`:
 | Panel | What it drives |
 |-------|----------------|
 | **Live price controls** | Drift a symbol toward a target, or hard-set a price |
-| **Trader accounts** | Set an enrolled trader's cash and inventory directly (live only) |
+| **Trader accounts** | Set an enrolled trader's cash and inventory directly, or adjust them by a delta (live only) |
 | **Eden host console** | Options cycles, ETF windows, Deal Desk, premium auction, policy vote, government grant |
 | **Live news** | Signal / noise headlines, fair-value deltas, volatility events, embargo |
 
@@ -134,11 +134,18 @@ inventory, use the **Trader accounts** panel:
 | Action | UI | API |
 |--------|----|-----|
 | List enrolled traders' stored cash and positions | Trader accounts (auto) | `GET /accounts` |
-| Set a trader's cash and/or per-symbol quantity | Trader accounts → **Apply changes** | `POST /accounts/:userId` `{ cash?, positions?: [{ symbol, quantity, avgPrice? }] }` |
+| Set a trader's cash and/or per-symbol quantity | Trader accounts → **Set value** → **Apply changes** | `POST /accounts/:userId` `{ cash?, positions?: [{ symbol, quantity, avgPrice? }] }` |
+| Add to or subtract from cash and/or quantity | Trader accounts → **Adjust by** → **Apply changes** | `POST /accounts/:userId` `{ cashDelta?, positions?: [{ symbol, delta, avgPrice? }] }` |
 
-Values are **absolute**. Only the cash and symbols you send are changed, and
-anything the trader filled on those fields in the meantime is replaced. The
-engine applies the edit through the command stream, so it survives restarts.
+**Set value** edits are **absolute**: only the cash and symbols you send are
+changed, and anything the trader filled on those fields in the meantime is
+replaced. **Adjust by** edits are **deltas** the engine adds to the trader's
+live balances when it processes the command, so fills in between are kept
+(e.g. `cashDelta: -500` or `delta: 10`). Each field is either absolute or a
+delta: sending both `cash` and `cashDelta`, or both `quantity` and `delta` on
+one row, is rejected with `400`. Absolute and delta fields can otherwise be
+mixed in one request. The engine applies the edit through the command stream,
+so it survives restarts.
 Loan debt and trading metrics are left alone. A position that keeps its sign
 keeps its average cost; a new or flipped one is costed at `avgPrice` or the
 current mark. Margin rules apply to the result immediately, so setting cash too
@@ -282,7 +289,7 @@ All under `POST /api/admin/:challengeId` unless noted (admin JWT required):
 /news                          { message, level, kind, fvEffects?, momentum?, volEvent?, embargoSec? }
 /fair-value                    { symbol, fairValue }      (GET to read)
 /tradeable                     { symbol, tradeable }
-/accounts/:userId              { cash?, positions?: [{ symbol, quantity, avgPrice? }] }   (GET /accounts to read)
+/accounts/:userId              { cash? | cashDelta?, positions?: [{ symbol, quantity | delta, avgPrice? }] }   (GET /accounts to read)
 /options/open
 /options/close                 { cycleId }
 /etf-window                    { etfSymbol, open }

@@ -1075,6 +1075,7 @@ export class ChallengeRunner {
     try {
       this.engine.setAccount(cmd.userId, {
         cash: cmd.cash,
+        cashDelta: cmd.cashDelta,
         positions: cmd.positions,
       });
     } catch (err) {
@@ -1084,9 +1085,17 @@ export class ChallengeRunner {
       );
       return [];
     }
+    const signed = (n: string) => (n.startsWith("-") ? n : `+${n}`);
     const changes = [
       ...(cmd.cash !== undefined ? [`cash ${cmd.cash.toFixed(2)}`] : []),
-      ...(cmd.positions ?? []).map((p) => `${p.symbol} ${p.quantity}`),
+      ...(cmd.cashDelta !== undefined
+        ? [`cash ${signed(cmd.cashDelta.toFixed(2))}`]
+        : []),
+      ...(cmd.positions ?? []).map((p) =>
+        p.delta !== undefined
+          ? `${p.symbol} ${signed(String(p.delta))}`
+          : `${p.symbol} ${p.quantity}`,
+      ),
     ];
     await this.refreshPortfolios([cmd.userId], cmd.ts);
     return [

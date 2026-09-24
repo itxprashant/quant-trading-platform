@@ -174,6 +174,24 @@ export async function suitePostAudit(t, ctx) {
       const row = accounts.find((a) => a.userId === ctx.t1.user.id);
       t.ok(row?.cash === 4321.5 && qty(row, "E2EA") === 7, `admin view shows ${JSON.stringify(row)}`);
 
+      const d = await http.request("POST", `/api/admin/${cid}/accounts/${ctx.t1.user.id}`, {
+        token: ctx.admin.token,
+        body: { cashDelta: -321.5, positions: [{ symbol: "E2EA", delta: -2 }, { symbol: "E2EB", delta: 5 }] },
+      });
+      t.eq(d.status, 202, `delta edit returned ${d.status} ${d.body?.error ?? ""}`);
+      const pd = await poll(
+        async () => {
+          const pf = await http.get(`/api/portfolio/${cid}`, { token: ctx.t1.token });
+          return pf.cash === 4000 && qty(pf, "E2EA") === 5 ? pf : null;
+        },
+        { label: "delta-edited portfolio" },
+      );
+      t.eq(qty(pd, "E2EB"), 2);
+      await t.throws(
+        () => http.post(`/api/admin/${cid}/accounts/${ctx.t1.user.id}`, { cash: 1, cashDelta: 1 }, admin),
+        { status: 400 },
+      );
+
       await t.throws(
         () => http.post(`/api/admin/${cid}/accounts/${ctx.t2.user.id}`, { cash: 1 }, admin),
         { status: 404, error: "not_enrolled" },

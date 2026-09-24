@@ -808,6 +808,42 @@ describe("ChallengeRunner integration boundaries", () => {
     ]);
   });
 
+  it("applies a delta account edit to the live account and reports signed changes", async () => {
+    const f = fixture();
+    let events: EngineEvent[] = [];
+    await f.runtime.enqueue(async () => {
+      await f.runtime.process({
+        type: "admin_set_account",
+        challengeId: "challenge",
+        userId: USER,
+        cash: 2500,
+        positions: [{ symbol: "A", quantity: 7 }],
+        ts: START,
+      });
+      events = await f.runtime.process({
+        type: "admin_set_account",
+        challengeId: "challenge",
+        userId: USER,
+        cashDelta: -500,
+        positions: [{ symbol: "A", delta: 3 }],
+        ts: START + 1,
+      });
+    });
+    expect(f.tables.participants).toEqual([
+      expect.objectContaining({ userId: USER, cash: 2000 }),
+    ]);
+    expect(f.tables.positions).toEqual([
+      expect.objectContaining({ userId: USER, symbol: "A", quantity: 10 }),
+    ]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "alert",
+        userId: USER,
+        message: "The host adjusted your account: cash -500.00, A +3.",
+      }),
+    ]);
+  });
+
   it("drops an account edit for an unknown symbol without changing the account", async () => {
     const f = fixture();
     vi.spyOn(console, "warn").mockImplementation(() => {});

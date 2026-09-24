@@ -7,7 +7,15 @@ import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
 import { ApiError, get, post } from "@/lib/api";
-import { money } from "@/lib/format";
+import { cn } from "@/lib/cn";
+import { money, signed } from "@/lib/format";
+
+type EditMode = "set" | "adjust";
+
+const MODES: Array<{ id: EditMode; label: string }> = [
+  { id: "set", label: "Set value" },
+  { id: "adjust", label: "Adjust by" },
+];
 
 function editError(err: unknown): string {
   const body =
@@ -29,14 +37,16 @@ function editError(err: unknown): string {
 }
 
 /**
- * Host override for a trader's cash and inventory. Edits are absolute and
- * applied by the engine, so fills between loading and applying are replaced
- * for the fields that changed.
+ * Host override for a trader's cash and inventory, applied by the engine.
+ * "Set value" edits are absolute, so fills between loading and applying are
+ * replaced for the fields that changed; "Adjust by" edits are deltas added to
+ * the live balances, so those fills are kept.
  */
 export function AccountEditor({ challenge }: { challenge: Challenge }) {
   const challengeId = challenge.id;
   const [accounts, setAccounts] = useState<AdminAccountView[]>([]);
   const [userId, setUserId] = useState("");
+  const [mode, setMode] = useState<EditMode>("set");
   const [cash, setCash] = useState("");
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -83,36 +93,58 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
     [challenge.config, account],
   );
 
-  // Reset the form to the stored values whenever the trader or data changes.
+  const adjust = mode === "adjust";
+
+  // Reset the form whenever the trader, data or mode changes: stored values
+  // to set from, or blank deltas to adjust by.
   useEffect(() => {
     if (!account) return;
+    if (adjust) {
+      setCash("");
+      setQuantities({});
+      return;
+    }
     setCash(account.cash.toFixed(2));
     setQuantities(
       Object.fromEntries(
         account.positions.map((p) => [p.symbol, String(p.quantity)]),
       ),
     );
-  }, [account]);
+  }, [account, adjust]);
 
   const held = (symbol: string) =>
     account?.positions.find((p) => p.symbol === symbol);
 
+  const cashInput = cash.trim() === "" ? undefined : Number(cash);
   const cashChange =
-    account &&
-    cash.trim() !== "" &&
-    Number(cash) !== Number(account.cash.toFixed(2))
-      ? Number(cash)
-      : undefined;
+    !account || cashInput === undefined
+      ? undefined
+      : adjust
+        ? cashInput !== 0
+          ? { next: account.cash + cashInput, delta: cashInput }
+          : undefined
+        : cashInput !== Number(account.cash.toFixed(2))
+          ? { next: cashInput, delta: cashInput - account.cash }
+          : undefined;
   const positionChanges = symbols.flatMap((symbol) => {
     const raw = quantities[symbol]?.trim() ?? "";
     const current = held(symbol)?.quantity ?? 0;
-    const next = raw === "" ? 0 : Number(raw);
-    return next !== current ? [{ symbol, quantity: next, current }] : [];
+    const value = raw === "" ? 0 : Number(raw);
+    const next = adjust ? current + value : value;
+    return next !== current
+      ? [{ symbol, current, next, delta: next - current }]
+      : [];
   });
   const invalid =
-    (cashChange !== undefined && !Number.isFinite(cashChange)) ||
-    positionChanges.some((p) => !Number.isSafeInteger(p.quantity));
+    (cashChange !== undefined && !Number.isFinite(cashChange.next)) ||
+    positionChanges.some((p) => !Number.isSafeInteger(p.next));
   const hasChanges = cashChange !== undefined || positionChanges.length > 0;
+
+  function switchMode(next: EditMode) {
+    setMode(next);
+    setMsg(null);
+    setError(null);
+  }
 
   async function apply() {
     if (!account || !hasChanges || invalid) return;
@@ -120,20 +152,40 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
     setError(null);
     setMsg(null);
     try {
-      await post(`/api/admin/${challengeId}/accounts/${account.userId}`, {
-        ...(cashChange !== undefined ? { cash: cashChange } : {}),
-        ...(positionChanges.length
+      await post(
+        `/api/admin/${challengeId}/accounts/${account.userId}`,
+        adjust
           ? {
-              positions: positionChanges.map(({ symbol, quantity }) => ({
-                symbol,
-                quantity,
-              })),
+              ...(cashChange ? { cashDelta: cashChange.delta } : {}),
+              ...(positionChanges.length
+                ? {
+                    positions: positionChanges.map(({ symbol, delta }) => ({
+                      symbol,
+                      delta,
+                    })),
+                  }
+                : {}),
             }
-          : {}),
-      });
+          : {
+              ...(cashChange ? { cash: cashChange.next } : {}),
+              ...(positionChanges.length
+                ? {
+                    positions: positionChanges.map(({ symbol, next }) => ({
+                      symbol,
+                      quantity: next,
+                    })),
+                  }
+                : {}),
+            },
+      );
       setMsg(
         `Edit sent for ${account.displayName || account.username}. They are notified when the engine applies it.`,
       );
+      // Deltas are not idempotent: clear them so a second click cannot resend.
+      if (adjust) {
+        setCash("");
+        setQuantities({});
+      }
       setTimeout(load, 800);
     } catch (err) {
       setError(editError(err));
@@ -159,11 +211,36 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
         </Button>
       </PanelHeader>
       <div className="space-y-4 p-4">
-        <p className="text-xs leading-relaxed text-muted">
-          Set a trader&apos;s cash and inventory directly. Values are absolute
-          and replace anything filled since this view loaded. Margin rules apply
-          to the result, and the trader is notified.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <p className="min-w-0 max-w-prose flex-1 text-xs leading-relaxed text-muted">
+            {adjust
+              ? "Add to or subtract from a trader's cash and inventory. Changes apply to their live balances, so anything filled since this view loaded is kept."
+              : "Set a trader's cash and inventory directly. Values are absolute and replace anything filled since this view loaded."}{" "}
+            Margin rules apply to the result, and the trader is notified.
+          </p>
+          <div
+            role="group"
+            aria-label="Edit mode"
+            className="flex shrink-0 rounded-md border border-border bg-surface-2 p-0.5"
+          >
+            {MODES.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => switchMode(m.id)}
+                aria-pressed={mode === m.id}
+                className={cn(
+                  "rounded px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+                  mode === m.id
+                    ? "bg-accent-subtle text-text"
+                    : "text-muted hover:text-text",
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <Field label="Trader">
             <Select
@@ -191,7 +268,7 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
             </Select>
           </Field>
           <Field
-            label="Cash balance"
+            label={adjust ? "Cash change" : "Cash balance"}
             hint={
               account
                 ? `Stored ${money(account.cash)}${account.loanDebt > 0 ? ` · loan debt ${money(account.loanDebt)}` : ""}`
@@ -202,6 +279,7 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
               type="number"
               step="0.01"
               value={cash}
+              placeholder={adjust ? "0.00" : undefined}
               onChange={(e) => setCash(e.target.value)}
               disabled={!account}
               className="mono"
@@ -224,7 +302,9 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
                   <th className="py-1.5 pr-3 text-right font-medium">
                     Avg price
                   </th>
-                  <th className="w-32 py-1.5 font-medium">New quantity</th>
+                  <th className="w-32 py-1.5 font-medium">
+                    {adjust ? "Change" : "New quantity"}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -244,7 +324,7 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
                       </td>
                       <td className="py-1">
                         <Input
-                          aria-label={`${symbol} new quantity`}
+                          aria-label={`${symbol} ${adjust ? "quantity change" : "new quantity"}`}
                           type="number"
                           step="1"
                           value={quantities[symbol] ?? ""}
@@ -264,8 +344,10 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
               </tbody>
             </table>
             <p className="mt-1.5 text-[11px] text-faint">
-              Negative quantities are short positions. New positions are costed
-              at the current mark.
+              {adjust
+                ? "Negative changes reduce inventory and can take it short. Blank means no change."
+                : "Negative quantities are short positions."}{" "}
+              New or flipped positions are costed at the current mark.
             </p>
           </div>
         )}
@@ -279,11 +361,14 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
                   {[
                     ...(cashChange !== undefined && account
                       ? [
-                          `cash ${money(account.cash)} → ${Number.isFinite(cashChange) ? money(cashChange) : "?"}`,
+                          Number.isFinite(cashChange.next)
+                            ? `cash ${money(account.cash)} → ${money(cashChange.next)}${adjust ? ` (${signed(cashChange.delta)})` : ""}`
+                            : `cash ${money(account.cash)} → ?`,
                         ]
                       : []),
                     ...positionChanges.map(
-                      (p) => `${p.symbol} ${p.current} → ${p.quantity}`,
+                      (p) =>
+                        `${p.symbol} ${p.current} → ${p.next}${adjust ? ` (${signed(p.delta, 0)})` : ""}`,
                     ),
                   ].join(" · ")}
                 </span>
@@ -302,7 +387,9 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
         </div>
         {invalid && (
           <p role="alert" className="text-xs text-down">
-            Quantities must be whole numbers.
+            {adjust
+              ? "Quantity changes must be whole numbers."
+              : "Quantities must be whole numbers."}
           </p>
         )}
         {msg && (

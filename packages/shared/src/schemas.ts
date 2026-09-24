@@ -606,17 +606,27 @@ export const zCreateOtcInput = z.object({
 export type CreateOtcInput = z.infer<typeof zCreateOtcInput>;
 
 /* ---- Host account override ---- */
-/** Absolute values; omitted cash or symbols are left as they are. */
+/**
+ * `cash` / `quantity` are absolute; `cashDelta` / `delta` are added to the
+ * engine's live values. Omitted cash or symbols are left as they are.
+ */
 export const zAdminAccountEditInput = z
   .object({
     cash: z.number().finite().min(-1e12).max(1e12).optional(),
+    cashDelta: z.number().finite().min(-1e12).max(1e12).optional(),
     positions: z
       .array(
-        z.object({
-          symbol: z.string().min(1).max(64),
-          quantity: z.number().int().min(-1_000_000).max(1_000_000),
-          avgPrice: z.number().finite().nonnegative().optional(),
-        }),
+        z
+          .object({
+            symbol: z.string().min(1).max(64),
+            quantity: z.number().int().min(-1_000_000).max(1_000_000).optional(),
+            delta: z.number().int().min(-1_000_000).max(1_000_000).optional(),
+            avgPrice: z.number().finite().nonnegative().optional(),
+          })
+          .refine(
+            (r) => (r.quantity === undefined) !== (r.delta === undefined),
+            "set exactly one of quantity or delta",
+          ),
       )
       .max(100)
       .refine(
@@ -626,7 +636,14 @@ export const zAdminAccountEditInput = z
       .optional(),
   })
   .refine(
-    (v) => v.cash !== undefined || (v.positions?.length ?? 0) > 0,
+    (v) => v.cash === undefined || v.cashDelta === undefined,
+    "set at most one of cash or cashDelta",
+  )
+  .refine(
+    (v) =>
+      v.cash !== undefined ||
+      v.cashDelta !== undefined ||
+      (v.positions?.length ?? 0) > 0,
     "nothing to change",
   );
 export type AdminAccountEditInput = z.infer<typeof zAdminAccountEditInput>;

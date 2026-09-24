@@ -118,15 +118,19 @@ export type EngineCommand =
   | {
       /**
        * Host override: set a trader's cash and/or per-symbol inventory to
-       * absolute values. Omitted fields and symbols are left untouched.
+       * absolute values (`cash`, `quantity`) or shift them by a delta applied
+       * to the engine's live state (`cashDelta`, `delta`). Omitted fields and
+       * symbols are left untouched.
        */
       type: "admin_set_account";
       challengeId: string;
       userId: string;
       cash?: number;
+      cashDelta?: number;
       positions?: Array<{
         symbol: string;
-        quantity: number;
+        quantity?: number;
+        delta?: number;
         avgPrice?: number;
       }>;
       ts: number;

@@ -467,6 +467,29 @@ describe("admin account edit", () => {
     );
   });
 
+  it("queues a cash and inventory delta edit for the engine", async () => {
+    const f = await live();
+    expect(
+      await f.editAccount({
+        cashDelta: -150.5,
+        positions: [{ symbol: "AERIUM", delta: 4 }],
+      }),
+    ).toEqual({ statusCode: 202, body: { ok: true } });
+    expect(publishCommand).toHaveBeenCalledWith(
+      f.redis,
+      ID,
+      expect.objectContaining({
+        type: "admin_set_account",
+        userId: TRADER,
+        cashDelta: -150.5,
+        positions: [{ symbol: "AERIUM", delta: 4 }],
+      }),
+    );
+    expect(vi.mocked(publishCommand).mock.calls[0]![2]).not.toHaveProperty(
+      "cash",
+    );
+  });
+
   it("allows zeroing a held symbol that is no longer listed", async () => {
     const f = await live();
     f.tables.positions!.push({ challengeId: ID, userId: TRADER, symbol: "OLD" });
@@ -479,6 +502,13 @@ describe("admin account edit", () => {
   it.each([
     ["an empty edit", {}],
     ["a fractional quantity", { positions: [{ symbol: "AERIUM", quantity: 1.5 }] }],
+    ["a fractional delta", { positions: [{ symbol: "AERIUM", delta: 0.5 }] }],
+    ["both cash and cashDelta", { cash: 10, cashDelta: 5 }],
+    [
+      "a row with both quantity and delta",
+      { positions: [{ symbol: "AERIUM", quantity: 1, delta: 1 }] },
+    ],
+    ["a row with neither quantity nor delta", { positions: [{ symbol: "AERIUM" }] }],
     [
       "duplicate symbols",
       {

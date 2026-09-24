@@ -641,7 +641,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { accounts };
   });
 
-  // Set a trader's cash and/or inventory absolutely; the engine applies it.
+  // Set a trader's cash and/or inventory absolutely or by delta; the engine applies it.
   app.post("/:challengeId/accounts/:userId", async (req, reply) => {
     const params = validate(
       z.object({ challengeId: z.string().uuid(), userId: z.string().uuid() }),
@@ -697,6 +697,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       challengeId,
       userId,
       ...(body.cash !== undefined ? { cash: body.cash } : {}),
+      ...(body.cashDelta !== undefined ? { cashDelta: body.cashDelta } : {}),
       ...(body.positions?.length ? { positions: body.positions } : {}),
       ts: Date.now(),
     };
@@ -707,6 +708,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         challengeId,
         userId,
         cash: body.cash,
+        cashDelta: body.cashDelta,
         positions: body.positions,
       },
       "admin account edit",

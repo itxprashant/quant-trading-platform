@@ -546,6 +546,60 @@ describe("setAccount (host override)", () => {
     expect(e.portfolioOf("bob").cash).toBeCloseTo(0);
     expect(e.accountIds()).not.toContain("dave");
   });
+
+  it("adds cash and quantity deltas to the live account and keeps trading metrics", () => {
+    const e = traded();
+    const before = e.exportState().accounts.find((a) => a.userId === "bob")!;
+    e.setAccount("bob", {
+      cashDelta: 250,
+      positions: [{ symbol: "X1", delta: 5 }],
+    });
+    expect(e.portfolioOf("bob")).toMatchObject({
+      cash: before.cash + 250,
+      positions: [{ symbol: "X1", quantity: 15, avgPrice: 100 }],
+    });
+    e.setAccount("bob", { cashDelta: -100, positions: [{ symbol: "X1", delta: -3 }] });
+    expect(e.portfolioOf("bob")).toMatchObject({
+      cash: before.cash + 150,
+      positions: [{ symbol: "X1", quantity: 12 }],
+    });
+    const after = e.exportState().accounts.find((a) => a.userId === "bob")!;
+    expect(after.metrics).toEqual(before.metrics);
+  });
+
+  it("resolves deltas against fills made after the host loaded the account", () => {
+    const e = traded();
+    e.placeOrder({ orderId: "s2", userId: "alice", symbol: "X1", side: "sell", orderType: "limit", quantity: 4, price: 100, ts: 3 });
+    e.placeOrder({ orderId: "b2", userId: "bob", symbol: "X1", side: "buy", orderType: "market", quantity: 4, ts: 4 });
+    e.setAccount("bob", { positions: [{ symbol: "X1", delta: 1 }] });
+    expect(e.portfolioOf("bob").positions[0]).toMatchObject({ quantity: 15 });
+  });
+
+  it("costs a delta that flips the position at the mark, and starts new accounts from starting cash", () => {
+    const e = traded();
+    e.setPrice("X1", 120);
+    e.setAccount("bob", { positions: [{ symbol: "X1", delta: -12 }] });
+    expect(e.portfolioOf("bob").positions[0]).toMatchObject({ quantity: -2, avgPrice: 120 });
+    e.setAccount("carol", { cashDelta: -400, positions: [{ symbol: "X1", delta: 3 }] });
+    expect(e.portfolioOf("carol")).toMatchObject({
+      cash: 600,
+      positions: [{ symbol: "X1", quantity: 3, avgPrice: 120 }],
+    });
+  });
+
+  it("rejects fractional deltas and mixed absolute/delta fields without side effects", () => {
+    const e = traded();
+    const cash = e.portfolioOf("bob").cash;
+    expect(() => e.setAccount("bob", { cashDelta: 5, positions: [{ symbol: "X1", delta: 0.5 }] })).toThrow();
+    expect(() => e.setAccount("bob", { cash: 1, cashDelta: 1 })).toThrow();
+    expect(() => e.setAccount("bob", { positions: [{ symbol: "X1", quantity: 1, delta: 1 }] })).toThrow();
+    expect(() => e.setAccount("bob", { positions: [{ symbol: "X1" }] })).toThrow();
+    expect(() => e.setAccount("bob", { cashDelta: Number.NaN })).toThrow();
+    expect(e.portfolioOf("bob")).toMatchObject({
+      cash,
+      positions: [{ symbol: "X1", quantity: 10 }],
+    });
+  });
 });
 
 describe("allowMargin: false", () => {

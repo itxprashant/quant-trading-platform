@@ -677,21 +677,45 @@ export class ChallengeEngine {
   }
 
   /**
-   * Host override: set cash and/or per-symbol inventory absolutely, without
-   * touching loan debt or trading metrics. A position that keeps its sign
-   * keeps its average cost; otherwise it is costed at `avgPrice` or the mark.
+   * Host override: set cash and/or per-symbol inventory absolutely, or shift
+   * them by `cashDelta` / `delta` against the live account, without touching
+   * loan debt or trading metrics. A position that keeps its sign keeps its
+   * average cost; otherwise it is costed at `avgPrice` or the mark.
    */
   setAccount(
     userId: string,
     edit: {
       cash?: number;
-      positions?: Array<{ symbol: string; quantity: number; avgPrice?: number }>;
+      cashDelta?: number;
+      positions?: Array<{
+        symbol: string;
+        quantity?: number;
+        delta?: number;
+        avgPrice?: number;
+      }>;
     },
   ): void {
-    const held = this.accounts.get(userId)?.positions;
-    const rows = edit.positions ?? [];
+    const existing = this.accounts.get(userId);
+    const held = existing?.positions;
+    // Both or neither of an absolute value and a delta resolves to NaN and is rejected.
+    const cash =
+      edit.cashDelta === undefined
+        ? edit.cash
+        : edit.cash === undefined
+          ? (existing?.cash ?? this.cfg.startingCash) + edit.cashDelta
+          : Number.NaN;
+    const rows = (edit.positions ?? []).map((p) => ({
+      symbol: p.symbol,
+      avgPrice: p.avgPrice,
+      quantity:
+        p.delta === undefined
+          ? (p.quantity ?? Number.NaN)
+          : p.quantity === undefined
+            ? (held?.get(p.symbol)?.qty ?? 0) + p.delta
+            : Number.NaN,
+    }));
     if (
-      (edit.cash !== undefined && !Number.isFinite(edit.cash)) ||
+      (cash !== undefined && !Number.isFinite(cash)) ||
       rows.some(
         (p) =>
           // Held symbols stay editable after delisting so they can be zeroed.
@@ -703,7 +727,7 @@ export class ChallengeEngine {
     )
       throw new Error("Invalid account edit");
     const acct = this.ensureAccount(userId);
-    if (edit.cash !== undefined) acct.cash = edit.cash;
+    if (cash !== undefined) acct.cash = cash;
     for (const p of rows) {
       const cur = acct.positions.get(p.symbol) ?? { qty: 0, avgCost: 0 };
       const sameSign =
