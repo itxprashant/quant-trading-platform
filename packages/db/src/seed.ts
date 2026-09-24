@@ -122,6 +122,7 @@ async function main() {
       auctionWinnerFraction: EDEN_EVENT_DEFAULTS.auctionWinnerFraction,
       premiumLeadSec: EDEN_EVENT_DEFAULTS.premiumLeadSec,
       premiumAccessMinutes: EDEN_EVENT_DEFAULTS.premiumAccessMinutes,
+      otcReplySec: EDEN_EVENT_DEFAULTS.otcReplySec,
     },
   };
 
