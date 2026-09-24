@@ -830,7 +830,11 @@ export class ChallengeRunner {
         return [];
       case "apply_wealth_tax":
         if (cmd.proposalId)
-          await this.settlements.applyTax(cmd.proposalId, Date.now());
+          await this.settlements.applyTax(cmd.proposalId, Date.now(), {
+            ratePct: cmd.ratePct,
+            topPct: cmd.topPct,
+            bottomPct: cmd.bottomPct,
+          });
         return [];
       case "award_grant":
         await this.settlements.awardGrant(cmd.grantId, Date.now());

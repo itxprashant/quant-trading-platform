@@ -24,6 +24,7 @@ import {
   type Database,
 } from "@qtp/db";
 import {
+  EDEN_EVENT_DEFAULTS,
   redisKeys,
   type BroadcastEnvelope,
   type EngineEvent,
@@ -757,7 +758,15 @@ export class EdenSettlements {
     ]);
   }
 
-  async applyTax(proposalId: string, now: number): Promise<void> {
+  async applyTax(
+    proposalId: string,
+    now: number,
+    brackets: {
+      ratePct?: number;
+      topPct?: number;
+      bottomPct?: number;
+    } = {},
+  ): Promise<void> {
     await this.drain();
     const { db, engine, challenge } = this.d;
     const receipt = `tax:${proposalId}`;
@@ -780,11 +789,14 @@ export class EdenSettlements {
     const traders = await this.humanTraders(
       Math.min(now, proposal.expiresAt.getTime()),
     );
+    const ratePct = brackets.ratePct ?? EDEN_EVENT_DEFAULTS.taxRate;
+    const topPct = brackets.topPct ?? EDEN_EVENT_DEFAULTS.taxTopFraction;
+    const bottomPct = brackets.bottomPct ?? EDEN_EVENT_DEFAULTS.taxBottomFraction;
     const { deltas, redistributed } = wealthTaxTransfers(
       traders.map((r) => ({ id: r.userId, cash: engine.cashOf(r.userId) })),
-      0.15,
-      0.1,
-      0.2,
+      ratePct,
+      topPct,
+      bottomPct,
     );
     for (const delta of deltas) engine.adjustCash(delta.id, delta.delta);
     await this.commit(

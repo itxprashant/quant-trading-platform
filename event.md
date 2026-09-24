@@ -90,7 +90,7 @@ SESSION 2: The Options Grinder & Systemic Shocks (Minutes 70:00 - 130:00)
         ◦ The Assignment Breach: If a seller is assigned and pushed over the 100-unit inventory limit, they get a 🚨 HIGH ALERT. They have 30 seconds to trade back under the limit, or the Host forcibly liquidates them at a pre-set, terrible "Border Price."
     • 75:00 - [BLIND AUCTION 4] & Ticker (SIGNAL): "Options expire. Massive Gamma squeeze observed on Neuro-Chips." (Neuro-Chip FV +50).
     • 80:00 - The Policy Vote (Game Theory):
-        ◦ The Proposal: "The Solidarity Tax." A 15% wealth tax will be levied on the Top 10% richest players to be distributed equally among the Bottom 20%.
+        ◦ The Proposal: "The Solidarity Tax." A 10% wealth tax will be levied on the Top 10% richest players to be distributed equally among the Bottom 20%.
         ◦ The Bias: Rich players are publicly outed. Voting is democratic (poor outnumber rich). If the tax passes, watch the rich players retaliate by weaponizing their massive inventory to crash the market the poor players are trading in. They could also buy into assets to reduce free cash and escaping to the top 10% class.
     • 85:00 - Ticker (NOISE): "Analyst downgrades Neuro-Chips to 'Hold', citing lack of innovation." (A lagging indicator. Zero actual FV change. Let momentum bots sell).
     • 90:00 - [BLIND AUCTION 5] & The Dis-Correlation Nuke (SIGNAL):

@@ -10,13 +10,13 @@ import {
 } from "@qtp/db";
 import { publishBroadcast, publishCommand } from "@qtp/bus";
 import { tallyVote } from "@qtp/core";
-import type { EngineCommand } from "@qtp/shared";
+import { EDEN_EVENT_DEFAULTS, type EngineCommand } from "@qtp/shared";
 
 /** Default solidarity-tax brackets when a wealth-tax vote passes. */
 export const WEALTH_TAX = {
-  ratePct: 0.15,
-  topPct: 0.1,
-  bottomPct: 0.2,
+  ratePct: EDEN_EVENT_DEFAULTS.taxRate,
+  topPct: EDEN_EVENT_DEFAULTS.taxTopFraction,
+  bottomPct: EDEN_EVENT_DEFAULTS.taxBottomFraction,
 } as const;
 
 /**

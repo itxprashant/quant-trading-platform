@@ -829,12 +829,12 @@ describe("EdenSettlements", () => {
     );
     expect(f.tables.eventActions).toEqual([]);
     await f.settlements.applyTax("vote", NOW);
-    expect(f.engine.cashOf(user(10))).toBe(850);
-    expect(f.engine.cashOf(user(1))).toBe(175);
-    expect(f.engine.cashOf(user(2))).toBe(275);
+    expect(f.engine.cashOf(user(10))).toBe(900);
+    expect(f.engine.cashOf(user(1))).toBe(150);
+    expect(f.engine.cashOf(user(2))).toBe(250);
     expect(f.tables.eventActions!.map((r) => r.actionId)).toEqual(["tax:vote"]);
     await new EdenSettlements(f.deps).applyTax("vote", NOW);
-    expect(f.engine.cashOf(user(10))).toBe(850);
+    expect(f.engine.cashOf(user(10))).toBe(900);
   });
 
   it("closes only due votes and excludes nonparticipant ballots", async () => {

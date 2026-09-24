@@ -76,7 +76,7 @@ export const EDEN_EVENT_DEFAULTS = {
   otcBargainDelaySec: 5,
   etfWindowSec: 30,
   voteDurationSec: 60,
-  taxRate: 0.15,
+  taxRate: 0.1,
   taxTopFraction: 0.1,
   taxBottomFraction: 0.2,
   grantPrize: 10000,

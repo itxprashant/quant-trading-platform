@@ -20,6 +20,7 @@ import {
 } from "./eden-clock.js";
 import {
   EDEN_EVENT_BONDS,
+  EDEN_EVENT_DEFAULTS,
   EDEN_EVENT_ETF,
   EDEN_EVENT_NEURO,
   EDEN_EVENT_OPTIONS,
@@ -177,7 +178,7 @@ export const EDEN_EVENT_NEWS: readonly EdenNews[] = [
   news(
     80,
     "noise",
-    "The Solidarity Tax: a 15% wealth tax on the Top 10% for the Bottom 20% is put to a vote.",
+    "The Solidarity Tax: a 10% wealth tax on the Top 10% for the Bottom 20% is put to a vote.",
     [],
     [],
     false,
@@ -427,9 +428,9 @@ function buildSchedule(): readonly EdenEventAction[] {
     title: "The Solidarity Tax",
     closesAtSecond: 81 * 60,
     ranking: "cash" as const,
-    taxRate: 0.15,
-    topFraction: 0.1,
-    bottomFraction: 0.2,
+    taxRate: EDEN_EVENT_DEFAULTS.taxRate,
+    topFraction: EDEN_EVENT_DEFAULTS.taxTopFraction,
+    bottomFraction: EDEN_EVENT_DEFAULTS.taxBottomFraction,
   };
   add("vote/open", 80 * 60, { kind: "vote_open", ...vote });
   add("vote/resolve", vote.closesAtSecond, { kind: "vote_resolve", ...vote });
