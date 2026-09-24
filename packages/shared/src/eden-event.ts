@@ -1,5 +1,7 @@
 import type {
   BondTemplate,
+  EdenCueKind,
+  EdenCueStatus,
   EdenOptionsConfig,
   EtfConfig,
   SymbolConfig,
@@ -500,4 +502,187 @@ export function dueEdenEventActions(
   return EDEN_EVENT_ACTIONS.filter(
     (action) => action.atSecond <= elapsedSeconds && !completed.has(action.id),
   );
+}
+
+/**
+ * A host-fired beat of the playbook (`config.eden.playbookCues`). Firing runs
+ * its actions with their scripted offsets from the first one. ETF windows and
+ * the halftime OTC slot have no cue; ETF windows cycle on their own.
+ */
+export type EdenEventCue = Readonly<{
+  /** Stable key stored in fire receipts; never rename for an event in flight. */
+  id: string;
+  label: string;
+  /** Playbook minute the beat belongs to. */
+  minute: number;
+  kind: EdenCueKind;
+  actions: readonly EdenEventAction[];
+  /** Cues that must be done first, e.g. NEURO headlines need NEURO listed. */
+  requires: readonly string[];
+}>;
+
+/** Receipt recording when a cue fired; its actions keep their own receipts. */
+export const edenCueReceiptId = (cueId: string): string =>
+  `${EDEN_EVENT_VERSION}/cue/${cueId}`;
+
+const CUE_LISTING_FOR: Readonly<Record<string, string>> = {
+  AERIUM: "open",
+  NEURO: "list-neuro",
+  ORBITAL: "list-orbital",
+  AERIUM_ATM_CALL: "reopen",
+};
+
+function actionSymbols(action: EdenEventAction): string[] {
+  if (action.kind === "news")
+    return [
+      ...action.news.effects.map((e) => e.symbol),
+      ...action.news.momentum.map((m) => m.symbol),
+    ];
+  if (action.kind === "otc_offer") return action.offer.legs.map((l) => l.asset);
+  if (action.kind === "list_etf")
+    return action.config.basket.map((c) => c.symbol);
+  return [];
+}
+
+function buildCues(): readonly EdenEventCue[] {
+  const cues: Array<EdenEventCue & { order: number }> = [];
+  const add = (
+    id: string,
+    label: string,
+    minute: number,
+    kind: EdenEventCue["kind"],
+    actionIds: readonly string[],
+    requires: readonly string[] = ["open"],
+  ) => {
+    const wanted = new Set(actionIds.map((a) => `${EDEN_EVENT_VERSION}/${a}`));
+    const actions = EDEN_EVENT_ACTIONS.filter((a) => wanted.has(a.id));
+    if (actions.length !== wanted.size)
+      throw new Error(`Cue ${id} references a missing action`);
+    const needs = new Set(requires);
+    for (const symbol of actions.flatMap(actionSymbols)) {
+      const listing = CUE_LISTING_FOR[symbol];
+      if (listing && listing !== id) needs.add(listing);
+    }
+    cues.push({
+      id,
+      label,
+      minute,
+      kind,
+      actions,
+      requires: [...needs],
+      // An auction resolves before its minute's headline, as in the script.
+      order: kind === "auction" ? minute - 0.5 : minute,
+    });
+  };
+  const newsIds = (minute: number) => [
+    `news/${minute}/premium`,
+    `news/${minute}/public`,
+  ];
+
+  add("open", "Open market", 0, "market", ["open"], []);
+  for (const action of EDEN_EVENT_ACTIONS) {
+    if (action.kind !== "bond_available") continue;
+    add(
+      `bond-${action.bond.id}`,
+      `List ${action.bond.name}`,
+      action.atSecond / 60,
+      "market",
+      [action.id.slice(EDEN_EVENT_VERSION.length + 1)],
+    );
+  }
+  add("list-neuro", "List NEURO", 30, "scene", ["list/neuro", ...newsIds(30)]);
+  add("list-orbital", "List ORBITAL ETF", EDEN_EVENT_ETF_LIST_MINUTE, "scene", [
+    "list/orbital",
+    ...newsIds(EDEN_EVENT_ETF_LIST_MINUTE),
+  ]);
+  add("halftime", "Halftime freeze", EDEN_EVENT_HALFTIME_START_MINUTE, "scene", [
+    "freeze",
+    ...newsIds(EDEN_EVENT_HALFTIME_START_MINUTE),
+  ]);
+  add(
+    "reopen",
+    "Reopen with options",
+    EDEN_EVENT_HALFTIME_END_MINUTE,
+    "scene",
+    ["unfreeze", "options/open", ...newsIds(EDEN_EVENT_OPTIONS_OPEN_MINUTE)],
+    ["open", "halftime"],
+  );
+  add("vote", "Solidarity Tax vote", 80, "scene", [
+    "vote/open",
+    "vote/resolve",
+    ...newsIds(80),
+  ]);
+  // The vega bots trade the event option series, so options must be open.
+  add(
+    "shock",
+    "Dis-correlation shock",
+    90,
+    "scene",
+    ["vega/prepare", "vega/resolve", ...newsIds(90)],
+    ["open", "reopen"],
+  );
+  add("grant", "Government grant", 100, "scene", [
+    "grant/open",
+    "grant/award",
+    ...newsIds(100),
+    ...newsIds(105),
+  ]);
+  add("squeeze", "Final squeeze", 120, "scene", [
+    "volatility/triple",
+    ...newsIds(120),
+  ]);
+  add("close", "Close event", EDEN_EVENT_DURATION_MINUTES, "market", ["end"], []);
+
+  const inScene = new Set([30, 45, 60, 70, 80, 90, 100, 105, 120]);
+  for (const item of EDEN_EVENT_NEWS) {
+    if (inScene.has(item.minute)) continue;
+    add(`news-${item.minute}`, item.headline, item.minute, "news", newsIds(item.minute));
+  }
+  for (const offer of EDEN_EVENT_OTC) {
+    if (
+      offer.minute >= EDEN_EVENT_HALFTIME_START_MINUTE &&
+      offer.minute < EDEN_EVENT_HALFTIME_END_MINUTE
+    )
+      continue;
+    add(`otc-${offer.minute}`, offer.title, offer.minute, "otc", [
+      `otc/${offer.minute}`,
+    ]);
+  }
+  for (const minute of EDEN_EVENT_AUCTION_MINUTES)
+    add(`auction-${minute}`, "Premium feed auction", minute, "auction", [
+      `auction/${minute}/open`,
+      `auction/${minute}/resolve`,
+    ]);
+  // Stable sort keeps a scene ahead of a standalone beat on the same minute.
+  return cues
+    .sort((a, b) => a.order - b.order)
+    .map(({ order: _order, ...cue }) => cue);
+}
+
+/** Playbook order; "Run next" fires the first cue that has not fired. */
+export const EDEN_EVENT_CUES = /*#__PURE__*/ buildCues();
+
+export function edenEventCue(cueId: string): EdenEventCue | undefined {
+  return EDEN_EVENT_CUES.find((cue) => cue.id === cueId);
+}
+
+/** `receipts` holds event_actions ids: cue fire receipts and action receipts. */
+export function edenCueStatus(
+  cue: EdenEventCue,
+  receipts: ReadonlySet<string>,
+): EdenCueStatus {
+  if (receipts.has(edenCueReceiptId(cue.id)))
+    return cue.actions.every((a) => receipts.has(a.id)) ? "done" : "running";
+  return edenCueBlockers(cue, receipts).length > 0 ? "blocked" : "ready";
+}
+
+/** Required cue ids that are not done yet. */
+export function edenCueBlockers(
+  cue: EdenEventCue,
+  receipts: ReadonlySet<string>,
+): string[] {
+  return cue.requires.filter((id) => {
+    const required = edenEventCue(id);
+    return !required || edenCueStatus(required, receipts) !== "done";
+  });
 }

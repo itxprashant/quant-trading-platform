@@ -38,7 +38,7 @@ export const EDEN_EVENT_BONDS: BondTemplate[] = [
     name: "Standard Bond",
     price: 10000,
     faceValue: 10000,
-    couponPer5Min: 500,
+    payoutMultiplier: 2,
     maxPerUser: 1,
   },
   {
@@ -46,7 +46,7 @@ export const EDEN_EVENT_BONDS: BondTemplate[] = [
     name: "Aerium-Pegged Yield Bond",
     price: 10000,
     faceValue: 10000,
-    peggedYield: { symbol: "AERIUM", base: 2000, divisor: 10 },
+    payoutMultiplier: 2,
     maxPerUser: 1,
   },
 ];
@@ -67,6 +67,17 @@ export const EDEN_EVENT_BOTS: EdenBotConfig = {
   quoteSize: 10,
   intensity: 0.5,
 };
+export type EdenEventFlow = "host" | "cues" | "scripted";
+
+/** Scripted wins over cues so a stray flag can never run both drivers. */
+export function edenEventFlow(
+  eden: { eventScript?: boolean; playbookCues?: boolean } | undefined,
+): EdenEventFlow {
+  if (eden?.eventScript) return "scripted";
+  if (eden?.playbookCues) return "cues";
+  return "host";
+}
+
 export const EDEN_EVENT_DEFAULTS = {
   auctionDurationSec: 30,
   auctionWinnerFraction: 0.3,

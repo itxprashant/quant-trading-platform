@@ -89,12 +89,8 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
         ),
       });
       if (!participant) return reply.code(403).send({ error: "not_enrolled" });
-      // Preliminary only: the engine rechecks cash at debit.
-      if (
-        !Number.isFinite(participant.cash) ||
-        participant.cash < tpl.price * input.quantity
-      ) {
-        return reply.code(409).send({ error: "insufficient_cash" });
+      if (!challenge.endsAt || challenge.endsAt.getTime() <= Date.now()) {
+        return reply.code(409).send({ error: "invalid_bond_deadline" });
       }
       const existing = await app.db
         .select()
@@ -106,8 +102,7 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
             eq(bondHoldings.bondId, input.bondId),
           ),
         );
-      const held = existing[0]?.quantity ?? 0;
-      if (held + input.quantity > tpl.maxPerUser) {
+      if ((existing[0]?.quantity ?? 0) > 0) {
         return reply.code(409).send({ error: "bond_limit" });
       }
       const cmd: EngineCommand = {
@@ -115,7 +110,7 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
         challengeId: input.challengeId,
         userId: req.user.sub,
         bondId: input.bondId,
-        quantity: input.quantity,
+        price: input.price,
         ts: Date.now(),
       };
       await publishCommand(app.redis, input.challengeId, cmd);

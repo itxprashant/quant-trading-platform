@@ -70,10 +70,8 @@ function TypeChip({ type }: { type: OptionContract["optionType"] }) {
 }
 
 /**
- * The options grinder (comp_desc Session 2). Series on the left; the order
- * ticket and depth for the selected series stay docked on the right so
- * traders can take liquidity and EXERCISE in-the-money contracts during the
- * 15-second window without reflowing the panel.
+ * Options ticket for the instrument selected in the sidebar. Series for that
+ * underlying are chosen from a compact select, not a second catalog.
  */
 export function OptionsPanel({
   challengeId,
@@ -81,6 +79,8 @@ export function OptionsPanel({
   prices,
   books,
   portfolio,
+  activeSymbol,
+  showBook = true,
   exerciseWindowSec = 15,
   maxQuantity = 50,
   positionCap = 100,
@@ -93,6 +93,10 @@ export function OptionsPanel({
   prices: Map<string, PricePoint>;
   books: Map<string, OrderBookSnapshot>;
   portfolio: Portfolio | null;
+  /** Sidebar selection: an underlying or a specific option series. */
+  activeSymbol: string;
+  /** Hide the docked book when the main book is already this series. */
+  showBook?: boolean;
   exerciseWindowSec?: number;
   maxQuantity?: number;
   positionCap?: number;
@@ -110,7 +114,10 @@ export function OptionsPanel({
   const [price, setPrice] = useState("");
   const [now, setNow] = useState(Date.now());
   const [restBook, setRestBook] = useState<OrderBookSnapshot>();
-  const contract = contracts.find((c) => c.symbol === selected);
+  const relevant = contracts.filter(
+    (c) => c.symbol === activeSymbol || c.underlying === activeSymbol,
+  );
+  const contract = relevant.find((c) => c.symbol === selected);
   const phase = contract ? optionPhase(contract, exerciseWindowSec, now) : null;
   const held =
     portfolio?.positions.find((p) => p.symbol === selected)?.quantity ?? 0;
@@ -128,9 +135,12 @@ export function OptionsPanel({
   }, []);
 
   useEffect(() => {
-    const next = pickSeries(contracts, selected, exerciseWindowSec, Date.now());
+    const pool = contracts.filter(
+      (c) => c.symbol === activeSymbol || c.underlying === activeSymbol,
+    );
+    const next = pickSeries(pool, selected, exerciseWindowSec, Date.now());
     if (next !== selected) setSelected(next);
-  }, [contracts, selected, exerciseWindowSec]);
+  }, [contracts, activeSymbol, selected, exerciseWindowSec]);
 
   useEffect(() => {
     setRestBook(undefined);
@@ -158,7 +168,7 @@ export function OptionsPanel({
     };
   }, [challengeId, selected]);
 
-  const inWindow = contracts.some(
+  const inWindow = relevant.some(
     (c) => optionPhase(c, exerciseWindowSec, now).exercisable,
   );
   const canTrade =
@@ -226,6 +236,27 @@ export function OptionsPanel({
     }
   }
 
+  if (relevant.length === 0) {
+    if (!closedHint || contracts.length > 0) return null;
+    return (
+      <Panel className="flex min-w-0 flex-col overflow-hidden">
+        <PanelHeader
+          title={
+            <span className="flex items-center gap-1.5">
+              <Sigma className="size-3.5" /> Options
+            </span>
+          }
+        />
+        <p className="px-3 py-6 text-center text-xs text-faint">{closedHint}</p>
+      </Panel>
+    );
+  }
+
+  const intrinsic = contract
+    ? intrinsicOf(contract, prices.get(contract.underlying)?.price)
+    : null;
+  const mark = contract ? prices.get(contract.symbol)?.price : undefined;
+
   return (
     <Panel className="flex min-w-0 flex-col overflow-hidden">
       <PanelHeader
@@ -242,103 +273,24 @@ export function OptionsPanel({
         )}
       </PanelHeader>
 
-      <div className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="min-w-0 lg:border-r lg:border-border">
-          {contracts.length === 0 ? (
-            <div className="px-3 py-10 text-center text-xs text-faint">
-              <p>No option cycle is open right now.</p>
-              {closedHint && <p className="mt-1">{closedHint}</p>}
-            </div>
-          ) : (
-            <div className="max-h-[440px] overflow-auto">
-              <table className="w-full min-w-[380px] text-xs">
-                <caption className="sr-only">
-                  Option contracts. Select a series to trade or exercise.
-                </caption>
-                <thead className="sticky top-0 bg-surface-2 text-faint">
-                  <tr>
-                    <th className="px-2.5 py-1.5 text-left font-medium">
-                      Series
-                    </th>
-                    <th className="px-2.5 py-1.5 text-right font-medium">
-                      Strike
-                    </th>
-                    <th className="px-2.5 py-1.5 text-right font-medium">
-                      Mark
-                    </th>
-                    <th className="px-2.5 py-1.5 text-right font-medium">
-                      Deadline
-                    </th>
-                    <th className="px-2.5 py-1.5 text-right font-medium">
-                      Intrinsic
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {contracts.map((c) => {
-                    const mark = prices.get(c.symbol)?.price;
-                    const intrinsic = intrinsicOf(
-                      c,
-                      prices.get(c.underlying)?.price,
-                    );
-                    const isSel = selected === c.symbol;
-                    return (
-                      <tr
-                        key={c.symbol}
-                        onClick={() => setSelected(c.symbol)}
-                        className={cn(
-                          "cursor-pointer transition-colors",
-                          isSel ? "bg-accent-subtle" : "hover:bg-surface-2",
-                        )}
-                      >
-                        <td className="px-2.5 py-1.5">
-                          <button
-                            type="button"
-                            aria-pressed={isSel}
-                            aria-label={`Select ${c.symbol}`}
-                            onClick={() => setSelected(c.symbol)}
-                            className="inline-flex items-center gap-1 rounded py-1 text-left focus-visible:outline-2 focus-visible:outline-accent"
-                          >
-                            <TypeChip type={c.optionType} />
-                            <span
-                              className={isSel ? "text-accent" : "text-muted"}
-                            >
-                              {c.underlying}
-                            </span>
-                          </button>
-                        </td>
-                        <td className="px-2.5 py-1.5 text-right mono">
-                          {c.strike}
-                        </td>
-                        <td className="px-2.5 py-1.5 text-right mono">
-                          {mark != null ? money(mark) : "—"}
-                        </td>
-                        <td className="px-2.5 py-1.5 text-right mono text-muted">
-                          {deadlineText(c, exerciseWindowSec, now)}
-                        </td>
-                        <td
-                          className={cn(
-                            "px-2.5 py-1.5 text-right mono",
-                            intrinsic && intrinsic > 0
-                              ? "text-up"
-                              : "text-faint",
-                          )}
-                        >
-                          {intrinsic != null ? money(intrinsic) : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="flex min-w-0 flex-col border-t border-border lg:border-t-0">
-          <section aria-label="Option order ticket" className="space-y-2.5 p-3">
-            <div className="flex items-center justify-between gap-2">
-              {contract ? (
+      <div className={cn("min-w-0", showBook && "grid lg:grid-cols-[minmax(0,1fr)_280px]")}>
+        <section aria-label="Option order ticket" className="space-y-2.5 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {relevant.length > 1 ? (
+                <Select
+                  aria-label="Option series"
+                  value={selected ?? ""}
+                  onChange={(e) => setSelected(e.target.value)}
+                  className="min-w-0 max-w-full"
+                >
+                  {relevant.map((c) => (
+                    <option key={c.symbol} value={c.symbol}>
+                      {c.optionType === "call" ? "C" : "P"} {c.underlying}{" "}
+                      {c.strike}
+                    </option>
+                  ))}
+                </Select>
+              ) : contract ? (
                 <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
                   <TypeChip type={contract.optionType} />
                   <span className="truncate">
@@ -359,6 +311,19 @@ export function OptionsPanel({
                 </span>
               )}
             </div>
+            {contract && (
+              <p className="text-[11px] text-faint">
+                Mark{" "}
+                <span className="mono text-muted">
+                  {mark != null ? money(mark) : "—"}
+                </span>
+                {" · "}
+                Intrinsic{" "}
+                <span className={cn("mono", intrinsic && intrinsic > 0 ? "text-up" : "text-muted")}>
+                  {intrinsic != null ? money(intrinsic) : "—"}
+                </span>
+              </p>
+            )}
             <p className="text-[11px] text-faint">
               Held <span className="mono text-muted">{held}</span> · Orders 1–
               {maxQuantity} · Cap ±{positionCap}
@@ -448,21 +413,22 @@ export function OptionsPanel({
               </p>
             )}
           </section>
-          <OrderBook
-            embedded
-            depth={6}
-            snapshot={
-              selected
-                ? (books.get(selected) ??
-                  (restBook?.symbol === selected ? restBook : undefined))
-                : undefined
-            }
-            onPick={(p) => {
-              setPrice(p.toFixed(2));
-              setType("limit");
-            }}
-          />
-        </div>
+          {showBook ? (
+            <OrderBook
+              embedded
+              depth={6}
+              snapshot={
+                selected
+                  ? (books.get(selected) ??
+                    (restBook?.symbol === selected ? restBook : undefined))
+                  : undefined
+              }
+              onPick={(p) => {
+                setPrice(p.toFixed(2));
+                setType("limit");
+              }}
+            />
+          ) : null}
       </div>
     </Panel>
   );

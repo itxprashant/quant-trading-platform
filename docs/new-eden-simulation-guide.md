@@ -2,9 +2,13 @@
 
 How to run **The New Eden Exchange** on Quantstorm with real players — from a local dry run through a production rehearsal to the live tournament.
 
-This guide runs the event in **host mode**: the host drives every beat of the event (listings, news, auctions, OTC offers, halftime, votes, grants, close) from the admin page, while the engine keeps the economy, bots, and prices running underneath. Your job is to stand up the environment, enroll players, and run the event from `/admin/[id]`.
+The host runs the event from `/admin/[id]` while the engine keeps the economy, bots, and prices running underneath. There are three **event flows**:
 
-A fully automated **scripted mode** also exists (see §1.2). Pick one mode per challenge before it starts; the choice cannot change once the event has run.
+- **Playbook cues** (semi-automatic, §1.2): the playbook is split into 46 cues (open, headlines, Deal Desk slots, auctions, listings, halftime, vote, shock, grant, close). You press **Run** for each one; the engine runs its steps with the playbook's own timing.
+- **Host** (fully manual, §1.1): you build every beat yourself from the individual controls.
+- **Scripted** (fully automated, §1.3): the 130-minute timeline runs by itself.
+
+Your job is to stand up the environment, enroll players, pick a flow, and run the event. Pick the flow before the challenge starts; it cannot change once the event has run.
 
 **Related docs**
 
@@ -16,11 +20,11 @@ A fully automated **scripted mode** also exists (see §1.2). Pick one mode per c
 
 ---
 
-## 1. Host mode and scripted mode
+## 1. Event flows
 
-The mode is the **New Eden playbook preset** checkbox on the challenge form (`config.eden.eventScript`). It can be changed while the challenge is `draft` or `scheduled`, and locks once the event has run.
+The flow is the **Event flow** selector on the challenge form (`config.eden.playbookCues` for cues, `config.eden.eventScript` for scripted; if both are set, scripted wins). It can be changed while the challenge is `draft` or `scheduled`, and locks once the event has run.
 
-### 1.1 Host mode (preset off) — this guide
+### 1.1 Host (fully manual)
 
 Nothing on the event timeline happens until you trigger it. These keep running on their own once the challenge is live:
 
@@ -29,19 +33,27 @@ Nothing on the event timeline happens until you trigger it. These keep running o
 | **Economy** | Cost of carry every game minute, predatory-loan repayments, margin calls, forced liquidation |
 | **Bots** | HFT market makers, momentum traders, vega snipers, parity arbers — from the saved bot counts |
 | **Prices** | Autonomous random walk on every listed symbol, plus any drift you set |
-| **Bond coupons** | Every 5 game minutes on bonds players hold |
+| **Bond payouts** | Every game minute on bonds players hold |
 | **ETF windows** | Once an ETF is listed, a 30-second create/redeem window opens every 10 game minutes; you can also open or close one by hand |
 | **Option cycles** | Each cycle you open closes itself after its cycle length and opens a 15-second exercise window; the next cycle does not open until you open it |
 | **Auction, vote, grant deadlines** | Each resolves on its own timer once you open it |
 | **Close** | At **Ends at** (if set), or when you click **End**: trading halts, options expire, debt is closed out, final rankings are saved |
 
-Turning the preset off keeps the current instruments, cash, limits, and bot counts. It also turns off automatic option cycles, so **Open cycle** opens one cycle at a time.
+Switching to **Host** from another flow keeps the current instruments, cash, limits, and bot counts. It also turns off automatic option cycles, so **Open cycle** opens one cycle at a time.
 
-### 1.2 Scripted mode (preset on)
+### 1.2 Playbook cues (semi-automatic)
+
+The playbook's beats are pre-built as **cues** on the **Playbook cues** panel (§8.4). Nothing happens until you run a cue; then the engine runs that cue's steps with the playbook's spacing, counted from your click. The headline text, fair-value effects, Deal Desk terms, auction rounds, vote, shock, and grant all come from the playbook, so there is nothing to type.
+
+Choosing **Playbook cues** applies the same preset as scripted mode: AERIUM only at 1,000, the playbook economy, bots, and options. The bonds, NEURO, and ORBITAL come from their cues. When the challenge goes live, the market **stays frozen until you run Open market**. After that, the economy and bots run as in host mode. ETF windows open every 10 game minutes once ORBITAL lists, and option cycles roll on their own once **Reopen with options** has run.
+
+Use the cue sheet rather than the manual controls for playbook beats. Manual controls still work for extras (an announcement, a price nudge, an account correction).
+
+### 1.3 Scripted (fully automated)
 
 The engine runs a fixed **130-game-minute** timeline by itself: listings at 10/18/30/45/70m, 24 headlines, 7 auctions, 13 OTC slots, halftime 60–70m, vote at 80m, shock at 90m, grant at 100m, close at 130m. The host only monitors. Full schedule: [`event.md`](../event.md) and `packages/shared/src/eden-event.ts`.
 
-In scripted mode, **do not** fire manual news, auctions, OTC offers, votes, or grants — they double the scripted beats. The rest of this guide assumes host mode.
+In scripted mode, **do not** fire manual news, auctions, OTC offers, votes, or grants — they double the scripted beats. Sections 5–8 cover host mode and call out where playbook cues differ.
 
 ---
 
@@ -53,7 +65,9 @@ In scripted mode, **do not** fire manual news, auctions, OTC offers, votes, or g
 | **Rehearsal** | `ENGINE_MINUTE_MS=60000` (default) | Full player UX, real reaction windows |
 | **Production event** | 60 s / game minute on the VM | The actual tournament |
 
-In host mode the game minute drives carry, loan repayment, bond coupons, option cycle length, and the 10-minute ETF window cadence. Durations you type into the host desk (auction, vote, grant, OTC reply) are **wall seconds**. So are the 15-second option exercise window, the 30-second ETF window, and the 5-second OTC bargain settlement delay. None of these scale with `ENGINE_MINUTE_MS`.
+In host mode the game minute drives carry, loan repayment, bond payouts, option cycle length, and the 10-minute ETF window cadence. Durations you type into the host desk (auction, vote, grant, OTC reply) are **wall seconds**. So are the 15-second option exercise window, the 30-second ETF window, and the 5-second OTC bargain settlement delay. None of these scale with `ENGINE_MINUTE_MS`.
+
+With playbook cues, the spacing between steps inside a cue is game time and **does** scale: at 6 s per game minute, the grant's award lands 30 wall seconds after you run it, not 5 minutes. The OTC reply window, auction bidding, and vote are also game time inside a cue, so at 6 s per game minute a 15-second OTC reply shrinks to 1.5 s. Rehearse player-facing beats on the real-time clock.
 
 ---
 
@@ -77,11 +91,11 @@ Seeded accounts:
 | Admin | `admin` | `admin1234` |
 | Traders | `trader1` … `trader8` | `trader1234` |
 
-The seed also creates a **New Eden Exchange** challenge (`scheduled`, preset **on**), but **does not enroll anyone into it** — only the live directional challenge gets auto-enrolled traders. §5.1 switches it to host mode.
+The seed also creates a **New Eden Exchange** challenge (`scheduled`, flow **Scripted**), but **does not enroll anyone into it** — only the live directional challenge gets auto-enrolled traders. §5.1 switches its flow.
 
 ### Production
 
-- Deployed stack at `https://quanta.devclub.in` (or your instance)
+- Deployed stack at `https://quantstorm-2026.site` (or your instance)
 - Admin login with production credentials
 - All services (`api`, `engine`, `gateway`, `web`) running the same build
 - **`ENGINE_MINUTE_MS=60000`** on every engine instance (default if unset)
@@ -107,7 +121,7 @@ Use `trader1` … `trader8` from `pnpm db:seed`. For more pre-made accounts, inc
 **Option C — bulk register via API**
 
 ```bash
-API_URL=http://localhost:8000   # or https://quanta.devclub.in
+API_URL=http://localhost:8000   # or https://quantstorm-2026.site
 
 for i in $(seq 1 20); do
   curl -sS -X POST "$API_URL/api/auth/register" \
@@ -162,11 +176,11 @@ Verify enrollment in the admin **Trader accounts** panel or `GET /api/admin/:cha
 
 ## 5. Challenge setup
 
-### 5.1 Switch the seeded challenge to host mode, or create a new one
+### 5.1 Pick the event flow on the seeded challenge, or create a new one
 
-**Seeded:** Admin → `/admin` → **New Eden Exchange** → **Edit**. While it is still `scheduled`, uncheck **New Eden playbook preset** and click Save. The AERIUM instrument, $10,000 cash, 100-unit cap, carry, loans, and bot counts from the preset stay as they are.
+**Seeded:** Admin → `/admin` → **New Eden Exchange** → **Edit**. While it is still `scheduled`, set **Event flow** to **Playbook cues** or **Host** and click Save. The AERIUM instrument, $10,000 cash, 100-unit cap, carry, loans, and bot counts from the preset stay as they are.
 
-**New:** Admin → `/admin/new` → Type **New Eden Exchange**, and leave **New Eden playbook preset** unchecked. To start from the preset's instruments and economy, check it once and then uncheck it before saving.
+**New:** Admin → `/admin/new` → Type **New Eden Exchange**. It starts in **Host** with the form's default instruments. Choosing **Playbook cues** applies the preset. For host mode on the preset's instruments and economy, choose **Playbook cues** once and then switch back to **Host** before saving.
 
 If the challenge has already run, the form refuses the change ("This event has already run…"). **Reset** it first (§5.4), or create a new challenge.
 
@@ -184,10 +198,12 @@ Everything below is read when the challenge goes live. Save it first.
 
 Bonds are purchasable from the open. If you want them to "arrive" at 10m and 18m, announce them at that point (§8); the platform cannot hold a template back.
 
+With playbook cues, the form locks bond templates: the two playbook bonds arrive when you run their cues. Leave the preset's instruments as they are; NEURO and ORBITAL also come from cues.
+
 ### 5.3 Set the schedule
 
-1. **Starts at** — the open. The game clock (carry, loans, coupons) counts from this time.
-2. **Ends at** — optional. If set, the engine closes the event at that time. If empty, the event runs until you click **End**. For a 130-minute event, set it to Starts at + 130 minutes. In host mode it is not filled in automatically.
+1. **Starts at** — the open. The game clock (carry, loans, bond payouts) counts from this time.
+2. **Ends at** — optional. If set, the engine closes the event at that time. If empty, the event runs until you click **End**. For a 130-minute event, set it to Starts at + 130 minutes. In host and cue modes it is not filled in automatically; with cues you can leave it empty and run **Close** instead.
 3. Save while still `draft` or `scheduled`.
 4. Only a `scheduled` challenge goes live on its own at **Starts at**. The seeded challenge is already `scheduled`. A new or reset challenge is a `draft`: click **Schedule** in the admin list, or click **Start** yourself at the open.
 
@@ -199,7 +215,9 @@ After a test run, reset trading state without deleting users:
 
 Reset clears orders, positions, news, loans, bonds, OTC, options, auctions, votes, grants, and Redis hot state, and resets every enrolled player's cash. Enrollment is kept. The challenge returns to `draft` with **Starts at** and **Ends at** cleared.
 
-In host mode, instruments you listed during the run (NEURO, ORBITAL, option underlyings) stay in the challenge config, and the form cannot remove a listed ETF. To get back to a clean start, check and then uncheck **New Eden playbook preset**. That restores AERIUM only and clears bond templates and ETFs, so re-add your bond templates afterwards. Then set **Starts at**, save, and **Schedule** it (§5.3).
+With playbook cues (or scripted), reset also restores the preset config and clears every cue, so the cue sheet starts over. Set **Starts at**, save, and **Schedule** it (§5.3).
+
+In host mode, instruments you listed during the run (NEURO, ORBITAL, option underlyings) stay in the challenge config, and the form cannot remove a listed ETF. To get back to a clean start, switch **Event flow** to **Playbook cues** and back to **Host**. That restores AERIUM only and clears bond templates and ETFs, so re-add your bond templates afterwards. Then set **Starts at**, save, and **Schedule** it (§5.3).
 
 ---
 
@@ -208,8 +226,8 @@ In host mode, instruments you listed during the run (NEURO, ORBITAL, option unde
 Complete this **before** `startsAt`:
 
 - [ ] Stack healthy: `GET /api/health`, WebSocket connects at `/ws?token=…`
-- [ ] Challenge type `new_eden`, **playbook preset off**
-- [ ] Bond templates saved (if you want bonds)
+- [ ] Challenge type `new_eden`, **Event flow** set to **Playbook cues** or **Host**
+- [ ] Host mode only: bond templates saved (if you want bonds)
 - [ ] **Starts at** saved; **Ends at** saved or a plan to click **End**
 - [ ] Every player has an account and has **joined** the challenge
 - [ ] Enrollment count matches expected headcount in **Trader accounts**
@@ -231,10 +249,10 @@ ENGINE_MINUTE_MS=6000 pnpm dev
 
 Then:
 
-1. Log in as `admin` → `/admin` → **New Eden Exchange** → switch to host mode (§5.1).
+1. Log in as `admin` → `/admin` → **New Eden Exchange** → pick the event flow (§5.1).
 2. Set **Starts at** a minute or two ahead → Save (§5.3). Or click **Start** when ready.
 3. Enroll traders (§4.2).
-4. When the challenge goes live, AERIUM trades immediately.
+4. When the challenge goes live: in host mode AERIUM trades immediately; with playbook cues the market stays frozen until you run **Open market**.
 5. Drive the event from `/admin/[id]` (§8) and watch a trader tab.
 
 ### 7.2 Full rehearsal or production (real-time)
@@ -252,6 +270,8 @@ pnpm dev
 ## 8. Running the event from the admin page
 
 All controls are on `/admin/[id]` under **Live operations**, which appears once the challenge is `live`. Request shapes and edge cases for each control: [`new-eden-host-guide.md`](./new-eden-host-guide.md).
+
+With playbook cues, run the event from the **Playbook cues** panel at the top of Live operations (§8.4). §8.1–8.3 describe the manual controls.
 
 ### 8.1 Where each beat lives
 
@@ -298,15 +318,45 @@ To run the same story the script tells, fire these by hand. Minutes are game min
 | 100 | Grant mission on AERIUM (300 s) | Government grant |
 | 130 | Close | **End**, or Ends at |
 
-Two scripted beats have no host control. The halftime rescue loans do not exist in host mode, though players can still borrow from the **Bank** panel at any time. The 3× bot volatility at minute 120 has no switch either; use **Drift** / **Set** or a volatility-event headline instead.
+Two scripted beats have no host control. The halftime rescue loans do not exist in host mode, though players can still borrow from the **Bank** panel at any time. The 3× bot volatility at minute 120 has no switch either; use **Drift** / **Set** or a volatility-event headline instead. Playbook cues run both: **Halftime freeze** issues the rescue loans and **Final squeeze** triples bot volatility.
 
 ### 8.3 Host tips
 
-- **Freeze is halftime.** Freezing stops new orders, matching, and bots; players can still cancel. Carry, loan repayments, and coupons keep running. Do not use **Pause** for halftime: pausing stops the engine runner for the challenge.
+- **Freeze is halftime.** Freezing stops new orders, matching, and bots; players can still cancel. Carry, loan repayments, and bond payouts keep running. Do not use **Pause** for halftime: pausing stops the engine runner for the challenge.
 - **Queue headlines ahead.** Use **Publish at** to schedule the next few headlines, so you are free for OTC and auctions.
 - **Options need a nudge.** Each cycle closes on its own, but the next one opens only when you click **Open cycle**.
 - **One OTC offer per trader per send.** For a desk-wide slot, send one offer to each trader.
 - **End runs final scoring.** Clicking **End** (or reaching Ends at) halts trading, expires options, closes out debt, and saves final rankings. It cannot be undone; use **Reset** to run again.
+
+### 8.4 Running with playbook cues
+
+The **Playbook cues** panel lists all 46 cues in playbook order, each with its game minute, kind, and label. Admins see the headline text of every headline a cue will publish; traders see nothing until it publishes.
+
+- **Run next** fires the first cue that has not run. Every cue also has its own **Run** button, so you can skip ahead, hold a beat, or run beats early. Each cue runs once.
+- A cue's steps keep the playbook's spacing, counted in game time from your click. Expand **N steps** on a row to see the offsets. Headlines reach premium-feed winners 10 s before the public release, so a scene cue starts with its premium headline and its main step lands 10 s later. For example, **Government grant** sends the premium headline, opens the mission with the public headline at +10 s, and awards the prize with the minute-105 headline at +5m 10s.
+- Status on each row: a **Run** button (ready), **Needs …** (waiting for another cue to finish), **Running** with the next pending step, or a check mark with the time it fired.
+- Deal Desk cues are refused while the market is frozen: before **Open market**, and between **Halftime freeze** and **Reopen with options**.
+- **Close event** asks for confirmation, then halts trading, expires options, closes out debt, and saves final rankings.
+- A cue survives an engine restart: fired cues resume their remaining steps from the recorded fire time.
+
+| Cue | Playbook minute | What it runs | Needs |
+|-----|-----------------|--------------|-------|
+| **Open market** | 0 | Lists AERIUM and unfreezes the market | — |
+| Deal Desk slot (12) | 2.5, 12.5 … 122.5, not 62.5 | One playbook offer to every trader, 15 s to answer | Open market; unfrozen market |
+| Headline (15) | every 5, outside the scene minutes | Premium release, public release 10 s later | Open market, plus any symbol it moves |
+| **List** bond (2) | 10, 18 | Makes the standard / Aerium-pegged bond purchasable | Open market |
+| Premium feed auction (7) | 15, 30, 45, 75, 90, 105, 120 | Bidding for 30 s, then resolves; winners get headlines early for 15 minutes | Open market |
+| **List NEURO** | 30 | NEURO lists, with its headline | Open market |
+| **List ORBITAL ETF** | 45 | ORBITAL (2 AERIUM + 1 NEURO) lists, with its headline; ETF windows start | List NEURO |
+| **Halftime freeze** | 60 | Freeze with rescue loans, with its headline | Open market |
+| **Reopen with options** | 70 | Unfreeze, AERIUM options open, with its headline | Halftime freeze |
+| **Solidarity Tax vote** | 80 | Vote opens with its headline, resolves 60 s later | Open market |
+| **Dis-correlation shock** | 90 | Vega bots prepare; 60 s later the shock headline and the vega dump | Reopen with options |
+| **Government grant** | 100 | Grant on AERIUM, awarded 5 minutes later; headlines at 100 and 105 | Open market |
+| **Final squeeze** | 120 | Bot volatility ×3, with its headline | Open market |
+| **Close event** | 130 | Halt and final rankings | — |
+
+An auction sorts just ahead of the headline on the same minute: run the auction first so its winners receive that headline early.
 
 ---
 
@@ -321,7 +371,8 @@ Each trader works from **`/challenges/[id]`** — a single terminal with real-ti
 | **Deal Desk** | When you send an offer | Accept / Reject / Bargain on the OTC modal before its deadline |
 | **Auction** | When you open a round | Submit one sealed bid per round |
 | **Bank** | When leveraged or margin-called | Request predatory loans |
-| **Markets** | Once bonds / an ETF exist | Buy bonds; create/redeem ETF while a window is open |
+| **Markets** | Once an ETF exists | Create/redeem ETF while a window is open |
+| **Government bonds** | Once a bond is listed | Buy each series once at a price above free cash |
 | **Options** | Once you open a cycle | Trade calls/puts; **Exercise** within 15 s of cycle close |
 | **Vote** | When you open a vote | Yes/No |
 | **Grant banner** | When you open a grant | Chase inventory of the target symbol |
@@ -365,13 +416,13 @@ Confirm with real players:
 
 ## 11. Production deployment notes
 
-For a production simulation on `quanta.devclub.in`:
+For a production simulation on `quantstorm-2026.site`:
 
 1. Merge to `main` and wait for **Publish Docker Images** CI.
 2. Deploy: `REGISTRY=quantadevclub.azurecr.io IMAGE_TAG=sha-$(git rev-parse --short HEAD) ./scripts/registry-vm-deploy.sh`
 3. Confirm `ENGINE_MINUTE_MS` is consistent across engine containers.
-4. Create or reset the New Eden challenge in admin, set it to host mode, and set production `startsAt`.
-5. Share player link: `https://quanta.devclub.in/challenges/[id]`
+4. Create or reset the New Eden challenge in admin, pick its event flow, and set production `startsAt`.
+5. Share player link: `https://quantstorm-2026.site/challenges/[id]`
 6. Enroll players via §4.2 before the open.
 
 If schema changed, run migrate via compose (`db:push` in migrate image) before writers start — see [`EVENT-IMPLEMENTATION.md`](./EVENT-IMPLEMENTATION.md).
@@ -383,22 +434,26 @@ If schema changed, run migrate via compose (`db:push` in migrate image) before w
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Challenge never goes live | `startsAt` is null, or the challenge is still `draft` | Set **Starts at**, save, then **Schedule**; or click **Start** |
-| Events fire on their own | Playbook preset is on (scripted mode) | Before the event: turn it off (§5.1). After it has run: **Reset**, then turn it off |
-| Preset checkbox is greyed out | Challenge is live, paused, or ended | **Reset** (it returns to `draft`), change the mode, then schedule it again |
+| Events fire on their own | Event flow is **Scripted** | Before the event: switch it (§5.1). After it has run: **Reset**, then switch it |
+| Event flow selector is greyed out | Challenge is live, paused, or ended | **Reset** (it returns to `draft`), change the flow, then schedule it again |
+| Market stays frozen after go-live | Playbook cues: the open is a cue | Run **Open market** on the cue sheet |
+| Cue row shows **Needs …** | A cue it depends on has not finished (e.g. NEURO headlines need **List NEURO**) | Run that cue first, or wait for it to finish its steps |
+| "Deal Desk offers need an open market" | Deal Desk cue run while frozen | Run it after **Open market**, or after **Reopen with options** at halftime |
+| No **Playbook cues** panel | Event flow is not **Playbook cues**, or the challenge is not live | Check the flow on the edit form; the panel shows under Live operations |
 | "This event has already run…" on save | The challenge has engine state from an earlier run | **Reset**, then save again |
 | Bond shows in the list but purchase does nothing | Template was added after go-live | Save bond templates before go-live (§5.2) |
 | Player missing from the Deal Desk trader list | Not enrolled | `POST /api/challenges/:id/join`, then reload the admin page |
 | Option cycles stop after one | Expected in host mode | Click **Open cycle** for each new cycle |
 | Options exercise feels “too fast” in dry run | 15 s wall window does not scale | Rehearse at real-time clock |
 | Prices flat / no bots | Engine not holding lock or challenge not live | Check engine logs; confirm Redis |
-| `event_clock_immutable` from the API | Editing schedule or mode after start | Reset challenge or create a new one |
+| `event_clock_immutable` from the API | Editing schedule or event flow after start | Reset challenge or create a new one |
 | Trader cannot register | Rate limit | Wait or register from another IP |
 
 ---
 
 ## 13. End-to-end recipe (copy-paste)
 
-**Local accelerated host-mode simulation with 8 real players:**
+**Local accelerated simulation with 8 real players:**
 
 ```bash
 pnpm infra:up && pnpm db:push && pnpm db:seed
@@ -406,11 +461,11 @@ ENGINE_MINUTE_MS=6000 pnpm dev
 ```
 
 1. Admin → `/admin` → **New Eden Exchange** → note challenge ID from URL.
-2. Uncheck **New Eden playbook preset**; set **Starts at** (and optionally **Ends at**) → Save.
+2. Set **Event flow** to **Playbook cues** (or **Host**); set **Starts at** (and optionally **Ends at**) → Save.
 3. Run bulk enroll script from §4.2.
 4. Open 8 browser profiles (or incognito tabs) → `/login` as `trader1`…`trader8`.
 5. Each opens `/challenges/[id]`.
-6. When it goes live, drive the run sheet from `/admin/[id]` (§8.2).
+6. When it goes live, work down the **Playbook cues** panel with **Run next** (§8.4), or drive the run sheet by hand in host mode (§8.2).
 7. Click **End**, confirm final rankings → **Reset** → restore a clean config (§5.4) → set the real **Starts at** → **Schedule**.
 
 ---
@@ -420,7 +475,8 @@ ENGINE_MINUTE_MS=6000 pnpm dev
 | Item | Value |
 |------|-------|
 | Challenge type | `new_eden` |
-| Mode switch | **New Eden playbook preset** (`config.eden.eventScript`), `draft` / `scheduled` only |
+| Flow switch | **Event flow** (`config.eden.playbookCues` / `config.eden.eventScript`), `draft` / `scheduled` only |
+| Cue sheet API | `GET /api/admin/:id/cues`, `POST /api/admin/:id/cues/run { cueId }` |
 | Starting cash (preset) | $10,000 |
 | Admin console | `/admin/[challengeId]` → Live operations |
 | Trader terminal | `/challenges/[challengeId]` |

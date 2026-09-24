@@ -177,7 +177,7 @@ export type EngineCommand =
       challengeId: string;
       userId: string;
       bondId: string;
-      quantity: number;
+      price: number;
       ts: number;
     }
   | {
@@ -212,6 +212,13 @@ export type EngineCommand =
       ratePct: number;
       topPct: number;
       bottomPct: number;
+      ts: number;
+    }
+  | {
+      /** Fire one playbook cue (New Eden cue mode); the engine runs its beats. */
+      type: "run_cue";
+      challengeId: string;
+      cueId: string;
       ts: number;
     }
   | {

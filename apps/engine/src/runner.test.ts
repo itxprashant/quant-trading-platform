@@ -97,7 +97,14 @@ vi.mock("./eden-settlements.js", () => ({
     recover = vi.fn(async () => {});
   },
 }));
-vi.mock("./event-executor.js", () => ({ EventExecutor: class {} }));
+const executor = vi.hoisted(() => ({
+  execute: vi.fn(async (..._args: unknown[]) => {}),
+}));
+vi.mock("./event-executor.js", () => ({
+  EventExecutor: class {
+    execute = executor.execute;
+  },
+}));
 vi.mock("./final-scoring.js", () => ({ finalizeScores: vi.fn() }));
 
 type Row = Record<string, any>;
@@ -213,6 +220,7 @@ function fixture(eden = false, frozen = false) {
   );
   const db = {
     select: () => ({ from }),
+    update: () => ({ set: () => ({ where: async () => {} }) }),
     transaction,
     query: {
       engineCheckpoints: {
@@ -858,6 +866,56 @@ describe("ChallengeRunner integration boundaries", () => {
     expect(events).toEqual([]);
     expect(f.engine.accountIds()).not.toContain(USER);
     expect(f.transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("playbook cue mode", () => {
+  const cueMode = (receipts: string[] = []) => {
+    const f = fixture(true);
+    const runtime = f.runtime as unknown as {
+      eden: { playbookCues?: boolean };
+      configureTimeline(): Promise<void>;
+    };
+    runtime.eden.playbookCues = true;
+    f.tables.eventActions!.push(
+      ...receipts.map((actionId) => ({
+        challengeId: "challenge",
+        actionId,
+        completedAt: new Date(START),
+      })),
+    );
+    return { ...f, configure: () => runtime.configureTimeline() };
+  };
+  const runCue = (cueId: string): EngineCommand => ({
+    type: "run_cue",
+    challengeId: "challenge",
+    cueId,
+    ts: START,
+  });
+
+  it("holds the market shut until the open cue runs, and runs a cue once", async () => {
+    const f = cueMode();
+    await f.configure();
+    expect(f.engine.exportState().frozen).toBe(true);
+    await f.runtime.process(runCue("open"));
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    expect(executor.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "eden-v1/open" }),
+      expect.objectContaining({ scheduledAt: START, now: START }),
+    );
+    expect(f.tables.eventActions!.map((r) => r.actionId)).toEqual([
+      "eden-v1/cue/open",
+      "eden-v1/open",
+    ]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await f.runtime.process(runCue("open"));
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-freeze a market whose open cue already ran", async () => {
+    const f = cueMode(["eden-v1/cue/open", "eden-v1/open"]);
+    await f.configure();
+    expect(f.engine.exportState().frozen).toBe(false);
   });
 });
 

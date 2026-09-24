@@ -130,16 +130,19 @@ export const zBondTemplate = z.object({
   /** Stable identifier, e.g. "standard" or "aerium_pegged". */
   id: z.string().min(1).max(32),
   name: z.string().min(1).max(64),
-  /** Purchase price per bond. */
-  price: z.number().positive(),
-  /** Redemption / face value paid at maturity. */
-  faceValue: z.number().positive(),
-  /** Fixed coupon paid every 5 game-minutes (mutually exclusive w/ peg). */
-  couponPer5Min: z.number().min(0).optional(),
   /**
-   * Pegged coupon: `(base - price(symbol)) / divisor` every 5 game-minutes.
-   * Models comp_desc's Aerium-pegged yield bond.
+   * Legacy list price. Traders now choose the principal; kept so existing
+   * challenge configs continue to parse.
    */
+  price: z.number().positive(),
+  /**
+   * Legacy face value. Live holdings store total payout (`price × multiplier`)
+   * here after purchase.
+   */
+  faceValue: z.number().positive(),
+  /** @deprecated Coupons were replaced by a uniform payout through endsAt. */
+  couponPer5Min: z.number().min(0).optional(),
+  /** @deprecated Pegged yield was replaced by a uniform payout through endsAt. */
   peggedYield: z
     .object({
       symbol: z.string(),
@@ -147,10 +150,26 @@ export const zBondTemplate = z.object({
       divisor: z.number().positive(),
     })
     .optional(),
-  /** Max bonds of this type a single trader may hold. */
+  /** Total cash returned as a multiple of the trader-chosen principal. */
+  payoutMultiplier: z.number().min(1).default(2),
+  /** Each government bond can be bought only once per trader. */
   maxPerUser: z.number().int().positive().default(1),
 });
 export type BondTemplate = z.infer<typeof zBondTemplate>;
+
+/** Outstanding principal mark: cost × remaining payout fraction. */
+export function bondMarkValue(holding: {
+  quantity: number;
+  price: number;
+  faceValue: number;
+  couponsPaid: number;
+}): number {
+  if (!(holding.quantity > 0) || !(holding.faceValue > 0)) return 0;
+  return (
+    Math.max(0, holding.price) *
+    Math.max(0, (holding.faceValue - holding.couponsPaid) / holding.faceValue)
+  );
+}
 
 /** A single component of an ETF basket. */
 export const zEtfComponent = z.object({
@@ -189,6 +208,8 @@ export type EdenOptionsConfig = z.infer<typeof zEdenOptionsConfig>;
 export const zEdenConfig = z.object({
   /** Run the versioned event.md timeline rather than host-only operations. */
   eventScript: z.boolean().optional(),
+  /** The host fires each playbook beat from the admin cue sheet. Ignored when eventScript is set. */
+  playbookCues: z.boolean().optional(),
   rules: zEdenRules.default({}),
   bots: zEdenBotConfig.optional(),
   options: zEdenOptionsConfig.optional(),
@@ -244,6 +265,49 @@ export type CreateChallengeInput = z.infer<typeof zCreateChallengeInput>;
 export const zUpdateChallengeInput = zCreateChallengeInput.partial();
 export type UpdateChallengeInput = z.infer<typeof zUpdateChallengeInput>;
 
+/** Economy / Eden panels the host can hide from traders without stopping them. */
+export const TRADER_PANEL_KEYS = [
+  "bank",
+  "bonds",
+  "etfs",
+  "options",
+  "dealDesk",
+  "votes",
+  "auctions",
+] as const;
+export const zTraderPanel = z.enum(TRADER_PANEL_KEYS);
+export type TraderPanel = z.infer<typeof zTraderPanel>;
+
+/** `true` means the panel is visible to traders. Admins always see every panel. */
+export const zTraderVisibility = z.object({
+  bank: z.boolean().default(true),
+  bonds: z.boolean().default(true),
+  etfs: z.boolean().default(true),
+  options: z.boolean().default(true),
+  dealDesk: z.boolean().default(true),
+  votes: z.boolean().default(true),
+  auctions: z.boolean().default(true),
+});
+export type TraderVisibility = z.infer<typeof zTraderVisibility>;
+
+export const DEFAULT_TRADER_VISIBILITY: TraderVisibility =
+  zTraderVisibility.parse({});
+
+export function traderVisibilityOf(raw: unknown): TraderVisibility {
+  const parsed = zTraderVisibility.safeParse(
+    raw && typeof raw === "object" ? raw : {},
+  );
+  return parsed.success ? parsed.data : { ...DEFAULT_TRADER_VISIBILITY };
+}
+
+export function isTraderPanelVisible(
+  visibility: TraderVisibility | null | undefined,
+  panel: TraderPanel,
+  isAdmin = false,
+): boolean {
+  return isAdmin || traderVisibilityOf(visibility)[panel];
+}
+
 export const zChallenge = z.object({
   id: z.string().uuid(),
   slug: z.string(),
@@ -260,6 +324,8 @@ export const zChallenge = z.object({
   frozen: z.boolean().default(false),
   /** Host switch: rankings are withheld from non-admins while true. */
   leaderboardHidden: z.boolean().default(false),
+  /** Host switches for trader-facing Eden panels. Missing keys default visible. */
+  traderVisibility: zTraderVisibility.default(DEFAULT_TRADER_VISIBILITY),
 });
 export type Challenge = z.infer<typeof zChallenge>;
 
@@ -543,7 +609,8 @@ export type ExerciseOptionInput = z.infer<typeof zExerciseOptionInput>;
 export const zPurchaseBondInput = z.object({
   challengeId: z.string().uuid(),
   bondId: z.string(),
-  quantity: z.number().int().positive().default(1),
+  /** Principal the trader pays now; must exceed free cash at the engine. */
+  price: z.number().positive().max(1_000_000),
 });
 export type PurchaseBondInput = z.infer<typeof zPurchaseBondInput>;
 
@@ -648,13 +715,54 @@ export const zAdminAccountEditInput = z
   );
 export type AdminAccountEditInput = z.infer<typeof zAdminAccountEditInput>;
 
+export const zAdminEnrollInput = z
+  .object({
+    userIds: z.array(z.string().uuid()).min(1).max(500).optional(),
+    allTraders: z.boolean().optional(),
+  })
+  .refine(
+    (v) => v.allTraders === true || (v.userIds?.length ?? 0) > 0,
+    "pick traders to enroll",
+  );
+export type AdminEnrollInput = z.infer<typeof zAdminEnrollInput>;
+
 export interface AdminAccountView {
   userId: string;
   username: string;
   displayName: string;
+  enrolled: boolean;
   cash: number;
   loanDebt: number;
   positions: Array<{ symbol: string; quantity: number; avgPrice: number }>;
+}
+
+export type EdenCueKind = "market" | "news" | "otc" | "auction" | "scene";
+export type EdenCueStatus = "ready" | "blocked" | "running" | "done";
+
+/** One playbook cue on the admin cue sheet (New Eden cue mode). */
+export interface AdminCueView {
+  id: string;
+  label: string;
+  minute: number;
+  kind: EdenCueKind;
+  status: EdenCueStatus;
+  /** Required cue ids that are not done yet. */
+  blockedBy: string[];
+  firedAt: string | null;
+  /** Offsets are game seconds from the moment the cue fires. */
+  steps: Array<{ offsetSec: number; label: string; done: boolean }>;
+  headlines: Array<{
+    minute: number;
+    classification: "signal" | "noise";
+    text: string;
+  }>;
+}
+
+export interface AdminCueSheet {
+  flow: "host" | "cues" | "scripted";
+  /** First cue that has not fired, in playbook order. */
+  next: string | null;
+  cues: AdminCueView[];
 }
 
 /* ---- Blind auctions (premium feed) ---- */

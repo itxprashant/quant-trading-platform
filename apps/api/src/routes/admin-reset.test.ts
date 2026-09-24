@@ -5,7 +5,14 @@ import {
   it,
   vi,
 } from "../../../../packages/core/node_modules/vitest/dist/index.js";
-import { EDEN_EVENT_AERIUM, EDEN_EVENT_OPTIONS, redisKeys } from "@qtp/shared";
+import {
+  EDEN_EVENT_AERIUM,
+  EDEN_EVENT_CUES,
+  EDEN_EVENT_OPTIONS,
+  edenCueReceiptId,
+  edenEventCue,
+  redisKeys,
+} from "@qtp/shared";
 
 vi.doMock("../../../../packages/db/dist/index.js", () =>
   Object.fromEntries(
@@ -261,7 +268,8 @@ async function fixture(status = "paused") {
     requireAdmin: vi.fn(),
     log: { error: vi.fn() },
     addHook: vi.fn(),
-    get: vi.fn(),
+    get: (path: string, ...args: any[]) =>
+      handlers.set(`GET ${path}`, args.at(-1)),
     patch: vi.fn(),
     post: (path: string, ...args: any[]) => handlers.set(path, args.at(-1)),
   };
@@ -403,6 +411,142 @@ describe("admin freeze during a scripted event", () => {
     const f = await scripted(20);
     expect((await f.freeze(false)).body).toEqual({ ok: true, frozen: false });
     expect(f.tables.challenges![0].frozen).toBe(false);
+  });
+});
+
+describe("admin playbook cues", () => {
+  const START = Date.UTC(2026, 8, 24, 12);
+  async function cueMode(status = "live") {
+    const f = await fixture(status);
+    Object.assign(f.tables.challenges![0], {
+      type: "new_eden",
+      frozen: false,
+      finalizedAt: null,
+    });
+    Object.assign(f.tables.challenges![0].config.eden, {
+      eventScript: false,
+      playbookCues: true,
+    });
+    return f;
+  }
+  const receipt = (actionId: string) => ({
+    challengeId: ID,
+    actionId,
+    completedAt: new Date(START),
+  });
+  const done = (cueId: string) =>
+    [
+      edenCueReceiptId(cueId),
+      ...edenEventCue(cueId)!.actions.map((a) => a.id),
+    ].map(receipt);
+  const sheet = async (f: Awaited<ReturnType<typeof cueMode>>) => {
+    const { statusCode, body } = await f.request(
+      "GET /:challengeId/cues",
+      undefined,
+    );
+    expect(statusCode).toBe(200);
+    return body as {
+      flow: string;
+      next: string | null;
+      cues: Array<Record<string, any>>;
+    };
+  };
+  const cueOf = (body: Awaited<ReturnType<typeof sheet>>, id: string) =>
+    body.cues.find((c) => c.id === id)!;
+  const run = (f: Awaited<ReturnType<typeof cueMode>>, cueId: string) =>
+    f.request("/:challengeId/cues/run", { cueId });
+
+  it("lists the sheet with Open market next and its dependents blocked", async () => {
+    const body = await sheet(await cueMode());
+    expect(body.flow).toBe("cues");
+    expect(body.next).toBe("open");
+    expect(body.cues).toHaveLength(EDEN_EVENT_CUES.length);
+    expect(body.cues[0]).toMatchObject({
+      id: "open",
+      status: "ready",
+      firedAt: null,
+    });
+    expect(cueOf(body, "news-5")).toMatchObject({
+      status: "blocked",
+      blockedBy: ["open"],
+    });
+    const grant = cueOf(body, "grant");
+    expect(grant.steps.map((s: any) => s.offsetSec)).toEqual([
+      0, 10, 10, 300, 310, 310,
+    ]);
+    expect(grant.headlines.map((h: any) => h.minute)).toEqual([100, 105]);
+  });
+
+  it("reports done and running cues from receipts", async () => {
+    const f = await cueMode();
+    f.tables.eventActions!.push(
+      ...done("open"),
+      receipt(edenCueReceiptId("auction-15")),
+      receipt("eden-v1/auction/15/open"),
+    );
+    const body = await sheet(f);
+    expect(cueOf(body, "open")).toMatchObject({
+      status: "done",
+      firedAt: new Date(START).toISOString(),
+    });
+    expect(cueOf(body, "auction-15")).toMatchObject({
+      status: "running",
+      steps: [{ done: true }, { done: false }],
+    });
+    expect(body.next).toBe("otc-2.5");
+  });
+
+  it("queues a ready cue for the engine", async () => {
+    const f = await cueMode();
+    expect(await run(f, "open")).toEqual({
+      statusCode: 202,
+      body: { ok: true },
+    });
+    expect(publishCommand).toHaveBeenCalledWith(
+      f.redis,
+      ID,
+      expect.objectContaining({ type: "run_cue", challengeId: ID, cueId: "open" }),
+    );
+  });
+
+  it("rejects blocked, unknown, repeated, and frozen-OTC cues", async () => {
+    const f = await cueMode();
+    expect(await run(f, "news-5")).toEqual({
+      statusCode: 409,
+      body: { error: "cue_blocked", blockedBy: ["open"] },
+    });
+    expect(await run(f, "nope")).toEqual({
+      statusCode: 404,
+      body: { error: "unknown_cue" },
+    });
+    f.tables.eventActions!.push(...done("open"));
+    expect(await run(f, "open")).toEqual({
+      statusCode: 409,
+      body: { error: "cue_already_run" },
+    });
+    f.tables.challenges![0].frozen = true;
+    expect(await run(f, "otc-2.5")).toEqual({
+      statusCode: 409,
+      body: { error: "market_frozen" },
+    });
+    // Headlines still publish during a freeze.
+    expect((await run(f, "news-5")).statusCode).toBe(202);
+    expect(publishCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("only runs cues on a live cue-mode event", async () => {
+    const f = await cueMode("paused");
+    expect(await run(f, "open")).toEqual({
+      statusCode: 409,
+      body: { error: "challenge_not_live" },
+    });
+    const eden = f.tables.challenges![0].config.eden;
+    f.tables.challenges![0].status = "live";
+    eden.playbookCues = false;
+    expect((await run(f, "open")).body).toEqual({ error: "not_cue_mode" });
+    Object.assign(eden, { eventScript: true, playbookCues: true });
+    expect((await run(f, "open")).body).toEqual({ error: "not_cue_mode" });
+    expect(publishCommand).not.toHaveBeenCalled();
   });
 });
 
@@ -648,6 +792,24 @@ describe("admin reset coordination", () => {
     await expect(f.call()).rejects.toThrow("reset_lock_lost");
     expect(f.tables).toEqual(before);
     expect(f.cache.get(redisKeys.engineLock(ID))).toBe("replacement-owner");
+  });
+
+  it("restores the playbook preset when playbook cues drive the event", async () => {
+    const f = await fixture();
+    Object.assign(f.tables.challenges![0].config.eden, {
+      eventScript: false,
+      playbookCues: true,
+    });
+    await f.call();
+    expect(f.tables.challenges![0].config).toMatchObject({
+      symbols: [EDEN_EVENT_AERIUM],
+      eden: {
+        playbookCues: true,
+        bonds: [],
+        etfs: [],
+        options: EDEN_EVENT_OPTIONS,
+      },
+    });
   });
 
   it("preserves custom symbols and instruments when eventScript is disabled", async () => {

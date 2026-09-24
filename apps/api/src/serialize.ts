@@ -1,6 +1,7 @@
 import type { challenges, challengeNews } from "@qtp/db";
 import {
   defaultScoringFor,
+  traderVisibilityOf,
   type Challenge,
   type NewsItem,
   type ScoringConfig,
@@ -25,6 +26,7 @@ export function serializeChallenge(
     participantCount,
     frozen: c.frozen ?? false,
     leaderboardHidden: c.leaderboardHidden ?? false,
+    traderVisibility: traderVisibilityOf(c.traderVisibility),
   };
 }
 

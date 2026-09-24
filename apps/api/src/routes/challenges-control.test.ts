@@ -250,6 +250,25 @@ describe("challenge clock/config guards", () => {
     config.eden.eventScript = true;
     expect((await f.patch({ config })).statusCode).toBe(409);
   });
+
+  it("locks the playbook-cue flow and its config once the event starts", async () => {
+    const f = await fixture("live", false, false);
+    f.row().config.eden.playbookCues = true;
+    const config = structuredClone(f.row().config);
+    config.eden.playbookCues = false;
+    expect((await f.patch({ config })).body).toEqual({
+      error: "event_clock_immutable",
+    });
+    Object.assign(config.eden, { playbookCues: true, eventScript: true });
+    expect((await f.patch({ config })).body).toEqual({
+      error: "event_clock_immutable",
+    });
+    config.eden.eventScript = false;
+    config.maxOrderQuantity += 1;
+    expect((await f.patch({ config })).body).toEqual({
+      error: "started_event_config_immutable",
+    });
+  });
 });
 
 describe("reset-aware lifecycle starts", () => {

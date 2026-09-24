@@ -22,6 +22,8 @@ import {
   EDEN_EVENT_OPTIONS,
   EDEN_EVENT_DEFAULTS,
   EDEN_EVENT_DURATION_MINUTES,
+  edenEventFlow,
+  type EdenEventFlow,
 } from "@qtp/shared";
 
 const blankSymbol = (): SymbolConfig => ({
@@ -119,15 +121,27 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  function togglePlaybook(enabled: boolean) {
-    if (!enabled) {
+  const flow = edenEventFlow(eden);
+
+  function changeFlow(next: EdenEventFlow) {
+    if (next === "host") {
       // The host desk's "Open cycle" keeps autoCycle, which would start a
       // self-rolling chain on the first manual open.
       setEden((e) => ({
         ...e,
         eventScript: false,
+        playbookCues: false,
         ...(e.options ? { options: { ...e.options, autoCycle: false } } : {}),
       }));
+      return;
+    }
+    const flags = {
+      eventScript: next === "scripted",
+      playbookCues: next === "cues",
+    };
+    // Cues and scripted share the preset; only the driver changes.
+    if (flow !== "host") {
+      setEden((e) => ({ ...e, ...flags }));
       return;
     }
     setSymbols([structuredClone(EDEN_EVENT_AERIUM)]);
@@ -147,7 +161,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
     const preset = defaultEden();
     setEden({
       ...preset,
-      eventScript: true,
+      ...flags,
       bots: structuredClone(EDEN_EVENT_BOTS),
       options: structuredClone(EDEN_EVENT_OPTIONS),
       bonds: [],
@@ -222,7 +236,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
               .join(", ")
           : code === "event_clock_immutable" ||
               code === "started_event_config_immutable"
-            ? "This event has already run, so its schedule and playbook mode are locked. Reset it first."
+            ? "This event has already run, so its schedule and event flow are locked. Reset it first."
             : "Could not save challenge.";
       setError(issues);
     } finally {
@@ -266,49 +280,72 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
           </div>
           {type === "new_eden" && (
             <section className="mt-4 space-y-2 border-t border-border pt-4">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  className="size-4 accent-accent"
-                  checked={eden.eventScript ?? false}
-                  disabled={
-                    !!existing &&
-                    existing.status !== "draft" &&
-                    existing.status !== "scheduled"
-                  }
-                  onChange={(e) => togglePlaybook(e.target.checked)}
-                />
-                New Eden playbook preset
-              </label>
+              <div className="max-w-sm">
+                <Field
+                  label="Event flow"
+                  hint="Locks once the event has started."
+                >
+                  <Select
+                    value={flow}
+                    disabled={
+                      !!existing &&
+                      existing.status !== "draft" &&
+                      existing.status !== "scheduled"
+                    }
+                    onChange={(e) =>
+                      changeFlow(e.target.value as EdenEventFlow)
+                    }
+                  >
+                    <option value="host">Host: run everything by hand</option>
+                    <option value="cues">
+                      Playbook cues: fire each beat from the cue sheet
+                    </option>
+                    <option value="scripted">
+                      Scripted: the 130-minute timeline runs itself
+                    </option>
+                  </Select>
+                </Field>
+              </div>
               <p className="max-w-prose text-xs text-muted">
-                Enabling replaces the starting instruments and economy settings:
-                AERIUM only at 1,000, 100-unit inventory cap, 50-unit order cap,
-                $1/unit/minute carry and 2x loans. Starting cash defaults to
-                10,000 (host-configurable).
+                Choosing cues or scripted from host applies the New Eden
+                playbook preset and replaces the starting instruments and
+                economy settings: AERIUM only at 1,000, 100-unit inventory cap,
+                50-unit order cap, $1/unit/minute carry and 2x loans. Starting
+                cash defaults to 10,000 (host-configurable).
               </p>
               <p className="max-w-prose text-xs text-muted">
-                Scripted mode runs a fixed 130-minute timeline: standard bond at
-                10m, pegged bond at 18m, NEURO at 30m, ORBITAL ETF (2 AERIUM + 1
-                NEURO) at 45m, halt 60-70m, options at 70m, tax vote at 80m,
-                dual-asset shock at 90m, grant 100-105m and close at 130m. ETF
-                windows last 30s every 10m; option cycles last 5m with 15s
-                exercise.
+                The playbook: standard bond at 10m, pegged bond at 18m, NEURO at
+                30m, ORBITAL ETF (2 AERIUM + 1 NEURO) at 45m, halt 60-70m,
+                options at 70m, tax vote at 80m, dual-asset shock at 90m, grant
+                100-105m and close at 130m. ETF windows last 30s every 10m;
+                option cycles last 5m with 15s exercise.
               </p>
               <p className="max-w-prose text-xs text-muted">
                 Ticker every 5m outside halftime. Auction rounds: 15, 30, 45,
                 75, 90, 105 and 120m; bidding opens 40s before the round and
                 closes 10s before its news. Top 30% pay their bid for 10s early
                 news over 15m. OTC replies allow 15s; accepted bargains bind
-                through a 5s settlement delay. Host mode (toggle off) has no
-                automatic timeline: the host opens markets, publishes news and
-                runs operations manually. Disabling keeps the current
-                instruments and economy settings and turns off automatic option
-                cycles. The mode locks once the event has started.
+                through a 5s settlement delay.
               </p>
-              {eden.eventScript && (
+              <p className="max-w-prose text-xs text-muted">
+                Playbook cues run the same beats, but only when you fire them
+                from this event&apos;s cue sheet; each keeps its built-in timing
+                from the moment you click. Host mode has no timeline: you open
+                markets, publish news and run operations by hand. Switching to
+                host keeps the current instruments and economy settings and
+                turns off automatic option cycles.
+              </p>
+              {flow === "scripted" && (
                 <p className="text-xs text-warning">
                   Do not manually duplicate scripted operations. A scheduled
                   start sets the end to start + 130 minutes on save.
+                </p>
+              )}
+              {flow === "cues" && (
+                <p className="text-xs text-warning">
+                  Going live keeps the market frozen until you fire Open market.
+                  Use the cue sheet rather than manual controls for playbook
+                  beats.
                 </p>
               )}
             </section>
@@ -774,7 +811,9 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
             </h3>
             <p className="mb-3 text-xs text-muted">
               Host mode: saving a template makes it available for purchase.
-              Scripted mode issues its own bonds at 10m and 18m.
+              Playbook cues and scripted mode issue their own two bonds. Each
+              trader buys a series once at a price above free cash and receives
+              the payout multiple uniformly until the session ends.
             </p>
             {(eden.bonds ?? []).map((bond, i) => {
               const update = (patch: Partial<typeof bond>) =>
@@ -787,7 +826,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
               return (
                 <fieldset
                   key={i}
-                  disabled={eden.eventScript}
+                  disabled={flow !== "host"}
                   aria-label={`Bond ${bond.name}`}
                   className="grid gap-3 border-t border-border py-3 sm:grid-cols-3"
                 >
@@ -803,90 +842,13 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                       onChange={(e) => update({ name: e.target.value })}
                     />
                   </Field>
-                  <Field label="Purchase price">
-                    {numField(bond.price, (n) => update({ price: n }), 0.01)}
-                  </Field>
-                  <Field label="Face value">
+                  <Field label="Payout multiplier">
                     {numField(
-                      bond.faceValue,
-                      (n) => update({ faceValue: n }),
-                      0.01,
+                      bond.payoutMultiplier ?? 2,
+                      (n) => update({ payoutMultiplier: Math.max(1, n) }),
+                      0.1,
                     )}
                   </Field>
-                  <Field label="Per-trader limit">
-                    {numField(bond.maxPerUser, (n) =>
-                      update({ maxPerUser: Math.max(1, Math.round(n)) }),
-                    )}
-                  </Field>
-                  <Field label="Coupon type">
-                    <Select
-                      value={bond.peggedYield ? "pegged" : "fixed"}
-                      onChange={(e) =>
-                        update(
-                          e.target.value === "pegged"
-                            ? {
-                                couponPer5Min: undefined,
-                                peggedYield: {
-                                  symbol: symbols[0]?.symbol ?? "AERIUM",
-                                  base: 2000,
-                                  divisor: 10,
-                                },
-                              }
-                            : { peggedYield: undefined, couponPer5Min: 500 },
-                        )
-                      }
-                    >
-                      <option value="fixed">Fixed / 5m</option>
-                      <option value="pegged">Pegged / 5m</option>
-                    </Select>
-                  </Field>
-                  {bond.peggedYield ? (
-                    <>
-                      <Field label="Peg symbol">
-                        <Select
-                          value={bond.peggedYield.symbol}
-                          onChange={(e) =>
-                            update({
-                              peggedYield: {
-                                ...bond.peggedYield!,
-                                symbol: e.target.value,
-                              },
-                            })
-                          }
-                        >
-                          {symbols.map((s) => (
-                            <option key={s.symbol}>{s.symbol}</option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="Base">
-                        {numField(bond.peggedYield.base, (n) =>
-                          update({
-                            peggedYield: { ...bond.peggedYield!, base: n },
-                          }),
-                        )}
-                      </Field>
-                      <Field label="Divisor (> 0)">
-                        {numField(bond.peggedYield.divisor, (n) =>
-                          update({
-                            peggedYield: { ...bond.peggedYield!, divisor: n },
-                          }),
-                        )}
-                      </Field>
-                      <p className="text-xs text-warning sm:col-span-3">
-                        Coupon = (base - market price) / divisor. Negative
-                        coupons debit the holder.
-                      </p>
-                    </>
-                  ) : (
-                    <Field label="Fixed coupon / 5m">
-                      {numField(
-                        bond.couponPer5Min ?? 0,
-                        (n) => update({ couponPer5Min: Math.max(0, n) }),
-                        0.01,
-                      )}
-                    </Field>
-                  )}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -905,7 +867,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
             <Button
               variant="secondary"
               size="sm"
-              disabled={(eden.bonds?.length ?? 0) >= 8 || eden.eventScript}
+              disabled={(eden.bonds?.length ?? 0) >= 8 || flow !== "host"}
               onClick={() =>
                 setEden({
                   ...eden,
@@ -914,9 +876,9 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                     {
                       id: `bond_${Date.now()}`,
                       name: "Standard Bond",
-                      price: 10000,
-                      faceValue: 10000,
-                      couponPer5Min: 500,
+                      price: 1,
+                      faceValue: 1,
+                      payoutMultiplier: 2,
                       maxPerUser: 1,
                     },
                   ],

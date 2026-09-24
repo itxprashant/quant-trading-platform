@@ -6,7 +6,7 @@ Guide for AI coding agents working in this repository. Read this before making c
 
 **Quantstorm** is a competitive quant trading challenge platform: market-making contests, directional PnL races, and the scripted **New Eden Exchange** tournament format. Participants trade synthetic instruments in real time; organizers run events via an admin UI.
 
-- **Production URL:** https://quanta.devclub.in
+- **Production URL:** https://quantstorm-2026.site
 - **GitHub:** https://github.com/itxprashant/quant-trading-platform
 - **Stack:** TypeScript monorepo (pnpm + turbo), Next.js 15, Fastify, Postgres 17, Redis 7, Docker
 - **Design bar:** Dark trading-terminal aesthetic — see `PRODUCT.md` and `DESIGN.md`. Data-first, dense, no generic SaaS or neon crypto clichés.
@@ -89,7 +89,7 @@ flowchart LR
     NSG[NSG :22 :80 :443]
   end
 
-  DNS[quanta.devclub.in] --> NSG --> VM
+  DNS[quantstorm-2026.site] --> NSG --> VM
   Git --> CI
   Git --> Pub --> ACR
   ACR -->|docker pull| VM
@@ -97,7 +97,7 @@ flowchart LR
 
 | Layer | Components |
 |-------|------------|
-| **DNS / TLS** | `quanta.devclub.in` → `20.205.227.58`; Let's Encrypt via certbot |
+| **DNS / TLS** | `quantstorm-2026.site` → `20.205.227.58`; Let's Encrypt via certbot |
 | **Reverse proxy** | nginx — `/` → web, `/api/` → api, `/ws` → gateway |
 | **App containers** | migrate, api, gateway, engine, scoring, web |
 | **Data containers** | postgres (volume `qtp-pgdata`), redis (volume `qtp-redisdata`) |
@@ -176,7 +176,7 @@ draft → scheduled → live → paused → ended
 
 Each challenge has isolated: command stream, event stream, broadcast channel, order books, bots, and leaderboard.
 
-**New Eden freeze (halftime):** Status stays `live` but `challenges.frozen = true`. Matching and new risk stop; the timeline, cost of carry, bond coupons, and loan deductions continue. This is **not** the same as `paused` (which tears down the runner). Halftime is scripted at game minutes 60–70.
+**New Eden freeze (halftime):** Status stays `live` but `challenges.frozen = true`. Matching and new risk stop; the timeline, cost of carry, bond payouts, and loan deductions continue. This is **not** the same as `paused` (which tears down the runner). Halftime is scripted at game minutes 60–70.
 
 ### 7. Redis data model
 
@@ -212,7 +212,7 @@ Schema in `packages/db/src/schema.ts` (Drizzle ORM):
 | `challenge_news` | Headlines — kind (signal/noise/neutral), FV effects, momentum, embargo |
 | `fair_values` | Absolute fair value per symbol per challenge |
 | `loans` | Predatory loan requests, funding, amortized repayment schedule |
-| `bond_holdings` | Per-user bond inventory and coupon accrual |
+| `bond_holdings` | Per-user bond inventory and payout accrual |
 | `option_cycles` | Options expiry cycles (open → exercise_window → expired) |
 | `option_contracts` | Individual call/put series per cycle |
 | `otc_offers` | Deal Desk private offers, responses, settlement state |
@@ -241,6 +241,7 @@ Challenge `scoring` (JSONB) selects directional PnL vs market-making weights.
 | **Options manager** | `apps/engine/src/options-manager.ts` | Cycles, exercise window, assignment |
 | **Markets manager** | `apps/engine/src/markets-manager.ts` | Bonds, ETF create/redeem windows |
 | **Event timeline** | `apps/engine/src/event-timeline.ts` | Dispatches scripted actions; recovery + receipts |
+| **Cue timeline** | `apps/engine/src/cue-timeline.ts` | Playbook-cue mode: host-fired cues, relative step offsets, fire receipts |
 | **Event executor** | `apps/engine/src/event-executor.ts` | Listings, news, OTC, auctions, votes, grants |
 | **Final scoring** | `apps/engine/src/final-scoring.ts` | End-of-event MtM, debt closeout, durable rankings |
 | **Persistence** | `apps/engine/src/persistence.ts` | Postgres writes for fills, positions, cash, checkpoints |
@@ -279,7 +280,7 @@ Fastify app in `apps/api/src/app.ts`. Routes under `apps/api/src/routes/`:
 | `/api/otc` | Trader | Deal Desk offers — accept/reject/bargain |
 | `/api/auctions` | Trader | Premium-feed blind auction bids |
 | `/api/votes` | Trader | Policy vote ballots |
-| `/api/admin` | Admin | CRUD challenges, lifecycle, Eden host console (24+ endpoints) |
+| `/api/admin` | Admin | CRUD challenges, lifecycle, Eden host console, playbook cue sheet (24+ endpoints) |
 | `/api/health` | Public | Health check |
 | `/api/metrics` | Public | Prometheus metrics |
 
@@ -314,9 +315,9 @@ Next.js App Router (`apps/web/src/app/`):
 
 **Trader components** (`apps/web/src/components/trade/`): `MarketList`, `Leaderboard` (compact sidebar variant; hidden state), `TradeTicket`, `OrderBook`, `PriceChart`, `PortfolioPanel`, `OpenOrders`, `NewsFeed` (market news + announcements, filter tabs, `Early` tags), `EventTimers`, `BankPanel`, `OptionsPanel` (docked order ticket + option book), `MarketsPanel`, `DealDesk`, `AuctionPopup`, `VotePanel`, `GrantBanner`, `AlertStack` (alerts + news toasts).
 
-**Admin components** (`apps/web/src/components/admin/`): `ChallengeForm` (playbook preset), `EdenHostConsole`, `AccountEditor`; live ops also use `LiveControls`, `NewsControls`, `FreezeControls`, `AddInstrumentControls` on the `[id]` page. The `[id]` header has the leaderboard visibility toggle (`POST /api/admin/:id/leaderboard-visibility { hidden }`), available in every status.
+**Admin components** (`apps/web/src/components/admin/`): `ChallengeForm` (event flow + playbook preset), `PlaybookCues` (cue sheet, cue mode only), `EdenHostConsole`, `AccountEditor`; live ops also use `LiveControls`, `NewsControls`, `FreezeControls`, `AddInstrumentControls` on the `[id]` page. The `[id]` header has the leaderboard visibility toggle (`POST /api/admin/:id/leaderboard-visibility { hidden }`), available in every status.
 
-Event timers (`EventTimers`, selectors in `lib/eden.ts`) use the headline-free `eden-clock.ts` / `eden-presets.ts` exports of `@qtp/shared`. The package is `sideEffects: false`, so the web bundle tree-shakes the scripted headlines away — never reference `EDEN_EVENT_NEWS` / `EDEN_EVENT_ACTIONS` from web code, or the script leaks to the browser.
+Event timers (`EventTimers`, selectors in `lib/eden.ts`) use the headline-free `eden-clock.ts` / `eden-presets.ts` exports of `@qtp/shared`. The package is `sideEffects: false`, so the web bundle tree-shakes the scripted headlines away — never reference `EDEN_EVENT_NEWS` / `EDEN_EVENT_ACTIONS` / `EDEN_EVENT_CUES` from web code, or the script leaks to the browser. The admin cue sheet gets headlines from `GET /api/admin/:id/cues` instead.
 
 Real-time: `hooks/useRealtime.ts` manages WS connection, subscriptions, message dispatch.  
 API client: `lib/api.ts`. Config: `lib/config.ts` reads `NEXT_PUBLIC_*` (build-time).
@@ -362,7 +363,7 @@ Build orchestration: **turbo** (`turbo.json`) + **pnpm workspaces** (`pnpm-works
 5. **Per-challenge isolation** — streams, channels, books, bots, leaderboards are keyed by `challengeId`.
 6. **Web public URLs are build-time** — changing API/WS URLs requires rebuilding the web image in CI.
 7. **Production deploys use CI registry** — pull pre-built images; on-VM compile is fallback only.
-8. **Scripted New Eden immutability** — once live, `startsAt`, `endsAt`, and `eventScript` cannot change; do not duplicate scripted ops with manual host actions.
+8. **Scripted New Eden immutability** — once live, `startsAt`, `endsAt`, the event flow (`eventScript` / `playbookCues`), and a scripted or cue event's config cannot change; do not duplicate scripted or cued ops with manual host actions.
 9. **Event action IDs are versioned** — never renumber `eden-v1/*` actions in `packages/shared/src/eden-event.ts` for running events.
 
 ---
@@ -371,14 +372,17 @@ Build orchestration: **turbo** (`turbo.json`) + **pnpm workspaces** (`pnpm-works
 
 The flagship scripted tournament ("The New Eden Exchange"). Full narrative playbook: [`event.md`](event.md).
 
-### Scripted vs manual host mode
+### Event flows: scripted, playbook cues, manual host
 
 | Mode | Config | Behavior |
 |------|--------|----------|
 | **Scripted** | `config.eden.eventScript: true` | Engine runs versioned 130-game-minute timeline autonomously |
-| **Manual** | `eventScript: false` | Host drives news, auctions, OTC, etc. via admin console |
+| **Playbook cues** | `playbookCues: true`, `eventScript: false` | Same playbook split into 46 cues (`EDEN_EVENT_CUES` in `eden-event.ts`); host fires each from the admin cue sheet, engine runs its steps at their relative offsets. Market stays frozen until the `open` cue |
+| **Manual** | both false | Host drives news, auctions, OTC, etc. via admin console |
 
-Enable via admin **New Eden playbook preset** (`ChallengeForm.tsx`); the checkbox can be changed while the challenge is `draft` or `scheduled`. Seeded challenge **New Eden Exchange** has `eventScript: true` but no `startsAt` until configured.
+`edenEventFlow()` (`eden-presets.ts`) resolves the flow; scripted wins if both flags are set. Pick it with the **Event flow** selector (`ChallengeForm.tsx`) while the challenge is `draft` or `scheduled`. Seeded challenge **New Eden Exchange** has `eventScript: true` but no `startsAt` until configured.
+
+Cue mode: `POST /api/admin/:id/cues/run { cueId }` → `run_cue` engine command → `CueTimeline` (`apps/engine/src/cue-timeline.ts`) records a fire receipt `eden-v1/cue/<cueId>` and runs the cue's `eden-v1/*` actions through the same `EventExecutor`, rebased to the fire time. A cue runs once and is blocked until the cues it requires are done. `GET /api/admin/:id/cues` serves the sheet (with headlines) to admins only.
 
 ### Timeline summary (scripted)
 
@@ -406,6 +410,7 @@ Source of truth: `packages/shared/src/eden-event.ts` (`EDEN_EVENT_VERSION = "ede
 
 - **Cost of carry:** $1/unit/minute on absolute inventory
 - **Predatory loans:** 2× repay amortized over remaining game minutes; halftime rescue loans at minute 60
+- **Government bonds:** each series once; trader-chosen principal must exceed free cash; 2× that amount is paid uniformly until `endsAt`
 - **Margin calls:** at `marginCallThreshold` (default $0 free cash); forced liquidation when enabled
 - **Position cap:** 100 units per symbol (default)
 
@@ -413,7 +418,7 @@ Source of truth: `packages/shared/src/eden-event.ts` (`EDEN_EVENT_VERSION = "ede
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ENGINE_MINUTE_MS` | 60 000 | Game-minute for timeline, carry, loans, coupons |
+| `ENGINE_MINUTE_MS` | 60 000 | Game-minute for timeline, carry, loans, bond payouts |
 | `ENGINE_TICK_MS` | 1000 prod / 250 dev | Price drift tick interval |
 
 **Wall-time exceptions (do not scale with `ENGINE_MINUTE_MS`):** option exercise window = 15 wall seconds; OTC bargain settlement delay = 5 wall seconds.
@@ -575,7 +580,7 @@ Use a **non-scripted** challenge for load tests; do not load-test a live New Ede
 | VM | `quanta-b2ms` (`Standard_D2s_v3`, 8 GB) |
 | Region | `southeastasia` |
 | Public IP | `20.205.227.58` |
-| Domain | `quanta.devclub.in` (HTTPS via Let's Encrypt) |
+| Domain | `quantstorm-2026.site` (HTTPS via Let's Encrypt) |
 | SSH | `ssh -i ~/.ssh/quanta_azure azureuser@20.205.227.58` |
 | ACR | `quantadevclub.azurecr.io` |
 
@@ -643,7 +648,7 @@ See `scripts/changed-services.sh` and `scripts/lib/service-graph.sh` for depende
 | `./scripts/azure-deploy.sh` | Provision VM + initial deploy |
 | `./scripts/setup-ci-registry.sh` | Create ACR, VM docker login |
 | `./scripts/setup-github-secrets.sh` | Push ACR creds to GitHub Actions |
-| `./scripts/setup-https.sh --remote` | Certbot + TLS for `quanta.devclub.in` |
+| `./scripts/setup-https.sh --remote` | Certbot + TLS for `quantstorm-2026.site` |
 
 Full registry docs: `infra/azure/CI-REGISTRY.md`
 
@@ -668,8 +673,8 @@ Full registry docs: `infra/azure/CI-REGISTRY.md`
 GitHub Actions variables (repo settings):
 
 - `ACR_LOGIN_SERVER` = `quantadevclub.azurecr.io`
-- `NEXT_PUBLIC_API_URL` = `https://quanta.devclub.in`
-- `NEXT_PUBLIC_WS_URL` = `wss://quanta.devclub.in`
+- `NEXT_PUBLIC_API_URL` = `https://quantstorm-2026.site`
+- `NEXT_PUBLIC_WS_URL` = `wss://quantstorm-2026.site`
 
 Secrets: `ACR_USERNAME`, `ACR_PASSWORD`
 
@@ -731,7 +736,7 @@ Backend entrypoints: `api` → `dist/server.js`; others → `dist/index.js` (set
 | `DATABASE_URL` | api, engine, gateway, scoring, migrate | Postgres connection string |
 | `REDIS_URL` | api, gateway, engine, scoring | Redis connection |
 | `JWT_SECRET` | api, gateway | Must match across services |
-| `CORS_ORIGINS` | api | Production: `https://quanta.devclub.in` |
+| `CORS_ORIGINS` | api | Production: `https://quantstorm-2026.site` |
 | `NEXT_PUBLIC_API_URL` | web (build) | Baked at Docker build |
 | `NEXT_PUBLIC_WS_URL` | web (build) | Use `wss://` in production |
 | `ENGINE_TICK_MS` | engine | Autonomous price tick (default 1000 ms prod) |

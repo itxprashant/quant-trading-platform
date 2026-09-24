@@ -28,9 +28,11 @@ function secsLeft(expiresAt: string): number {
 export function VotePanel({
   challengeId,
   liveVote,
+  className,
 }: {
   challengeId: string;
   liveVote: VoteProposal | null;
+  className?: string;
 }) {
   const [view, setView] = useState<VoteView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,7 +92,7 @@ export function VotePanel({
   }
 
   return (
-    <Panel className="flex min-w-0 flex-col overflow-hidden">
+    <Panel className={cn("flex min-w-0 flex-col overflow-hidden", className)}>
       <PanelHeader
         title={
           <span className="flex items-center gap-1.5">

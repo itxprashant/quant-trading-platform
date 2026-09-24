@@ -223,7 +223,7 @@ function fixture() {
   };
 }
 
-test("valuation includes dynamic long/short marks, ETF NAV, bond principal at cost and debt without double-counting coupons", async () => {
+test("valuation includes dynamic long/short marks, ETF NAV, remaining bond principal and debt without double-counting coupons", async () => {
   const f = fixture();
   f.rows.set(getTableName(positions), [
     { userId: "trader", symbol: "SPOT", quantity: 2 },
@@ -233,10 +233,10 @@ test("valuation includes dynamic long/short marks, ETF NAV, bond principal at co
   f.rows.set(getTableName(bondHoldings), [
     {
       userId: "trader",
-      quantity: 2,
-      faceValue: 500,
+      quantity: 1,
+      faceValue: 900,
       price: 450,
-      couponsPaid: 80,
+      couponsPaid: 180,
     },
   ]);
   const reads: string[] = [];
@@ -250,9 +250,9 @@ test("valuation includes dynamic long/short marks, ETF NAV, bond principal at co
   );
   const account = valuation!.accounts[0]!;
   assert.equal(account.positionValue, 340);
-  assert.equal(account.bondValue, 900);
-  assert.equal(account.marketValue, 1240);
-  assert.equal(account.equity, 2040);
+  assert.equal(account.bondValue, 360);
+  assert.equal(account.marketValue, 700);
+  assert.equal(account.equity, 1500);
   assert.equal(account.absInventory, 6);
   assert.equal(account.loanDebt, 200);
   assert.equal(account.displayName, "Trader");

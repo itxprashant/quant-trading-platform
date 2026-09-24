@@ -3,21 +3,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, LineChart, Wifi, WifiOff } from "lucide-react";
-import type {
-  Challenge,
-  LeaderboardEntry,
-  NewsItem,
-  OrderBookSnapshot,
-  Portfolio,
-  SymbolConfig,
+import {
+  ChevronLeft,
+  LineChart,
+  Trophy,
+  Vote,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
+import {
+  isTraderPanelVisible,
+  traderVisibilityOf,
+  type Challenge,
+  type LeaderboardEntry,
+  type NewsItem,
+  type OrderBookSnapshot,
+  type Portfolio,
 } from "@qtp/shared";
 import { ApiError, get } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useRealtime } from "@/hooks/useRealtime";
 import { useAuction } from "@/hooks/useAuction";
 import { useChartVisible } from "@/hooks/useChartVisible";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { TopBar } from "@/components/TopBar";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Panel } from "@/components/ui/Panel";
@@ -29,13 +36,19 @@ import { TradeTicket } from "@/components/trade/TradeTicket";
 import { PortfolioPanel } from "@/components/trade/PortfolioPanel";
 import { OpenOrders } from "@/components/trade/OpenOrders";
 import { Leaderboard } from "@/components/trade/Leaderboard";
-import { MarketList } from "@/components/trade/MarketList";
+import {
+  MarketList,
+  type MarketInstrument,
+  type MarketKind,
+} from "@/components/trade/MarketList";
+import { DockPopup } from "@/components/trade/DockPopup";
 import { NewsFeed, earlyLeadSec } from "@/components/trade/NewsFeed";
 import { EventTimers } from "@/components/trade/EventTimers";
 import { BankPanel } from "@/components/trade/BankPanel";
 import { AlertStack, type NewsToast } from "@/components/trade/AlertStack";
 import { OptionsPanel } from "@/components/trade/OptionsPanel";
 import { MarketsPanel } from "@/components/trade/MarketsPanel";
+import { BondPanel, useBondMarket } from "@/components/trade/BondPanel";
 import { DealDesk } from "@/components/trade/DealDesk";
 import { AuctionPopup } from "@/components/trade/AuctionPopup";
 import { VotePanel } from "@/components/trade/VotePanel";
@@ -43,9 +56,15 @@ import { GrantBanner } from "@/components/trade/GrantBanner";
 import { money, signed, dirClass } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
-/** Sidebars stick below the navbar and fill the rest of the viewport. */
-const STICKY_SIDEBAR =
-  "sticky top-[calc(var(--topbar-h,68px)_+_0.75rem)] h-[calc(100dvh_-_var(--topbar-h,68px)_-_1.5rem)] self-start";
+/** Desktop desk: page is viewport-locked; only the center column scrolls. */
+const DESK_SHELL =
+  "flex min-h-dvh flex-col lg:h-dvh lg:max-h-dvh lg:overflow-hidden";
+const DESK_MAIN =
+  "grid min-w-0 flex-1 gap-3 p-3 pb-14 sm:px-4 lg:min-h-0 lg:grid-cols-[232px_minmax(0,1fr)] lg:grid-rows-[auto_minmax(0,1fr)] lg:overflow-hidden lg:pb-3 xl:grid-cols-[232px_minmax(0,1fr)_260px] 2xl:grid-cols-[260px_minmax(0,1fr)_292px]";
+const DESK_SIDE =
+  "min-w-0 lg:h-full lg:min-h-0 lg:flex-col lg:gap-3 lg:overflow-hidden";
+const DESK_CENTER =
+  "@container min-w-0 space-y-3 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pb-14";
 
 export default function TradePage() {
   const params = useParams<{ id: string }>();
@@ -57,6 +76,7 @@ export default function TradePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [activeSymbol, setActiveSymbol] = useState<string>("");
+  const [activeKind, setActiveKind] = useState<MarketKind>("spot");
   const [limitPrice, setLimitPrice] = useState("");
   const [restPortfolio, setRestPortfolio] = useState<Portfolio | null>(null);
   const [restLeaderboard, setRestLeaderboard] = useState<LeaderboardEntry[]>(
@@ -71,11 +91,14 @@ export default function TradePage() {
   );
   const [auctionMinimized, setAuctionMinimized] = useState(false);
   const [chartVisible, toggleChart] = useChartVisible();
-  const isLg = useMediaQuery("(min-width: 1024px)");
-  const isXl = useMediaQuery("(min-width: 1280px)");
 
   const isEden = challenge?.type === "new_eden";
   const rt = useRealtime(challengeId, isEden);
+  const vis = traderVisibilityOf(
+    rt.traderVisibility ?? challenge?.traderVisibility,
+  );
+  const showPanel = (panel: Parameters<typeof isTraderPanelVisible>[1]) =>
+    isTraderPanelVisible(vis, panel, isAdmin);
   const auction = useAuction({
     challengeId,
     enabled: isEden && !!user,
@@ -96,6 +119,7 @@ export default function TradePage() {
         if (cancelled) return;
         setChallenge(c);
         setActiveSymbol(c.config.symbols[0]?.symbol ?? "");
+        setActiveKind("spot");
       })
       .catch((err) => {
         if (cancelled) return;
@@ -161,7 +185,7 @@ export default function TradePage() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [challengeId, activeSymbol, rt.status]);
+  }, [challengeId, activeSymbol, activeKind, rt.status]);
 
   // Refresh open orders + portfolio when an order event arrives.
   useEffect(() => {
@@ -223,47 +247,101 @@ export default function TradePage() {
   }, [activeSymbol, rt.prices.get(activeSymbol)?.price]);
 
   const portfolio = restPortfolio;
+  const showBank = showPanel("bank");
+  const showBonds = showPanel("bonds");
+  const showEtfs = showPanel("etfs");
+  const showOptions = showPanel("options");
+  const showDealDesk = showPanel("dealDesk");
+  const showVotes = showPanel("votes");
+  const showAuctions = showPanel("auctions");
+  const bonds = useBondMarket(challengeId, showBonds || isAdmin);
 
-  // Base config symbols plus any spot/ETF instruments introduced live.
-  const tradableSymbols = useMemo<SymbolConfig[]>(() => {
+  // Sidebar list: spots, then ETFs / options when the host shows them.
+  const instruments = useMemo<MarketInstrument[]>(() => {
     const base = challenge?.config.symbols ?? [];
-    const etfs = (challenge?.config.eden?.etfs ?? []).map((e) => ({
-      symbol: e.symbol,
-      name: e.name,
-      tickSize: 0.01,
-      volatility: 0,
-      initialPrice: e.basket.reduce(
-        (sum, leg) =>
-          sum +
-          leg.weight *
-            (base.find((s) => s.symbol === leg.symbol)?.initialPrice ?? 0),
-        0,
-      ),
+    const rows: MarketInstrument[] = base.map((s) => ({
+      kind: "spot" as const,
+      symbol: s.symbol,
+      name: s.name,
+      initialPrice: s.initialPrice,
     }));
-    const extra = rt.listedSymbols
-      .filter((s) => s.kind === "spot" || s.kind === "etf")
-      .filter((s) => !base.some((b) => b.symbol === s.symbol))
-      .map(({ kind: _kind, ...cfg }) => cfg);
-    return Array.from(
-      new Map([...base, ...etfs, ...extra].map((s) => [s.symbol, s])).values(),
-    );
-  }, [challenge, rt.listedSymbols]);
+    if (showEtfs) {
+      for (const e of challenge?.config.eden?.etfs ?? []) {
+        if (rows.some((r) => r.symbol === e.symbol)) continue;
+        rows.push({
+          kind: "etf",
+          symbol: e.symbol,
+          name: e.name,
+          initialPrice: e.basket.reduce(
+            (sum, leg) =>
+              sum +
+              leg.weight *
+                (base.find((s) => s.symbol === leg.symbol)?.initialPrice ?? 0),
+            0,
+          ),
+        });
+      }
+      for (const s of rt.listedSymbols.filter((x) => x.kind === "etf")) {
+        if (rows.some((r) => r.symbol === s.symbol)) continue;
+        rows.push({
+          kind: "etf",
+          symbol: s.symbol,
+          name: s.name,
+          initialPrice: s.initialPrice,
+        });
+      }
+    }
+    for (const s of rt.listedSymbols.filter((x) => x.kind === "spot")) {
+      if (rows.some((r) => r.symbol === s.symbol)) continue;
+      rows.push({
+        kind: "spot",
+        symbol: s.symbol,
+        name: s.name,
+        initialPrice: s.initialPrice,
+      });
+    }
+    if (showOptions) {
+      for (const c of rt.optionContracts.filter((x) => x.status !== "expired")) {
+        if (rows.some((r) => r.symbol === c.symbol)) continue;
+        rows.push({
+          kind: "option",
+          symbol: c.symbol,
+          name: c.underlying,
+          initialPrice: 0,
+          optionType: c.optionType,
+          strike: c.strike,
+        });
+      }
+    }
+    return rows;
+  }, [
+    challenge,
+    rt.listedSymbols,
+    rt.optionContracts,
+    showEtfs,
+    showOptions,
+  ]);
 
-  const activeCfg = tradableSymbols.find((s) => s.symbol === activeSymbol);
+  useEffect(() => {
+    const first = instruments[0];
+    if (!first) return;
+    if (instruments.some((r) => r.symbol === activeSymbol)) return;
+    setActiveSymbol(first.symbol);
+    setActiveKind(first.kind);
+    setLimitPrice("");
+  }, [instruments, activeSymbol]);
+
+  const activeRow = instruments.find((s) => s.symbol === activeSymbol);
   const book =
     rt.books.get(activeSymbol) ??
     (restBook?.symbol === activeSymbol ? restBook : undefined);
   const livePrice = rt.prices.get(activeSymbol);
 
   const metric = challenge?.type === "market_making" ? "score" : "pnl";
-  const hasOptions = isEden || rt.optionContracts.length > 0;
-  const hasEtfs =
-    isEden ||
-    !!challenge?.config.eden?.etfs?.length ||
-    rt.listedSymbols.some((s) => s.kind === "etf");
 
-  const selectSymbol = (symbol: string, price?: number) => {
-    setActiveSymbol(symbol);
+  const selectInstrument = (row: MarketInstrument, price?: number) => {
+    setActiveSymbol(row.symbol);
+    setActiveKind(row.kind);
     setLimitPrice(price != null ? price.toFixed(2) : "");
   };
 
@@ -294,13 +372,13 @@ export default function TradePage() {
 
   if (!challenge) {
     return (
-      <div className="min-h-dvh">
-        <TopBar fluid />
+      <div className={DESK_SHELL}>
+        <TopBar fluid className="shrink-0" />
         <main
           id="main"
           aria-busy="true"
           aria-label="Loading trading workbench"
-          className="grid gap-3 p-3 sm:px-4 lg:grid-cols-[232px_minmax(0,1fr)] xl:grid-cols-[232px_minmax(0,1fr)_300px] 2xl:grid-cols-[260px_minmax(0,1fr)_340px]"
+          className={DESK_MAIN}
         >
           <span role="status" className="sr-only">
             Loading challenge and market data
@@ -328,26 +406,15 @@ export default function TradePage() {
   const marketFrozen = rt.frozen ?? challenge.frozen ?? false;
   const scripted = isEden && !!challenge.config.eden?.eventScript;
   const change =
-    activeCfg && livePrice && activeCfg.initialPrice > 0
-      ? (livePrice.price - activeCfg.initialPrice) / activeCfg.initialPrice
+    activeRow && livePrice && activeRow.initialPrice > 0
+      ? (livePrice.price - activeRow.initialPrice) / activeRow.initialPrice
       : null;
   const leaderboardEntries = rt.leaderboard.length
     ? rt.leaderboard
     : restLeaderboard;
-  const leaderboardFills = !(leaderboardHidden && !isAdmin);
+  const myRank = leaderboardEntries.find((e) => e.userId === user?.id)?.rank;
+  const voteOpen = rt.vote?.status === "open";
 
-  const leaderboard = (className?: string) => (
-    <Leaderboard
-      compact
-      entries={leaderboardEntries}
-      meId={user?.id}
-      metric={metric}
-      mm={challenge.type === "market_making"}
-      hidden={leaderboardHidden}
-      isAdmin={isAdmin}
-      className={className}
-    />
-  );
   const newsFeed = (className?: string) => (
     <NewsFeed
       items={news}
@@ -356,11 +423,60 @@ export default function TradePage() {
       className={className}
     />
   );
+  const dealDesk = (className?: string) =>
+    isEden && showDealDesk ? (
+      <DealDesk
+        docked
+        offers={rt.otcOffers}
+        result={rt.otcResult}
+        className={className}
+      />
+    ) : null;
+  const optionsTicket = (showBook: boolean) =>
+    showOptions ? (
+      <OptionsPanel
+        challengeId={challengeId}
+        contracts={rt.optionContracts}
+        prices={rt.prices}
+        books={rt.books}
+        portfolio={portfolio}
+        activeSymbol={activeSymbol}
+        showBook={showBook}
+        maxQuantity={challenge.config.maxOrderQuantity}
+        positionCap={
+          challenge.config.eden?.rules.positionCap ??
+          challenge.config.maxPosition
+        }
+        exerciseWindowSec={
+          challenge.config.eden?.options?.exerciseWindowSec ?? 15
+        }
+        onChange={() => setOrderRefresh((n) => n + 1)}
+        frozen={marketFrozen || challenge.status !== "live"}
+        closedHint={
+          scripted && activeKind === "spot"
+            ? "Options open after halftime, at game minute 70."
+            : undefined
+        }
+      />
+    ) : null;
+  const marketsTicket = (
+    <MarketsPanel
+      challengeId={challengeId}
+      activeSymbol={activeSymbol}
+      activeKind={activeKind}
+      onChange={() => {
+        void bonds.reload();
+        setOrderRefresh((n) => n + 1);
+      }}
+      frozen={marketFrozen || challenge.status !== "live"}
+    />
+  );
 
   return (
-    <div className="min-h-dvh">
+    <div className={DESK_SHELL}>
       <TopBar
         fluid
+        className="shrink-0"
         center={
           <EventTimers
             challenge={challenge}
@@ -378,7 +494,7 @@ export default function TradePage() {
 
       <main
         id="main"
-        className="grid min-w-0 gap-3 p-3 sm:px-4 lg:grid-cols-[232px_minmax(0,1fr)] xl:grid-cols-[232px_minmax(0,1fr)_300px] 2xl:grid-cols-[260px_minmax(0,1fr)_340px]"
+        className={DESK_MAIN}
       >
         <header className="col-span-full min-w-0 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -408,7 +524,7 @@ export default function TradePage() {
                 <span className="mx-2 text-faint" aria-hidden>
                   /
                 </span>
-                {tradableSymbols.length} instruments
+                {instruments.length} instruments
               </span>
             </div>
             <span
@@ -446,34 +562,71 @@ export default function TradePage() {
         </header>
 
         <aside
-          aria-label="Markets and rankings"
-          className={cn(
-            "min-w-0",
-            isLg && cn(STICKY_SIDEBAR, "flex flex-col gap-3"),
-          )}
+          aria-label="Markets"
+          className={cn("lg:flex", DESK_SIDE)}
         >
           <MarketList
-            symbols={tradableSymbols}
+            instruments={instruments}
             prices={rt.prices}
             portfolio={portfolio}
             active={activeSymbol}
-            onSelect={selectSymbol}
-            className={cn(
-              isLg ? "max-h-[55%] shrink-0" : "max-h-72",
-            )}
+            onSelect={selectInstrument}
+            className="max-h-72 lg:max-h-none lg:min-h-0 lg:flex-1"
           />
-          {isLg && leaderboard(leaderboardFills ? "min-h-0 flex-1" : "")}
+          {isEden && showBank && (
+            <BankPanel
+              challengeId={challengeId}
+              portfolio={portfolio}
+              multiplier={
+                challenge.config.eden?.rules.loanRepayMultiplier ?? 2
+              }
+              endsAt={challenge.endsAt}
+              carryRate={
+                challenge.config.eden?.rules.costOfCarryPerUnitPerMinute ?? 1
+              }
+              disabled={challenge.status !== "live"}
+              onChange={() => setOrderRefresh((n) => n + 1)}
+              className="shrink-0"
+            />
+          )}
+          {showVotes && rt.vote ? (
+            <DockPopup
+              label="Policy vote"
+              placement="end"
+              className="shrink-0"
+              openSignal={voteOpen ? rt.vote?.id : null}
+              icon={<Vote className="size-3.5" aria-hidden />}
+              badge={
+                voteOpen ? (
+                  <span className="absolute -right-1 -top-1 size-2 rounded-full bg-warning" />
+                ) : null
+              }
+            >
+              <VotePanel
+                challengeId={challengeId}
+                liveVote={rt.vote}
+                className="shadow-md"
+              />
+            </DockPopup>
+          ) : null}
         </aside>
 
-        <div className="@container min-w-0 space-y-3">
+        <div className={DESK_CENTER}>
           <Panel className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2.5">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold">
-                {activeSymbol || "No instrument selected"}
+                {activeKind === "option" && activeRow?.strike != null
+                  ? `${activeRow.name ?? activeSymbol} ${activeRow.strike}`
+                  : activeSymbol || "No instrument selected"}
               </h2>
-              {activeCfg?.name && (
+              {activeRow?.name && activeKind !== "option" && (
                 <span className="block truncate text-xs text-muted">
-                  {activeCfg.name}
+                  {activeRow.name}
+                </span>
+              )}
+              {activeKind === "option" && (
+                <span className="block truncate text-xs text-muted">
+                  {activeRow?.optionType === "put" ? "Put" : "Call"}
                 </span>
               )}
             </div>
@@ -519,7 +672,7 @@ export default function TradePage() {
 
           {/* Book, account and ticket share a row once the column is wide
               enough; below that the portfolio drops under book + ticket. */}
-          <div className="grid min-w-0 gap-3 @min-[560px]:grid-cols-2 @min-[832px]:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_300px]">
+          <div className="grid min-w-0 gap-3 @min-[560px]:grid-cols-2 @min-[832px]:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_280px]">
             <div className="order-1 min-w-0 @min-[832px]:order-none">
               <OrderBook
                 snapshot={book}
@@ -530,36 +683,42 @@ export default function TradePage() {
               <PortfolioPanel
                 portfolio={portfolio}
                 prices={rt.prices}
+                activeSymbol={activeSymbol}
                 mm={challenge.type === "market_making"}
               />
             </div>
             <div className="order-2 min-w-0 @min-[832px]:order-none">
-              {activeCfg ? (
-                <TradeTicket
-                  challengeId={challengeId}
-                  symbol={activeSymbol}
-                  maxQuantity={challenge.config.maxOrderQuantity ?? 50}
-                  minPosition={
-                    isEden
-                      ? -(challenge.config.eden?.rules.positionCap ?? 100)
-                      : challenge.config.minPosition
-                  }
-                  maxPosition={
-                    isEden
-                      ? (challenge.config.eden?.rules.positionCap ?? 100)
-                      : challenge.config.maxPosition
-                  }
-                  maxOpenOrders={challenge.config.maxOpenOrders ?? 25}
-                  refreshKey={orderRefresh}
-                  price={limitPrice}
-                  onPriceChange={setLimitPrice}
-                  refPrice={livePrice?.price}
-                  frozen={marketFrozen}
-                  positionQty={
-                    portfolio?.positions.find((p) => p.symbol === activeSymbol)
-                      ?.quantity ?? 0
-                  }
-                />
+              {activeKind === "option" ? (
+                optionsTicket(false)
+              ) : activeRow ? (
+                <div className="space-y-3">
+                  <TradeTicket
+                    challengeId={challengeId}
+                    symbol={activeSymbol}
+                    maxQuantity={challenge.config.maxOrderQuantity ?? 50}
+                    minPosition={
+                      isEden
+                        ? -(challenge.config.eden?.rules.positionCap ?? 100)
+                        : challenge.config.minPosition
+                    }
+                    maxPosition={
+                      isEden
+                        ? (challenge.config.eden?.rules.positionCap ?? 100)
+                        : challenge.config.maxPosition
+                    }
+                    maxOpenOrders={challenge.config.maxOpenOrders ?? 25}
+                    refreshKey={orderRefresh}
+                    price={limitPrice}
+                    onPriceChange={setLimitPrice}
+                    refPrice={livePrice?.price}
+                    frozen={marketFrozen}
+                    positionQty={
+                      portfolio?.positions.find((p) => p.symbol === activeSymbol)
+                        ?.quantity ?? 0
+                    }
+                  />
+                  {activeKind === "etf" ? marketsTicket : null}
+                </div>
               ) : (
                 <Panel className="grid h-full min-h-48 place-items-center p-6 text-center text-sm text-muted">
                   Order entry opens when an instrument is listed.
@@ -591,76 +750,63 @@ export default function TradePage() {
             maxOpenOrders={challenge.config.maxOpenOrders ?? 25}
           />
 
-          {!isXl && newsFeed("max-h-[480px]")}
+          <div className="flex min-h-0 flex-col gap-3 xl:hidden">
+            {newsFeed("max-h-[360px]")}
+            {dealDesk("max-h-[320px]")}
+          </div>
 
-          {/* Options and ETFs can be introduced live into any challenge type;
-              banking and votes stay New Eden. */}
-          {hasOptions && (
-            <OptionsPanel
+          {activeKind === "spot" ? optionsTicket(true) : null}
+          {isEden && showBonds && (
+            <BondPanel
               challengeId={challengeId}
-              contracts={rt.optionContracts}
-              prices={rt.prices}
-              books={rt.books}
+              templates={bonds.templates}
+              holdings={bonds.holdings}
               portfolio={portfolio}
-              maxQuantity={challenge.config.maxOrderQuantity}
-              positionCap={
-                challenge.config.eden?.rules.positionCap ??
-                challenge.config.maxPosition
-              }
-              exerciseWindowSec={
-                challenge.config.eden?.options?.exerciseWindowSec ?? 15
-              }
-              onChange={() => setOrderRefresh((n) => n + 1)}
-              frozen={marketFrozen || challenge.status !== "live"}
-              closedHint={
-                scripted
-                  ? "Options open after halftime, at game minute 70."
-                  : undefined
-              }
-            />
-          )}
-          {hasEtfs && (
-            <MarketsPanel
-              challengeId={challengeId}
-              prices={rt.prices}
-              onSelectSymbol={(symbol) => {
-                selectSymbol(symbol);
-                window.scrollTo({ top: 0, behavior: "instant" });
+              endsAt={challenge.endsAt}
+              refreshError={bonds.error}
+              onChange={() => {
+                void bonds.reload();
+                setOrderRefresh((n) => n + 1);
               }}
-              onChange={() => setOrderRefresh((n) => n + 1)}
               frozen={marketFrozen || challenge.status !== "live"}
             />
           )}
-          {isEden && (
-            <div className="flex min-w-0 flex-wrap gap-3 *:min-w-0 *:flex-[1_1_360px]">
-              <BankPanel
-                challengeId={challengeId}
-                portfolio={portfolio}
-                multiplier={
-                  challenge.config.eden?.rules.loanRepayMultiplier ?? 2
-                }
-                endsAt={challenge.endsAt}
-                carryRate={
-                  challenge.config.eden?.rules.costOfCarryPerUnitPerMinute ?? 1
-                }
-                disabled={challenge.status !== "live"}
-                onChange={() => setOrderRefresh((n) => n + 1)}
-              />
-              <VotePanel challengeId={challengeId} liveVote={rt.vote} />
-            </div>
-          )}
-
-          {!isLg && leaderboard()}
         </div>
 
-        {isXl && (
-          <aside aria-label="News" className={cn(STICKY_SIDEBAR, "min-w-0")}>
-            {newsFeed("h-full")}
-          </aside>
-        )}
+        <aside
+          aria-label="News and deal desk"
+          className={cn("hidden xl:flex", DESK_SIDE)}
+        >
+          {newsFeed("min-h-0 flex-1")}
+          {dealDesk("min-h-0 max-h-[42%] shrink")}
+        </aside>
       </main>
 
-      {isEden && (
+      <div className="fixed bottom-3 left-3 z-40">
+        <DockPopup
+          label="Leaderboard"
+          icon={<Trophy className="size-3.5" aria-hidden />}
+          badge={
+            myRank != null && !(leaderboardHidden && !isAdmin) ? (
+              <span className="absolute -right-1.5 -top-1.5 mono rounded-sm bg-surface-3 px-1 text-[10px] tabular-nums text-text">
+                {myRank}
+              </span>
+            ) : null
+          }
+        >
+          <Leaderboard
+            entries={leaderboardEntries}
+            meId={user?.id}
+            metric={metric}
+            mm={challenge.type === "market_making"}
+            hidden={leaderboardHidden}
+            isAdmin={isAdmin}
+            className="max-h-[min(480px,70dvh)] shadow-md"
+          />
+        </DockPopup>
+      </div>
+
+      {isEden && showAuctions && (
         <AuctionPopup
           state={auction}
           terms={challenge.config.eden}
@@ -668,7 +814,6 @@ export default function TradePage() {
           onMinimizedChange={setAuctionMinimized}
         />
       )}
-      {isEden && <DealDesk offers={rt.otcOffers} result={rt.otcResult} />}
     </div>
   );
 }

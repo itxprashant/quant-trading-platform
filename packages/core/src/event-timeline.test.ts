@@ -569,7 +569,7 @@ describe("script executor", () => {
       { symbol: "AERIUM", weight: 2 },
       { symbol: "NEURO", weight: 1 },
     ]);
-    expect(config.eden.bonds[0].couponPer5Min).toBe(500);
+    expect(config.eden.bonds[0].payoutMultiplier).toBe(2);
     expect(config.eden.options.enabled).toBe(true);
     expect(config.unrelated).toBe("keep");
     expect(f.deps.challenge.config).toEqual(config);

@@ -4,12 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowUpRight, ChevronLeft, Eye, EyeOff } from "lucide-react";
-import type {
-  Challenge,
-  NewsFeed,
-  NewsItem,
-  NewsKind,
-  NewsLevel,
+import {
+  edenEventFlow,
+  isTraderPanelVisible,
+  traderVisibilityOf,
+  type Challenge,
+  type NewsFeed,
+  type NewsItem,
+  type NewsKind,
+  type NewsLevel,
+  type TraderPanel,
 } from "@qtp/shared";
 import { get, post } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
@@ -17,6 +21,7 @@ import { AdminGuard } from "@/components/AdminGuard";
 import { ChallengeForm } from "@/components/admin/ChallengeForm";
 import { AccountEditor } from "@/components/admin/AccountEditor";
 import { EdenHostConsole } from "@/components/admin/EdenHostConsole";
+import { PlaybookCues } from "@/components/admin/PlaybookCues";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
@@ -203,54 +208,88 @@ function FreezeControls({
   );
 }
 
-function LeaderboardVisibilityToggle({
+const TRADER_PANEL_TOGGLES: { key: TraderPanel | "leaderboard"; label: string }[] =
+  [
+    { key: "leaderboard", label: "Leaderboard" },
+    { key: "bank", label: "Bank / loans" },
+    { key: "bonds", label: "Bonds" },
+    { key: "etfs", label: "ETFs" },
+    { key: "options", label: "Options" },
+    { key: "dealDesk", label: "Deal desk" },
+    { key: "votes", label: "Policy votes" },
+    { key: "auctions", label: "Auctions" },
+  ];
+
+function TraderVisibilityControls({
   challenge,
   onChange,
 }: {
   challenge: Challenge;
   onChange: () => Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const hidden = challenge.leaderboardHidden ?? false;
+  const vis = traderVisibilityOf(challenge.traderVisibility);
 
-  async function toggle() {
-    setBusy(true);
+  async function toggle(key: TraderPanel | "leaderboard", visible: boolean) {
+    setBusy(key);
     setError(null);
     try {
-      await post(`/api/admin/${challenge.id}/leaderboard-visibility`, {
-        hidden: !hidden,
-      });
+      if (key === "leaderboard") {
+        await post(`/api/admin/${challenge.id}/leaderboard-visibility`, {
+          hidden: !visible,
+        });
+      } else {
+        await post(`/api/admin/${challenge.id}/trader-visibility`, {
+          panel: key,
+          visible,
+        });
+      }
       await onChange();
     } catch {
-      setError("Could not update leaderboard visibility.");
+      setError("Could not update trader visibility.");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        onClick={toggle}
-        disabled={busy}
-        aria-pressed={hidden}
-        aria-label="Hide leaderboard from traders"
-        className={cn(
-          "inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50",
-          hidden
-            ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15"
-            : "border-border bg-surface hover:bg-surface-2",
-        )}
+    <div className="flex min-w-0 flex-col items-end gap-2">
+      <div
+        role="group"
+        aria-label="Trader visibility"
+        className="flex flex-wrap justify-end gap-1.5"
       >
-        {hidden ? (
-          <EyeOff className="size-3.5" aria-hidden />
-        ) : (
-          <Eye className="size-3.5" aria-hidden />
-        )}
-        Leaderboard: {hidden ? "Hidden" : "Visible"}
-      </button>
+        {TRADER_PANEL_TOGGLES.map(({ key, label }) => {
+          const visible =
+            key === "leaderboard"
+              ? !(challenge.leaderboardHidden ?? false)
+              : isTraderPanelVisible(vis, key);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => toggle(key, !visible)}
+              disabled={busy !== null}
+              aria-pressed={!visible}
+              aria-label={`${visible ? "Hide" : "Show"} ${label} for traders`}
+              className={cn(
+                "inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50",
+                !visible
+                  ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15"
+                  : "border-border bg-surface hover:bg-surface-2",
+              )}
+            >
+              {!visible ? (
+                <EyeOff className="size-3" aria-hidden />
+              ) : (
+                <Eye className="size-3" aria-hidden />
+              )}
+              {label}
+            </button>
+          );
+        })}
+      </div>
       {error && (
         <p role="alert" className="text-[11px] text-down">
           {error}
@@ -967,7 +1006,7 @@ function EditInner() {
                   )}
                 </div>
                 <div className="flex flex-wrap items-start gap-2">
-                  <LeaderboardVisibilityToggle
+                  <TraderVisibilityControls
                     challenge={challenge}
                     onChange={load}
                   />
@@ -1014,6 +1053,9 @@ function EditInner() {
                 </nav>
               </div>
             </header>
+            <div className="mb-8">
+              <AccountEditor challenge={challenge} onChange={load} />
+            </div>
             {(challenge.status === "live" || challenge.status === "paused") && (
               <section
                 id="live-operations"
@@ -1031,12 +1073,15 @@ function EditInner() {
                     These controls send commands directly to this session.
                   </p>
                 </div>
+                {challenge.type === "new_eden" &&
+                  edenEventFlow(challenge.config.eden) === "cues" && (
+                    <PlaybookCues challenge={challenge} onChange={load} />
+                  )}
                 <div className="grid items-start gap-4 lg:grid-cols-2">
                   <LiveControls challenge={challenge} />
                   <FreezeControls challenge={challenge} onChange={load} />
                   <AddInstrumentControls challenge={challenge} />
                 </div>
-                <AccountEditor challenge={challenge} />
                 {challenge.type === "new_eden" && (
                   <EdenHostConsole challenge={challenge} />
                 )}

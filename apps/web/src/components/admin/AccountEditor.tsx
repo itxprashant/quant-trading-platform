@@ -42,7 +42,13 @@ function editError(err: unknown): string {
  * replaced for the fields that changed; "Adjust by" edits are deltas added to
  * the live balances, so those fills are kept.
  */
-export function AccountEditor({ challenge }: { challenge: Challenge }) {
+export function AccountEditor({
+  challenge,
+  onChange,
+}: {
+  challenge: Challenge;
+  onChange?: () => void;
+}) {
   const challengeId = challenge.id;
   const [accounts, setAccounts] = useState<AdminAccountView[]>([]);
   const [userId, setUserId] = useState("");
@@ -51,6 +57,7 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [enrolling, setEnrolling] = useState<"one" | "all" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,11 +82,16 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
   }, [challengeId]);
 
   const live = challenge.status === "live";
+  const joinable =
+    challenge.status !== "ended" &&
+    !(challenge.endsAt && Date.parse(challenge.endsAt) <= Date.now());
   useEffect(() => {
-    if (live) load();
-  }, [live, load]);
+    load();
+  }, [load]);
 
   const account = accounts.find((a) => a.userId === userId);
+  const waiting = accounts.filter((a) => !a.enrolled);
+  const seated = accounts.filter((a) => a.enrolled);
 
   const symbols = useMemo(
     () =>
@@ -194,11 +206,59 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
     }
   }
 
-  if (!live) return null;
+  async function enroll(all: boolean) {
+    if (!joinable || enrolling) return;
+    const ids = all
+      ? waiting.map((a) => a.userId)
+      : account && !account.enrolled
+        ? [account.userId]
+        : [];
+    if (ids.length === 0) return;
+    setEnrolling(all ? "all" : "one");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await post<{ enrolled: number }>(
+        `/api/admin/${challengeId}/enroll`,
+        all ? { allTraders: true } : { userIds: ids },
+      );
+      setMsg(
+        res.enrolled === 0
+          ? "Those traders were already enrolled."
+          : res.enrolled === 1
+            ? "Enrolled 1 trader with starting cash."
+            : `Enrolled ${res.enrolled} traders with starting cash.`,
+      );
+      await load();
+      onChange?.();
+    } catch (err) {
+      const code =
+        err instanceof ApiError
+          ? (err.body as { error?: string } | null)?.error
+          : null;
+      setError(
+        code === "challenge_not_joinable"
+          ? "This challenge has ended; traders can no longer be enrolled."
+          : "Could not enroll traders. Try again.",
+      );
+    } finally {
+      setEnrolling(null);
+    }
+  }
 
   return (
     <Panel className="min-w-0 rounded-md backdrop-blur-none">
       <PanelHeader title="Trader accounts">
+        <span className="text-[11px] text-muted">
+          <span className="mono text-text">{seated.length}</span> enrolled
+          {waiting.length > 0 && (
+            <>
+              {" · "}
+              <span className="mono text-text">{waiting.length}</span> not in
+              this event
+            </>
+          )}
+        </span>
         <Button
           size="sm"
           variant="ghost"
@@ -211,37 +271,49 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
         </Button>
       </PanelHeader>
       <div className="space-y-4 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <p className="min-w-0 max-w-prose flex-1 text-xs leading-relaxed text-muted">
-            {adjust
-              ? "Add to or subtract from a trader's cash and inventory. Changes apply to their live balances, so anything filled since this view loaded is kept."
-              : "Set a trader's cash and inventory directly. Values are absolute and replace anything filled since this view loaded."}{" "}
-            Margin rules apply to the result, and the trader is notified.
-          </p>
-          <div
-            role="group"
-            aria-label="Edit mode"
-            className="flex shrink-0 rounded-md border border-border bg-surface-2 p-0.5"
-          >
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => switchMode(m.id)}
-                aria-pressed={mode === m.id}
-                className={cn(
-                  "rounded px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent",
-                  mode === m.id
-                    ? "bg-accent-subtle text-text"
-                    : "text-muted hover:text-text",
-                )}
-              >
-                {m.label}
-              </button>
-            ))}
+        {live ? (
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <p className="min-w-0 max-w-prose flex-1 text-xs leading-relaxed text-muted">
+              {adjust
+                ? "Add to or subtract from a trader's cash and inventory. Changes apply to their live balances, so anything filled since this view loaded is kept."
+                : "Set a trader's cash and inventory directly. Values are absolute and replace anything filled since this view loaded."}{" "}
+              Margin rules apply to the result, and the trader is notified.
+            </p>
+            <div
+              role="group"
+              aria-label="Edit mode"
+              className="flex shrink-0 rounded-md border border-border bg-surface-2 p-0.5"
+            >
+              {MODES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => switchMode(m.id)}
+                  aria-pressed={mode === m.id}
+                  className={cn(
+                    "rounded px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+                    mode === m.id
+                      ? "bg-accent-subtle text-text"
+                      : "text-muted hover:text-text",
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        ) : (
+          <p className="text-xs leading-relaxed text-muted">
+            Registered traders appear here even before they join. Enroll them to
+            give starting cash and include them on the Deal Desk and leaderboard.
+          </p>
+        )}
+        <div
+          className={cn(
+            "grid gap-3",
+            live && "sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]",
+          )}
+        >
           <Field label="Trader">
             <Select
               value={userId}
@@ -254,7 +326,7 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
             >
               {accounts.length === 0 && (
                 <option value="">
-                  {loading ? "Loading…" : "No enrolled traders"}
+                  {loading ? "Loading…" : "No registered traders"}
                 </option>
               )}
               {accounts.map((a) => (
@@ -263,31 +335,73 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
                   {a.displayName && a.displayName !== a.username
                     ? ` (${a.username})`
                     : ""}
+                  {a.enrolled ? "" : " — not enrolled"}
                 </option>
               ))}
             </Select>
           </Field>
-          <Field
-            label={adjust ? "Cash change" : "Cash balance"}
-            hint={
-              account
-                ? `Stored ${money(account.cash)}${account.loanDebt > 0 ? ` · loan debt ${money(account.loanDebt)}` : ""}`
-                : undefined
-            }
-          >
-            <Input
-              type="number"
-              step="0.01"
-              value={cash}
-              placeholder={adjust ? "0.00" : undefined}
-              onChange={(e) => setCash(e.target.value)}
-              disabled={!account}
-              className="mono"
-            />
-          </Field>
+          {live && (
+            <Field
+              label={adjust ? "Cash change" : "Cash balance"}
+              hint={
+                account?.enrolled
+                  ? `Stored ${money(account.cash)}${account.loanDebt > 0 ? ` · loan debt ${money(account.loanDebt)}` : ""}`
+                  : account
+                    ? "Enroll this trader before editing cash."
+                    : undefined
+              }
+            >
+              <Input
+                type="number"
+                step="0.01"
+                value={cash}
+                placeholder={adjust ? "0.00" : undefined}
+                onChange={(e) => setCash(e.target.value)}
+                disabled={!account?.enrolled}
+                className="mono"
+              />
+            </Field>
+          )}
         </div>
 
-        {account && (
+        {waiting.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface-2 px-3 py-2">
+            <p className="min-w-0 text-xs text-muted">
+              {!joinable
+                ? `${waiting.length} registered trader${waiting.length === 1 ? "" : "s"} never joined this event.`
+                : account && !account.enrolled
+                  ? `${account.displayName || account.username} has an account but is not in this event. Enroll them to assign starting cash and show them on the Deal Desk.`
+                  : `${waiting.length} registered trader${waiting.length === 1 ? "" : "s"} ${waiting.length === 1 ? "is" : "are"} not enrolled yet.`}
+            </p>
+            {joinable && (
+              <div className="flex flex-wrap gap-2">
+                {account && !account.enrolled && (
+                  <Button
+                    size="sm"
+                    onClick={() => enroll(false)}
+                    loading={enrolling === "one"}
+                    disabled={enrolling !== null}
+                  >
+                    Enroll trader
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant={
+                    account && !account.enrolled ? "secondary" : "primary"
+                  }
+                  onClick={() => enroll(true)}
+                  loading={enrolling === "all"}
+                  disabled={enrolling !== null}
+                >
+                  Enroll all ({waiting.length})
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {live && account?.enrolled && (
           <div
             className="overflow-x-auto"
             tabIndex={0}
@@ -352,6 +466,7 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
           </div>
         )}
 
+        {live && account?.enrolled && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           <p className="min-w-0 text-xs text-muted">
             {hasChanges ? (
@@ -380,12 +495,13 @@ export function AccountEditor({ challenge }: { challenge: Challenge }) {
           <Button
             onClick={apply}
             loading={busy}
-            disabled={!account || !hasChanges || invalid}
+            disabled={!account?.enrolled || !live || !hasChanges || invalid}
           >
             Apply changes
           </Button>
         </div>
-        {invalid && (
+        )}
+        {invalid && live && account?.enrolled && (
           <p role="alert" className="text-xs text-down">
             {adjust
               ? "Quantity changes must be whole numbers."

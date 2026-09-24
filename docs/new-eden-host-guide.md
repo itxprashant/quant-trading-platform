@@ -23,6 +23,7 @@ The live operations panels appear once the challenge is `live` or `paused`:
 
 | Panel | What it drives |
 |-------|----------------|
+| **Playbook cues** | Only with **Event flow: Playbook cues** — one Run button per playbook beat (§1.1) |
 | **Live price controls** | Drift a symbol toward a target, or hard-set a price |
 | **Trader accounts** | Set an enrolled trader's cash and inventory directly, or adjust them by a delta (live only) |
 | **Eden host console** | Options cycles, ETF windows, Deal Desk, premium auction, policy vote, government grant |
@@ -41,6 +42,32 @@ Below, every mechanic lists its **UI control** and the **API** call it issues.
 All admin endpoints are under `POST /api/admin/:challengeId/...` and require an
 admin JWT.
 
+### 1.1 Playbook cues
+
+With **Event flow: Playbook cues** (`config.eden.playbookCues`), the scripted
+playbook is split into 46 cues that you fire from the **Playbook cues** panel.
+Each cue runs its playbook steps with their built-in spacing in game time,
+counted from the click. The market stays frozen until **Open market** runs.
+Workflow and the cue table:
+[`new-eden-simulation-guide.md` §8.4](./new-eden-simulation-guide.md#84-running-with-playbook-cues).
+
+| Action | API |
+|--------|-----|
+| Read the cue sheet (status, steps, headlines) | `GET /cues` → `{ flow, next, cues[] }` |
+| Fire a cue | `POST /cues/run` `{ cueId }` → `202` |
+
+`POST /cues/run` refuses with `409`:
+
+- `not_cue_mode`: the event flow is not Playbook cues.
+- `challenge_not_live`: the challenge is not live, or it has already been finalized.
+- `cue_already_run`.
+- `cue_blocked`, with `blockedBy`: a required cue has not finished.
+- `market_frozen`: a Deal Desk cue was fired while the market is frozen.
+
+An unknown `cueId` returns `404 unknown_cue`. Each cue runs once; reset the
+challenge to run the sheet again. Manual controls below still work in cue mode,
+but do not use them to repeat a beat that a cue covers.
+
 ---
 
 ## 2. Before the event — setup
@@ -53,7 +80,7 @@ admin JWT.
      parity arbitrageurs, plus spread / quote size / intensity.
    - **Options** — enable, underlyings, cycle minutes, exercise window, auto
      cycle, strike steps.
-   - **Bonds / ETFs** — bond templates (price, face, coupon or peg) and ETF
+   - **Bonds / ETFs** — bond templates (payout multiplier) and ETF
      baskets.
    - **Premium feed** — `auctionDurationSec`, `auctionWinnerFraction`,
      `premiumLeadSec`, `premiumAccessMinutes`.
@@ -180,10 +207,12 @@ Traders trade and exercise options from the **Options** panel on the terminal.
 |--------|----|-----|
 | Open / close an ETF create-redeem window | Eden console → **Open/Close window** | `POST /etf-window` `{ etfSymbol, open }` |
 
-Bonds are bought by traders directly (coupons accrue every 5 game-minutes;
-fixed or pegged). ETF **create / redeem** against NAV is only allowed while the
+Bonds are bought by traders directly (each series once; they pick a principal
+above free cash and receive that amount × the payout multiplier uniformly until
+the session ends). ETF **create / redeem** against NAV is only allowed while the
 window is open — open it briefly to let arbitrage close the NAV gap, then close
-it. Traders act from the **Bonds & ETFs** panel.
+it. Traders buy bonds from the **Government bonds** panel and create/redeem from
+the ETF ticket.
 
 ---
 
@@ -259,7 +288,9 @@ a scramble for inventory. You can follow up with a signal/news/FV move.
 Reset clears orders, trades, positions, news, loans, bonds, OTC offers, option
 cycles/contracts, auctions, votes, grants, and the related Redis keys; prices
 return to their initial config and engines reload the challenge. It does **not**
-delete the challenge, users, or schema.
+delete the challenge, users, or schema. With playbook cues or scripted mode it
+also clears the cue and timeline receipts and restores the playbook preset
+config.
 
 ---
 
@@ -284,6 +315,8 @@ delete the challenge, users, or schema.
 All under `POST /api/admin/:challengeId` unless noted (admin JWT required):
 
 ```
+/cues                          (GET) cue sheet — playbook-cue mode
+/cues/run                      { cueId }
 /drift                         { symbol, target, speed }
 /price                         { symbol, price }
 /news                          { message, level, kind, fvEffects?, momentum?, volEvent?, embargoSec? }

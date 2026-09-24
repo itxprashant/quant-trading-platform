@@ -5,6 +5,7 @@ import { Handshake, X } from "lucide-react";
 import type { OtcLeg, OtcOffer } from "@qtp/shared";
 import { Button } from "@/components/ui/Button";
 import { Field, Input, Select } from "@/components/ui/Input";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { ApiError, post } from "@/lib/api";
 import { money, signed } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -25,9 +26,14 @@ function secsLeft(expiresAt: string): number {
 export function DealDesk({
   offers,
   result,
+  docked = false,
+  className,
 }: {
   offers: OtcOffer[];
   result: { offerId: string; status: OtcOffer["status"]; ts: number } | null;
+  /** Sit in the right sidebar instead of a floating card. */
+  docked?: boolean;
+  className?: string;
 }) {
   const [now, setNow] = useState(Date.now());
   const [bargaining, setBargaining] = useState<string | null>(null);
@@ -98,7 +104,43 @@ export function DealDesk({
     : (offer?.legs ?? []);
   const validChoice = !hasChoices || selectedLeg !== null;
 
-  if (!offer)
+  if (!offer) {
+    if (docked) {
+      return (
+        <Panel
+          className={cn("flex min-h-0 min-w-0 flex-col overflow-hidden", className)}
+        >
+          <PanelHeader
+            title={
+              <span className="flex items-center gap-1.5">
+                <Handshake className="size-3.5" /> Deal Desk
+              </span>
+            }
+          />
+          {feedback ? (
+            <div className="flex items-start gap-3 p-3">
+              <p role="status" className="flex-1 text-xs text-muted">
+                {feedback.message}
+                {feedback.settleAt &&
+                  feedback.status === "accepted" &&
+                  ` ${Date.parse(feedback.settleAt) > now ? `Settlement due in ${Math.ceil((Date.parse(feedback.settleAt) - now) / 1000)}s.` : "Awaiting settlement confirmation."}`}
+              </p>
+              <button
+                aria-label="Dismiss deal result"
+                onClick={() => setFeedback(null)}
+                className="text-muted hover:text-text"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+          ) : (
+            <p className="px-3 py-3 text-center text-xs text-faint">
+              No live offers. Host deals appear here.
+            </p>
+          )}
+        </Panel>
+      );
+    }
     return feedback ? (
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center p-4">
         <section
@@ -121,6 +163,7 @@ export function DealDesk({
         </section>
       </div>
     ) : null;
+  }
 
   async function respond(
     o: OtcOffer,
@@ -181,10 +224,20 @@ export function DealDesk({
   const netCash = otcNetCash(offer.cashToTrader, previewLegs);
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center p-4 sm:bottom-4">
+    <div
+      className={
+        docked
+          ? cn("flex min-h-0 min-w-0 flex-col", className)
+          : "pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center p-4 sm:bottom-4"
+      }
+    >
       <section
         aria-label="OTC deal desk"
-        className="pointer-events-auto max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-lg border border-accent/40 bg-surface shadow-md"
+        className={
+          docked
+            ? "flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-accent/40 bg-surface"
+            : "pointer-events-auto max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-lg border border-accent/40 bg-surface shadow-md"
+        }
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
           <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
@@ -209,7 +262,7 @@ export function DealDesk({
           </div>
         </div>
 
-        <div className="space-y-3 p-4">
+        <div className={cn("space-y-3 p-4", docked && "min-h-0 flex-1 overflow-y-auto")}>
           <p className="text-sm text-text">{offer.description}</p>
           {hasChoices && (
             <div className="space-y-2">

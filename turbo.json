@@ -6,9 +6,28 @@
     "DATABASE_URL",
     "REDIS_URL",
     "JWT_SECRET",
+    "JWT_EXPIRES_IN",
     "PORT",
+    "API_PORT",
+    "GATEWAY_PORT",
+    "CORS_ORIGINS",
     "NEXT_PUBLIC_API_URL",
-    "NEXT_PUBLIC_WS_URL"
+    "NEXT_PUBLIC_WS_URL",
+    "ENGINE_*"
+  ],
+  "globalPassThroughEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "JWT_SECRET",
+    "JWT_EXPIRES_IN",
+    "PORT",
+    "API_PORT",
+    "GATEWAY_PORT",
+    "CORS_ORIGINS",
+    "NEXT_PUBLIC_API_URL",
+    "NEXT_PUBLIC_WS_URL",
+    "ENGINE_*"
   ],
   "tasks": {
     "build": {
@@ -17,7 +36,8 @@
     },
     "dev": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": ["ENGINE_*"]
     },
     "lint": {
       "dependsOn": ["^build"]

@@ -13,6 +13,7 @@ import type {
   PricePoint,
   ServerMessage,
   SymbolConfig,
+  TraderVisibility,
   VoteProposal,
 } from "@qtp/shared";
 import { TOKEN_KEY, WS_URL } from "@/lib/config";
@@ -54,6 +55,8 @@ export interface RealtimeState {
   leaderboard: LeaderboardEntry[];
   /** null until the gateway reports the host's visibility setting. */
   leaderboardHidden: boolean | null;
+  /** null until the gateway reports which Eden panels traders may see. */
+  traderVisibility: TraderVisibility | null;
   news: NewsItem[];
   /** Latest headline delivered live (never from a snapshot); drives toasts. */
   lastNews: { item: NewsItem; seq: number } | null;
@@ -113,6 +116,8 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, leaderboard: msg.data };
     case "leaderboard_visibility":
       return { ...state, leaderboardHidden: msg.data.hidden };
+    case "trader_visibility":
+      return { ...state, traderVisibility: msg.data };
     case "news": {
       // Premium holders receive a scripted headline early and again at release.
       const seen = state.news.some((n) => n.id === msg.data.id);
@@ -216,6 +221,7 @@ const initial: RealtimeState = {
   portfolio: null,
   leaderboard: [],
   leaderboardHidden: null,
+  traderVisibility: null,
   news: [],
   lastNews: null,
   lastOrder: null,

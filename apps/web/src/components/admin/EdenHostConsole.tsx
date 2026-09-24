@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type {
+  AdminAccountView,
   Challenge,
-  LeaderboardEntry,
   OptionContract,
   OtcLeg,
 } from "@qtp/shared";
@@ -261,7 +261,8 @@ function OtcBuilder({
   onSent: () => void;
 }) {
   const challengeId = challenge.id;
-  const [traders, setTraders] = useState<LeaderboardEntry[]>([]);
+  const [traders, setTraders] = useState<AdminAccountView[]>([]);
+  const [waiting, setWaiting] = useState(0);
   const [userId, setUserId] = useState("");
   const [description, setDescription] = useState("");
   const [cashToTrader, setCashToTrader] = useState("0");
@@ -273,10 +274,16 @@ function OtcBuilder({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    get<LeaderboardEntry[]>(`/api/leaderboard/${challengeId}`)
-      .then((rows) => {
-        setTraders(rows);
-        if (rows[0]) setUserId(rows[0].userId);
+    get<{ accounts: AdminAccountView[] }>(`/api/admin/${challengeId}/accounts`)
+      .then((res) => {
+        const seated = res.accounts.filter((a) => a.enrolled);
+        setTraders(seated);
+        setWaiting(res.accounts.length - seated.length);
+        setUserId((cur) =>
+          seated.some((a) => a.userId === cur)
+            ? cur
+            : (seated[0]?.userId ?? ""),
+        );
       })
       .catch(() =>
         setError("Could not load traders. Reload the page to try again."),
@@ -321,10 +328,19 @@ function OtcBuilder({
         Deal Desk offer
       </p>
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Trader">
+        <Field
+          label="Trader"
+          hint={
+            waiting > 0
+              ? `${waiting} registered trader${waiting === 1 ? "" : "s"} not enrolled — use Trader accounts.`
+              : undefined
+          }
+        >
           <Select value={userId} onChange={(e) => setUserId(e.target.value)}>
             {traders.length === 0 && (
-              <option value="">No traders available</option>
+              <option value="">
+                {waiting > 0 ? "No enrolled traders" : "No traders available"}
+              </option>
             )}
             {traders.map((t) => (
               <option key={t.userId} value={t.userId}>

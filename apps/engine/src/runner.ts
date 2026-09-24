@@ -36,10 +36,14 @@ import {
   redisKeys,
   zEdenOptionsConfig,
   zEdenRules,
+  edenEventFlow,
   edenEventStateAt,
+  EDEN_EVENT_ACTIONS,
   EDEN_EVENT_NEWS,
+  EDEN_EVENT_VERSION,
   type BroadcastEnvelope,
   type EdenConfig,
+  type EdenEventAction,
   type EngineCommand,
   type EngineEvent,
   type EtfConfig,
@@ -54,7 +58,12 @@ import { OptionsManager } from "./options-manager.js";
 import { MarketsManager } from "./markets-manager.js";
 import { Persistence } from "./persistence.js";
 import { EdenSettlements } from "./eden-settlements.js";
-import { EventTimeline, eventActionUuid } from "./event-timeline.js";
+import { CueTimeline } from "./cue-timeline.js";
+import {
+  EventTimeline,
+  eventActionUuid,
+  type EventActionContext,
+} from "./event-timeline.js";
 import { EventExecutor } from "./event-executor.js";
 import { finalizeScores } from "./final-scoring.js";
 
@@ -67,6 +76,7 @@ export class ChallengeRunner {
   private readonly persistence: Persistence;
   private readonly settlements: EdenSettlements;
   private timeline?: EventTimeline;
+  private cues?: CueTimeline;
   private work: Promise<void> = Promise.resolve();
   private commandWork?: Promise<void>;
   private poisoned = false;
@@ -382,7 +392,7 @@ export class ChallengeRunner {
         });
       }
     }
-    this.configureTimeline();
+    await this.configureTimeline();
     if (this.edenEnabled) await this.settlements.recoverPremium(Date.now());
     await this.syncMarketStatus();
     await this.persistence.flush({
@@ -517,16 +527,94 @@ export class ChallengeRunner {
     }
   }
 
-  private configureTimeline(): void {
-    if (
-      !this.edenEnabled ||
-      !this.eden?.eventScript ||
-      !this.challenge.startsAt
-    )
+  private async configureTimeline(): Promise<void> {
+    const flow = edenEventFlow(this.eden);
+    if (!this.edenEnabled || flow === "host" || !this.challenge.startsAt)
       return;
     for (const news of EDEN_EVENT_NEWS)
       this.scriptedNews.add(eventActionUuid(this.challenge.id, news.id));
-    const executor = new EventExecutor({
+    const executor = this.createExecutor();
+    const loadReceipts = () =>
+      this.db
+        .select()
+        .from(eventActions)
+        .where(eq(eventActions.challengeId, this.challenge.id));
+    const execute = async (
+      action: EdenEventAction,
+      context: EventActionContext,
+    ) => {
+      await executor.execute(action, context);
+      await this.persistence.flush({
+        receipt: action.id,
+        minuteCount: this.minuteCount,
+      });
+    };
+    if (flow === "cues") {
+      this.cues = new CueTimeline({
+        challengeId: this.challenge.id,
+        minuteMs: env.minuteMs,
+        loadReceipts,
+        recordFire: (actionId, at) =>
+          this.persistence.flush({
+            minuteCount: this.minuteCount,
+            write: async (tx) => {
+              await tx
+                .insert(eventActions)
+                .values({
+                  challengeId: this.challenge.id,
+                  actionId,
+                  completedAt: new Date(at),
+                })
+                .onConflictDoNothing();
+            },
+          }),
+        execute,
+      });
+      await this.cues.restore();
+      const cues = this.cues;
+      this.setVolatility(
+        EDEN_EVENT_ACTIONS.reduce(
+          (multiplier, a) =>
+            a.kind === "bot_volatility" && cues.completed(a.id)
+              ? a.multiplier
+              : multiplier,
+          1,
+        ),
+      );
+      // The market stays shut until the host fires the "Open market" cue.
+      if (!this.frozen && !cues.completed(`${EDEN_EVENT_VERSION}/open`)) {
+        this.frozen = true;
+        this.challenge.frozen = true;
+        this.engine.setFrozen(true);
+        await this.db
+          .update(challenges)
+          .set({ frozen: true })
+          .where(eq(challenges.id, this.challenge.id));
+      }
+      return;
+    }
+    this.timeline = new EventTimeline({
+      challengeId: this.challenge.id,
+      enabled: true,
+      startsAt: this.challenge.startsAt.getTime(),
+      minuteMs: env.minuteMs,
+      loadCompletedActionIds: async () =>
+        (await loadReceipts()).map((row) => row.actionId),
+      execute,
+    });
+    const state = edenEventStateAt(
+      ((Date.now() - this.challenge.startsAt.getTime()) / env.minuteMs) * 60,
+    );
+    this.setVolatility(state.botVolatilityMultiplier);
+  }
+
+  private setVolatility(multiplier: number): void {
+    this.engine.setVolatilityMultiplier(multiplier);
+    this.edenBots?.setVolatilityMultiplier(multiplier);
+  }
+
+  private createExecutor(): EventExecutor {
+    return new EventExecutor({
       challenge: this.challenge,
       db: this.db,
       redis: this.redis,
@@ -574,10 +662,7 @@ export class ChallengeRunner {
       resolveVote: (id, ts) => this.settlements.resolveVote(id, ts),
       awardGrant: (id, ts) => this.settlements.awardGrant(id, ts),
       rescueLoans: (ts) => this.settlements.rescueLoans(ts),
-      setVolatility: (multiplier) => {
-        this.engine.setVolatilityMultiplier(multiplier);
-        this.edenBots?.setVolatilityMultiplier(multiplier);
-      },
+      setVolatility: (multiplier) => this.setVolatility(multiplier),
       prepareVega: async (symbol, releaseAt, now) => {
         // A later-dated event series avoids the normal cycle expiring before the dump.
         await (
@@ -596,31 +681,6 @@ export class ChallengeRunner {
       },
       finalize: (ts) => this.finalize(ts),
     });
-    this.timeline = new EventTimeline({
-      challengeId: this.challenge.id,
-      enabled: true,
-      startsAt: this.challenge.startsAt.getTime(),
-      minuteMs: env.minuteMs,
-      loadCompletedActionIds: async () =>
-        (
-          await this.db
-            .select()
-            .from(eventActions)
-            .where(eq(eventActions.challengeId, this.challenge.id))
-        ).map((row) => row.actionId),
-      execute: async (action, context) => {
-        await executor.execute(action, context);
-        await this.persistence.flush({
-          receipt: action.id,
-          minuteCount: this.minuteCount,
-        });
-      },
-    });
-    const state = edenEventStateAt(
-      ((Date.now() - this.challenge.startsAt.getTime()) / env.minuteMs) * 60,
-    );
-    this.engine.setVolatilityMultiplier(state.botVolatilityMultiplier);
-    this.edenBots?.setVolatilityMultiplier(state.botVolatilityMultiplier);
   }
 
   private async advanceClock(now: number): Promise<void> {
@@ -642,6 +702,7 @@ export class ChallengeRunner {
       }
     }
     await this.timeline?.tick(now);
+    await this.cues?.tick(now);
     if (this.finalized) return;
     if (this.challenge.endsAt && now >= this.challenge.endsAt.getTime()) {
       await this.finalize(this.challenge.endsAt.getTime());
@@ -808,7 +869,7 @@ export class ChallengeRunner {
         await this.markets?.purchaseBond(
           cmd.userId,
           cmd.bondId,
-          cmd.quantity,
+          cmd.price,
           cmd.ts,
         );
         return [];
@@ -839,6 +900,17 @@ export class ChallengeRunner {
       case "award_grant":
         await this.settlements.awardGrant(cmd.grantId, Date.now());
         return [];
+      case "run_cue": {
+        const now = Date.now();
+        if (!(await this.cues?.fire(cmd.cueId, now))) {
+          console.warn(
+            `[${this.challenge.slug}] ignored cue ${cmd.cueId}: unknown, already run, or blocked`,
+          );
+          return [];
+        }
+        await this.cues?.tick(now);
+        return [];
+      }
       default:
         return [];
     }
@@ -1178,10 +1250,12 @@ export class ChallengeRunner {
       );
     }
     const commonShock = Math.random();
-    const correlated =
-      this.eden?.eventScript &&
-      this.challenge.startsAt &&
-      now < this.challenge.startsAt.getTime() + 90 * env.minuteMs;
+    // AERIUM and NEURO move together until the minute-90 dis-correlation shock.
+    const correlated = this.cues
+      ? !this.cues.completed(`${EDEN_EVENT_VERSION}/news/90/public`)
+      : this.eden?.eventScript &&
+        this.challenge.startsAt &&
+        now < this.challenge.startsAt.getTime() + 90 * env.minuteMs;
     for (const symbol of this.engine.autonomousSymbols()) {
       const driftKey = `qtp:drift_target:${this.challenge.id}:${symbol}`;
       const target = await this.redis.get(driftKey);
@@ -1219,8 +1293,8 @@ export class ChallengeRunner {
   }
 
   /**
-   * New Eden game-minute accrual: cost of carry, predatory loan bleed, and
-   * margin-call enforcement with forced liquidation. Runs once per game-minute.
+   * New Eden game-minute accrual: cost of carry, bond payouts, predatory loan
+   * bleed, and margin-call enforcement with forced liquidation.
    */
   private async minuteTick(now: number): Promise<void> {
     if (!this.edenEnabled || !this.eden) return;
@@ -1267,7 +1341,7 @@ export class ChallengeRunner {
       }
       await this.emit(events);
     });
-    if (this.markets && minute % 5 === 0) {
+    if (this.markets) {
       await step("coupons", () => this.markets!.payCoupons(now));
     }
     await this.settlements.repayLoans(now);
@@ -1533,7 +1607,7 @@ export class ChallengeRunner {
   private portfolio(userId: string) {
     const pf = this.engine.portfolioOf(userId);
     const m = this.engine.metricsOf(userId);
-    // Bond face value is an illiquid asset: it lifts net worth (PnL) but not
+    // Bond principal is an illiquid mark: it lifts net worth (PnL) but not
     // free cash, so locking cash into bonds still shrinks margin headroom.
     const bondValue = this.markets?.bondValueOf(userId) ?? 0;
     const pnl = pf.pnl + bondValue;

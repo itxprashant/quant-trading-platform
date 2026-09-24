@@ -14,7 +14,11 @@ import {
   isMarketFrozen,
   isSymbolLocked,
 } from "@qtp/bus";
-import { isNewsEmbargoed, type NewsItem } from "@qtp/shared";
+import {
+  isNewsEmbargoed,
+  traderVisibilityOf,
+  type NewsItem,
+} from "@qtp/shared";
 import { challengeNews, challenges, getDb } from "@qtp/db";
 import type {
   BroadcastEnvelope,
@@ -255,9 +259,10 @@ async function subscribe(conn: Conn, challengeId: string): Promise<void> {
   // Load the flag before registering so no leaderboard broadcast slips through.
   const row = await db.query.challenges.findFirst({
     where: eq(challenges.id, challengeId),
-    columns: { leaderboardHidden: true },
+    columns: { leaderboardHidden: true, traderVisibility: true },
   });
   const leaderboardHidden = row?.leaderboardHidden ?? false;
+  const traderVisibility = traderVisibilityOf(row?.traderVisibility);
   setLeaderboardHidden(challengeId, leaderboardHidden);
   if (!conn.subs.has(challengeId)) return;
   let set = registry.get(challengeId);
@@ -277,6 +282,11 @@ async function subscribe(conn: Conn, challengeId: string): Promise<void> {
     type: "leaderboard_visibility",
     challengeId,
     data: { hidden: leaderboardHidden },
+  });
+  send(conn, {
+    type: "trader_visibility",
+    challengeId,
+    data: traderVisibility,
   });
   await sendSnapshot(conn, challengeId);
 }

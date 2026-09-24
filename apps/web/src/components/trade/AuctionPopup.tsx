@@ -112,7 +112,7 @@ export function AuctionPopup({
 
   if (minimized) {
     return (
-      <div className="fixed bottom-4 left-4 z-50">
+      <div className="fixed bottom-3 left-14 z-40">
         <button
           type="button"
           onClick={() => onMinimizedChange(false)}
@@ -130,7 +130,7 @@ export function AuctionPopup({
   const termsText = `${terms?.auctionDurationSec ?? 30}s sealed bids. Top ${(terms?.auctionWinnerFraction ?? 0.3) * 100}% of active bidders win and pay their own bid. Lowest winning bid is public. Winners receive ${terms?.premiumLeadSec ?? 10}s early news for ${terms?.premiumAccessMinutes ?? 15} minutes.`;
 
   return (
-    <div className="fixed bottom-4 left-4 z-50 w-[min(340px,calc(100vw-2rem))]">
+    <div className="fixed bottom-3 left-14 z-40 w-[min(340px,calc(100vw-2rem))]">
       <section
         aria-label="Premium news auction"
         className="rounded-lg border border-accent/40 bg-surface shadow-md"

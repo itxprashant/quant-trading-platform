@@ -10,6 +10,7 @@ import type {
   Portfolio,
   PricePoint,
   SymbolConfig,
+  TraderVisibility,
   VoteProposal,
 } from "./schemas.js";
 import type { OrderSide, OrderStatus } from "./domain.js";
@@ -97,6 +98,12 @@ export type ServerMessage =
       type: "leaderboard_visibility";
       challengeId: string;
       data: { hidden: boolean };
+    }
+  | {
+      /** Host toggled which Eden panels traders may see. */
+      type: "trader_visibility";
+      challengeId: string;
+      data: TraderVisibility;
     }
   | { type: "otc_offer"; challengeId: string; data: OtcOffer }
   | {

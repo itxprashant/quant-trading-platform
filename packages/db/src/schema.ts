@@ -19,6 +19,7 @@ import type {
   LeaderboardEntry,
   OtcLeg,
   ScoringConfig,
+  TraderVisibility,
 } from "@qtp/shared";
 
 export const roleEnum = pgEnum("role", ["trader", "admin"]);
@@ -107,6 +108,8 @@ export const challenges = pgTable(
     frozen: boolean("frozen").notNull().default(false),
     /** Rankings withheld from non-admins (REST and WebSocket) while true. */
     leaderboardHidden: boolean("leaderboard_hidden").notNull().default(false),
+    /** Host switches for trader-facing Eden panels. Null means all visible. */
+    traderVisibility: jsonb("trader_visibility").$type<TraderVisibility>(),
     createdBy: uuid("created_by").references(() => users.id, {
       onDelete: "set null",
     }),

@@ -53,10 +53,12 @@ function formatUptime(seconds: number): string {
 export function PortfolioPanel({
   portfolio,
   prices,
+  activeSymbol,
   mm = false,
 }: {
   portfolio: Portfolio | null;
   prices: Map<string, PricePoint>;
+  activeSymbol?: string;
   mm?: boolean;
 }) {
   const metrics = portfolio?.metrics;
@@ -143,7 +145,7 @@ export function PortfolioPanel({
                       ×{b.quantity}
                     </span>
                     <span className="mono text-right text-up">
-                      {money(b.couponsPaid)}
+                      {money(b.couponsPaid)} paid
                     </span>
                   </div>
                 ))}
@@ -181,42 +183,48 @@ export function PortfolioPanel({
               tabIndex={0}
               role="region"
               aria-label="Position details"
-              className="overflow-x-auto border-t border-border focus-visible:outline-offset-[-2px]"
+              className="border-t border-border focus-visible:outline-offset-[-2px]"
             >
               {portfolio.positions.length === 0 ? (
                 <div className="px-3 py-6 text-center text-xs text-muted">
                   No open positions. Filled orders appear here.
                 </div>
               ) : (
-                <table className="w-full min-w-[340px] whitespace-nowrap text-xs">
+                <table className="w-full table-fixed text-xs">
                   <caption className="sr-only">
                     Open positions and unrealized profit or loss
                   </caption>
+                  <colgroup>
+                    <col className="w-[28%]" />
+                    <col className="w-[18%]" />
+                    <col className="w-[27%]" />
+                    <col className="w-[27%]" />
+                  </colgroup>
                   <thead className="bg-surface-2 text-[10px] uppercase tracking-wide text-muted">
                     <tr>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-left font-medium"
+                        className="px-2 py-2 text-left font-medium"
                       >
                         Symbol
                       </th>
                       <th
                         scope="col"
-                        className="px-2 py-2 text-right font-medium"
+                        className="px-1.5 py-2 text-right font-medium"
                       >
                         Qty
                       </th>
                       <th
                         scope="col"
-                        className="px-2 py-2 text-right font-medium"
+                        className="px-1.5 py-2 text-right font-medium"
                       >
-                        Avg price
+                        Avg
                       </th>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-right font-medium"
+                        className="px-2 py-2 text-right font-medium"
                       >
-                        Unreal. PnL
+                        Unreal.
                       </th>
                     </tr>
                   </thead>
@@ -224,29 +232,41 @@ export function PortfolioPanel({
                     {portfolio.positions.map((p) => {
                       const cur = prices.get(p.symbol)?.price ?? p.avgPrice;
                       const upnl = p.quantity * (cur - p.avgPrice);
+                      const selected = activeSymbol === p.symbol;
                       return (
-                        <tr key={p.symbol} className="hover:bg-surface-2">
+                        <tr
+                          key={p.symbol}
+                          aria-current={selected ? "true" : undefined}
+                          className={cn(
+                            selected
+                              ? "bg-accent-subtle"
+                              : "hover:bg-surface-2",
+                          )}
+                        >
                           <th
                             scope="row"
-                            className="mono px-3 py-2 text-left font-medium"
+                            className={cn(
+                              "mono truncate px-2 py-2 text-left font-medium",
+                              selected && "text-accent",
+                            )}
                           >
                             {p.symbol}
                           </th>
                           <td
                             className={cn(
-                              "mono px-2 py-2 text-right",
+                              "mono px-1.5 py-2 text-right",
                               dirClass(p.quantity),
                             )}
                           >
                             {p.quantity > 0 ? "+" : ""}
                             {p.quantity}
                           </td>
-                          <td className="mono px-2 py-2 text-right text-muted">
+                          <td className="mono truncate px-1.5 py-2 text-right text-muted">
                             {money(p.avgPrice)}
                           </td>
                           <td
                             className={cn(
-                              "mono px-3 py-2 text-right",
+                              "mono truncate px-2 py-2 text-right",
                               dirClass(upnl),
                             )}
                           >

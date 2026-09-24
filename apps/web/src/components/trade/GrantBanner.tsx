@@ -32,7 +32,7 @@ export function GrantBanner({ grant }: { grant: GrantMission | null }) {
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-2 text-sm",
+        "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-2 text-sm",
         open
           ? "border-accent/30 bg-accent-subtle/40 text-text"
           : "border-border bg-surface-2 text-muted",

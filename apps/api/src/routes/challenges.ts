@@ -9,6 +9,7 @@ import {
 } from "@qtp/db";
 import {
   defaultScoringFor,
+  edenEventFlow,
   isNewsEmbargoed,
   redisKeys,
   zChallengeStatus,
@@ -203,14 +204,15 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
           input.endsAt !== undefined &&
           (input.endsAt ? new Date(input.endsAt).getTime() : null) !==
             (current.endsAt?.getTime() ?? null);
+        const flow = edenEventFlow(current.config.eden);
         const scriptChanged =
           input.config !== undefined &&
-          !!input.config.eden?.eventScript !==
-            !!current.config.eden?.eventScript;
+          edenEventFlow(input.config.eden) !== flow;
         if (startsChanged || endsChanged || scriptChanged)
           return { error: "event_clock_immutable" } as const;
+        // Both playbook flows rewrite the config as instruments list.
         if (
-          current.config.eden?.eventScript &&
+          flow !== "host" &&
           (input.config !== undefined ||
             (input.type !== undefined && input.type !== current.type))
         ) {

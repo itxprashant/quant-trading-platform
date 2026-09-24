@@ -3,19 +3,13 @@
 import { useEffect, useState } from "react";
 import { loanPayment } from "@/lib/eden";
 import { Landmark } from "lucide-react";
-import type { Loan, Portfolio } from "@qtp/shared";
+import type { Portfolio } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { ApiError, get, post } from "@/lib/api";
+import { ApiError, post } from "@/lib/api";
 import { money } from "@/lib/format";
 import { cn } from "@/lib/cn";
-
-type ScheduledLoan = Loan & {
-  installment?: number;
-  nextPaymentAt?: string | null;
-  fundedAt?: string | null;
-};
 
 /**
  * The New Eden central bank: shows solvency (free cash) and lets a trader take
@@ -29,6 +23,7 @@ export function BankPanel({
   carryRate = 1,
   disabled = false,
   onChange,
+  className,
 }: {
   challengeId: string;
   portfolio: Portfolio | null;
@@ -37,42 +32,12 @@ export function BankPanel({
   carryRate?: number;
   disabled?: boolean;
   onChange?: () => void;
+  className?: string;
 }) {
   const [amount, setAmount] = useState("1000");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
-  const [loans, setLoans] = useState<ScheduledLoan[] | null>(null);
-  const [scheduleError, setScheduleError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    let loading = false;
-    setLoans(null);
-    const load = async () => {
-      if (loading) return;
-      loading = true;
-      try {
-        const rows = await get<ScheduledLoan[]>(`/api/loans/${challengeId}`);
-        if (!cancelled) {
-          setLoans(rows);
-          setScheduleError(null);
-        }
-      } catch {
-        if (!cancelled)
-          setScheduleError(
-            "Loan schedule refresh failed. Retrying automatically.",
-          );
-      } finally {
-        loading = false;
-      }
-    };
-    void load();
-    const timer = setInterval(load, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [challengeId]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -82,9 +47,6 @@ export function BankPanel({
   const free = portfolio?.freeCash ?? 0;
   const breach = free <= 0;
   const payment = loanPayment(principal, multiplier, endsAt, now);
-  const activeLoans = (loans ?? portfolio?.loans ?? []).filter(
-    (loan) => loan.status === "active",
-  ) as ScheduledLoan[];
 
   async function borrow() {
     if (
@@ -99,16 +61,7 @@ export function BankPanel({
     setError(null);
     setBusy(true);
     try {
-      const response = await post<{ loan: ScheduledLoan }>(
-        `/api/loans/request`,
-        { challengeId, principal },
-      );
-      setLoans((rows) => [
-        response.loan,
-        ...(rows ?? portfolio?.loans ?? []).filter(
-          (loan) => loan.id !== response.loan.id,
-        ),
-      ]);
+      await post(`/api/loans/request`, { challengeId, principal });
       onChange?.();
     } catch (err) {
       setError(
@@ -121,98 +74,52 @@ export function BankPanel({
     }
   }
 
+  const carryNow =
+    (portfolio?.positions.reduce((sum, p) => sum + Math.abs(p.quantity), 0) ??
+      0) * carryRate;
+
   return (
-    <Panel className="flex min-w-0 flex-col overflow-hidden">
+    <Panel className={cn("flex min-w-0 flex-col overflow-hidden", className)}>
       <PanelHeader
         title={
           <span className="flex items-center gap-1.5">
             <Landmark className="size-3.5" /> Bank
           </span>
         }
+        className="min-h-9 px-3 py-1.5"
       />
-      <div className="divide-y divide-border">
-        <div className="flex items-center justify-between px-3 py-2">
-          <span className="text-sm text-muted">Free cash</span>
-          <span
+      <div className="grid grid-cols-2 gap-x-2 border-b border-border px-3 py-1.5">
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-faint">
+            Free cash
+          </div>
+          <div
             className={cn(
-              "mono text-sm font-semibold",
+              "mono truncate text-sm font-semibold",
               breach ? "text-down" : "text-text",
             )}
           >
             {portfolio ? money(free) : "—"}
-          </span>
+          </div>
         </div>
-        <div className="flex items-center justify-between px-3 py-2">
-          <span className="text-sm text-muted">Loan debt</span>
-          <span className="mono text-sm font-medium text-down">
+        <div className="min-w-0 text-right">
+          <div className="text-[10px] uppercase tracking-wide text-faint">
+            Loan debt
+          </div>
+          <div className="mono truncate text-sm font-medium text-down">
             {money(portfolio?.loanDebt ?? 0)}
-          </span>
+          </div>
         </div>
       </div>
 
-      {activeLoans.length > 0 && (
-        <div className="overflow-x-auto border-t border-border">
-          <table className="w-full min-w-[420px] text-xs">
-            <caption className="px-3 py-2 text-left font-medium text-muted">
-              Active loan repayment schedule
-            </caption>
-            <thead className="bg-surface-2 text-faint">
-              <tr>
-                <th className="px-3 py-2 text-right font-medium">Remaining</th>
-                <th className="px-3 py-2 text-right font-medium">
-                  Fixed / minute
-                </th>
-                <th className="px-3 py-2 text-left font-medium">
-                  Next payment
-                </th>
-                <th className="px-3 py-2 text-left font-medium">Funding</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {activeLoans.map((loan) => (
-                <tr key={loan.id}>
-                  <td className="mono px-3 py-2 text-right">
-                    {money(loan.remaining)}
-                  </td>
-                  <td className="mono px-3 py-2 text-right">
-                    {loan.installment != null
-                      ? money(loan.installment)
-                      : "Awaiting schedule"}
-                  </td>
-                  <td className="mono px-3 py-2">
-                    {loan.nextPaymentAt
-                      ? Date.parse(loan.nextPaymentAt) <= now
-                        ? "Due, awaiting debit"
-                        : new Date(loan.nextPaymentAt).toLocaleTimeString()
-                      : "Awaiting schedule"}
-                  </td>
-                  <td className="px-3 py-2">
-                    {loan.fundedAt === null
-                      ? "Pending funding"
-                      : loan.fundedAt
-                        ? `Funded ${new Date(loan.fundedAt).toLocaleTimeString()}`
-                        : "Awaiting status"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {scheduleError && (
-        <p role="alert" className="px-3 py-2 text-xs text-down">
-          {scheduleError}
-        </p>
-      )}
-
       {portfolio && breach && (
-        <div className="border-t border-down/30 bg-down-subtle px-3 py-2 text-xs text-down">
-          Free cash is exhausted. A margin call triggers immediately; borrowing
-          does not undo liquidation.
+        <div className="border-b border-down/30 bg-down-subtle px-3 py-1.5 text-[11px] leading-snug text-down">
+          Free cash exhausted. A margin call is live; borrowing does not undo
+          liquidation.
         </div>
       )}
 
-      <div className="border-t border-border p-3">
+      <div className="p-2.5">
         <div className="mb-1 flex items-end justify-between text-[11px] text-faint">
           <span>Borrow</span>
           <span>
@@ -231,10 +138,11 @@ export function BankPanel({
             aria-label="Amount to borrow"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="mono min-w-0"
+            className="mono h-8 min-w-0 px-2 text-xs"
           />
           <Button
             onClick={borrow}
+            size="sm"
             loading={busy}
             disabled={
               disabled ||
@@ -247,27 +155,15 @@ export function BankPanel({
             Borrow
           </Button>
         </div>
-        <p className="mt-2 text-xs text-muted">
-          New loan estimate (not your existing schedule):{" "}
+        <p className="mt-1.5 text-[11px] leading-snug text-muted">
           {payment != null
-            ? `${money(payment)} / minute`
-            : "requires a future session end"}
-          . Set when borrowing: {multiplier}x principal divided by remaining
-          minutes, deducted every minute.
-        </p>
-        <p className="mt-2 text-xs text-muted">
-          Carry: {money(carryRate)} per absolute inventory unit / minute.
-          Current inventory estimate:{" "}
-          {money(
-            (portfolio?.positions.reduce(
-              (sum, p) => sum + Math.abs(p.quantity),
-              0,
-            ) ?? 0) * carryRate,
-          )}{" "}
-          / minute.
+            ? `${money(payment)}/min`
+            : "Needs a future session end"}{" "}
+          · {multiplier}× · carry {money(carryRate)}/unit
+          {portfolio ? ` · ${money(carryNow)} now` : ""}
         </p>
         {error && (
-          <p role="alert" className="mt-2 text-xs text-down">
+          <p role="alert" className="mt-1.5 text-[11px] text-down">
             {error}
           </p>
         )}

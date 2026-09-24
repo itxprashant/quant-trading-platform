@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { etfNav, peggedCoupon, type ChallengeEngine } from "@qtp/core";
+import { etfNav, type ChallengeEngine } from "@qtp/core";
 import {
   addListedSymbol,
   getEtfWindows,
@@ -16,23 +16,24 @@ import {
   type Challenge,
   type Database,
 } from "@qtp/db";
-import type {
-  BondTemplate,
-  EngineEvent,
-  EtfConfig,
-  SymbolConfig,
+import {
+  bondMarkValue,
+  type BondTemplate,
+  type EngineEvent,
+  type EtfConfig,
+  type SymbolConfig,
 } from "@qtp/shared";
 import type { DbTransaction, Persistence } from "./persistence.js";
 
 /**
  * Bonds + ETFs for New Eden (comp_desc Session 1):
  *
- *  - Bonds: bought from the bank for a cash outlay; pay a coupon every 5 game
- *    minutes — either fixed, or the inverse-pegged Aerium yield `(base − price)
- *    / divisor` that bleeds when the underlying spikes (the structural-exploit
- *    trap). Bonds never mature in-event, so principal is carried at purchase
- *    price: an illiquid asset (counts toward net worth, not free cash) so
- *    locking cash into bonds shrinks margin headroom. Face value is not PnL.
+ *  - Bonds: each series once per trader. The trader picks a principal that
+ *    must exceed free cash, pays it now, and receives that amount × the
+ *    payout multiplier in equal game-minute credits through endsAt (the
+ *    inverse cashflow of a predatory loan). Outstanding principal is marked
+ *    at cost × remaining payout fraction — illiquid, so it lifts net worth
+ *    but not free cash.
  *  - ETFs: a synthetic whose fair value tracks a weighted spot basket (NAV).
  *    It trades in the open market, and a periodic 30-second window lets traders
  *    create/redeem units at NAV to arbitrage market dislocations.
@@ -117,7 +118,7 @@ export class MarketsManager {
       if (r.quantity > 0) {
         this.bondValue.set(
           r.userId,
-          (this.bondValue.get(r.userId) ?? 0) + r.price * r.quantity,
+          (this.bondValue.get(r.userId) ?? 0) + bondMarkValue(r),
         );
       }
     }
@@ -254,19 +255,19 @@ export class MarketsManager {
     if (events.length > 0) await this.emit(events);
   }
 
-  /** Pay bond coupons — called by the runner every 5th game-minute. */
+  /** Pay scheduled bond credits — called by the runner every game-minute. */
   payCoupons(now: number): Promise<void> {
-    const work = this.bondWork.then(() => this.payBondCoupons(now));
+    const work = this.bondWork.then(() => this.payBondPayouts(now));
     this.bondWork = work.catch(() => {});
     return work;
   }
 
-  private async payBondCoupons(now: number): Promise<void> {
-    if (this.bonds.length === 0) return;
+  private async payBondPayouts(now: number): Promise<void> {
     const rows = await this.db
       .select()
       .from(bondHoldingsT)
       .where(eq(bondHoldingsT.challengeId, this.challenge.id));
+    const end = this.challenge.endsAt?.getTime();
     const touched = new Set<string>();
     const events: EngineEvent[] = [];
     const payments: Array<{
@@ -274,29 +275,35 @@ export class MarketsManager {
       userId: string;
       coupon: number;
       couponsPaid: number;
+      markBefore: number;
+      markAfter: number;
     }> = [];
     for (const r of rows) {
       if (r.quantity <= 0) continue;
-      const tpl = this.bonds.find((b) => b.id === r.bondId);
-      if (!tpl) continue;
-      const coupon = this.couponFor(tpl) * r.quantity;
-      if (coupon === 0) continue;
+      const remaining = r.faceValue - r.couponsPaid;
+      if (!(remaining > 0) || !Number.isFinite(remaining)) continue;
+      const minutes =
+        end != null && now < end
+          ? Math.max(1, Math.ceil((end - now) / this.minuteMs))
+          : 1;
+      const coupon = remaining / minutes;
+      if (!Number.isFinite(coupon) || coupon === 0) continue;
+      const couponsPaid = r.couponsPaid + coupon;
       payments.push({
         id: r.id,
         userId: r.userId,
         coupon,
-        couponsPaid: r.couponsPaid + coupon,
+        couponsPaid,
+        markBefore: bondMarkValue(r),
+        markAfter: bondMarkValue({ ...r, couponsPaid }),
       });
       touched.add(r.userId);
       events.push({
         type: "alert",
         challengeId: this.challenge.id,
         userId: r.userId,
-        level: coupon > 0 ? "info" : "warning",
-        message:
-          coupon > 0
-            ? `Coupon paid: +$${coupon.toFixed(0)} from ${tpl.name}.`
-            : `Negative yield: −$${Math.abs(coupon).toFixed(0)} bled by ${tpl.name}.`,
+        level: "info",
+        message: `Bond payout: +$${coupon.toFixed(2)} from ${r.name}.`,
         ts: now,
       });
     }
@@ -309,8 +316,17 @@ export class MarketsManager {
           .where(eq(bondHoldingsT.id, payment.id));
       }
     });
-    for (const payment of payments)
+    for (const payment of payments) {
       this.engine.adjustCash(payment.userId, payment.coupon);
+      this.bondValue.set(
+        payment.userId,
+        Math.max(
+          0,
+          (this.bondValue.get(payment.userId) ?? 0) -
+            (payment.markBefore - payment.markAfter),
+        ),
+      );
+    }
     this.persistence?.markUsers([...touched]);
     if (events.length > 0) await this.emit(events);
     await this.refreshPortfolios([...touched], now);
@@ -321,11 +337,11 @@ export class MarketsManager {
   purchaseBond(
     userId: string,
     bondId: string,
-    quantity: number,
+    price: number,
     ts: number,
   ): Promise<void> {
     const work = this.bondWork.then(() =>
-      this.buyBond(userId, bondId, quantity, ts),
+      this.buyBond(userId, bondId, price, ts),
     );
     this.bondWork = work.catch(() => {});
     return work;
@@ -334,12 +350,17 @@ export class MarketsManager {
   private async buyBond(
     userId: string,
     bondId: string,
-    quantity: number,
+    price: number,
     ts: number,
   ): Promise<void> {
     const tpl = this.bonds.find((b) => b.id === bondId);
-    if (!tpl || !Number.isSafeInteger(quantity) || quantity <= 0) {
-      await this.alert(userId, "Unknown bond.", "warning", ts);
+    if (
+      !tpl ||
+      !Number.isFinite(price) ||
+      price <= 0 ||
+      price > 1_000_000
+    ) {
+      await this.alert(userId, "Unknown bond or invalid price.", "warning", ts);
       return;
     }
     const existing = await this.db
@@ -352,66 +373,62 @@ export class MarketsManager {
           eq(bondHoldingsT.bondId, bondId),
         ),
       );
-    const held = existing[0]?.quantity ?? 0;
-    if (held + quantity > tpl.maxPerUser) {
+    if ((existing[0]?.quantity ?? 0) > 0) {
       await this.alert(
         userId,
-        `Bond limit reached (max ${tpl.maxPerUser} of ${tpl.name}).`,
+        `${tpl.name} can be bought only once.`,
         "warning",
         ts,
       );
       return;
     }
-    const cost = tpl.price * quantity;
-    const rules = this.challenge.config.eden?.rules;
-    const headroom = this.engine.freeCashOf(userId) - cost;
-    // Bonds cannot be liquidated, so a purchase must neither overdraw cash nor
-    // itself trigger a margin call.
-    if (
-      !Number.isFinite(headroom) ||
-      headroom < 0 ||
-      (this.challenge.type === "new_eden" &&
-        rules?.enabled &&
-        headroom <= rules.marginCallThreshold)
-    ) {
+    const end = this.challenge.endsAt?.getTime();
+    if (end == null || end <= ts) {
       await this.alert(
         userId,
-        `Insufficient free cash: ${quantity} × ${tpl.name} costs $${cost.toFixed(0)}.`,
+        "Bond purchase requires a future session end.",
         "warning",
         ts,
       );
       return;
     }
-    const holdingId = existing[0]?.id;
+    const free = this.engine.freeCashOf(userId);
+    if (!Number.isFinite(free) || !(price > free)) {
+      await this.alert(
+        userId,
+        `Price must exceed free cash ($${free.toFixed(2)}).`,
+        "warning",
+        ts,
+      );
+      return;
+    }
+    const multiplier =
+      tpl.payoutMultiplier ??
+      this.challenge.config.eden?.rules.loanRepayMultiplier ??
+      2;
+    const faceValue = price * multiplier;
     await this.write(async (tx) => {
-      if (holdingId) {
-        await tx
-          .update(bondHoldingsT)
-          .set({ quantity: held + quantity })
-          .where(eq(bondHoldingsT.id, holdingId));
-      } else {
-        await tx.insert(bondHoldingsT).values({
-          challengeId: this.challenge.id,
-          userId,
-          bondId,
-          name: tpl.name,
-          quantity,
-          price: tpl.price,
-          faceValue: tpl.faceValue,
-          couponsPaid: 0,
-        });
-      }
+      await tx.insert(bondHoldingsT).values({
+        challengeId: this.challenge.id,
+        userId,
+        bondId,
+        name: tpl.name,
+        quantity: 1,
+        price,
+        faceValue,
+        couponsPaid: 0,
+      });
     });
-    this.engine.adjustCash(userId, -cost);
+    this.engine.adjustCash(userId, -price);
     this.bondValue.set(
       userId,
       (this.bondValue.get(userId) ?? 0) +
-        (existing[0]?.price ?? tpl.price) * quantity,
+        bondMarkValue({ quantity: 1, price, faceValue, couponsPaid: 0 }),
     );
     this.persistence?.markUsers([userId]);
     await this.alert(
       userId,
-      `Bought ${quantity} × ${tpl.name} for $${cost.toFixed(0)}.`,
+      `Bought ${tpl.name} for $${price.toFixed(2)}; ${multiplier}× paid uniformly until the end.`,
       "info",
       ts,
     );
@@ -511,14 +528,6 @@ export class MarketsManager {
         0;
     }
     return etfNav(etf.basket, prices);
-  }
-
-  private couponFor(tpl: BondTemplate): number {
-    if (tpl.peggedYield) {
-      const price = this.engine.getPrice(tpl.peggedYield.symbol) ?? 0;
-      return peggedCoupon(tpl.peggedYield.base, price, tpl.peggedYield.divisor);
-    }
-    return tpl.couponPer5Min ?? 0;
   }
 
   private async alert(

@@ -117,7 +117,24 @@ function fixtures() {
     del: vi.fn(),
     srem: vi.fn(),
   };
-  const challenge = { id: "eden", config: { symbols } };
+  const challenge = {
+    id: "eden",
+    type: "new_eden",
+    endsAt: new Date(Date.now() + 10 * 60_000),
+    config: {
+      symbols,
+      eden: {
+        rules: {
+          enabled: true,
+          loanRepayMultiplier: 2,
+          marginCallThreshold: 0,
+          forcedLiquidation: true,
+          costOfCarryPerUnitPerMinute: 1,
+          positionCap: 100,
+        },
+      },
+    },
+  };
   const emit = vi.fn(async () => {});
   const refresh = vi.fn(async () => {});
   const engine = makeEngine();
@@ -211,12 +228,13 @@ describe("manager checkpoint transactions", () => {
     id: "standard",
     name: "Standard",
     price: 1000,
-    faceValue: 1100,
-    maxPerUser: 2,
-    couponPer5Min: 50,
+    faceValue: 2000,
+    maxPerUser: 1,
+    payoutMultiplier: 2,
   };
+  const PRICE = 10_001;
 
-  it("queues purchase insert/update and marks the buyer before the first alert checkpoint", async () => {
+  it("queues a once-only purchase and marks the buyer before the first alert checkpoint", async () => {
     const f = fixtures();
     const p = queuedPersistence(f);
     const manager = new MarketsManager(
@@ -236,26 +254,21 @@ describe("manager checkpoint transactions", () => {
       expect(f.tables.holdings).toHaveLength(0);
       expect(p.writes).toHaveLength(1);
       expect([...p.users]).toEqual(["buyer"]);
-      expect(f.engine.cashOf("buyer")).toBe(9000);
+      expect(f.engine.cashOf("buyer")).toBe(10000 - PRICE);
     });
-    await manager.purchaseBond("buyer", "standard", 1, 1);
+    await manager.purchaseBond("buyer", "standard", PRICE, 1);
     expect(p.commits[0]!.tables.holdings![0]).toMatchObject({
       quantity: 1,
-      faceValue: 1100,
+      price: PRICE,
+      faceValue: PRICE * 2,
     });
     expect(
       p.commits[0]!.state.accounts.find((a) => a.userId === "buyer")!.cash,
-    ).toBe(9000);
-    p.beforeEmit.mockImplementationOnce(() => {
-      expect(f.tables.holdings![0].quantity).toBe(1);
-      expect(p.writes).toHaveLength(1);
-      expect(p.users.has("buyer")).toBe(true);
-    });
-    await manager.purchaseBond("buyer", "standard", 1, 2);
-    expect(p.commits[1]!.tables.holdings![0].quantity).toBe(2);
-    expect(
-      p.commits[1]!.state.accounts.find((a) => a.userId === "buyer")!.cash,
-    ).toBe(8000);
+    ).toBe(10000 - PRICE);
+    await manager.purchaseBond("buyer", "standard", PRICE + 1, 2);
+    expect(p.commits).toHaveLength(2);
+    expect(f.tables.holdings).toHaveLength(1);
+    expect(f.engine.cashOf("buyer")).toBe(10000 - PRICE);
     manager.stop();
   });
 
@@ -277,37 +290,37 @@ describe("manager checkpoint transactions", () => {
     await manager.start();
     p.beforeCommit.mockRejectedValueOnce(new Error("checkpoint write failed"));
     await expect(
-      manager.purchaseBond("buyer", "standard", 1, 1),
+      manager.purchaseBond("buyer", "standard", PRICE, 1),
     ).rejects.toThrow("checkpoint write failed");
     expect(f.tables.holdings).toHaveLength(0);
     expect(p.commits).toHaveLength(0);
     expect(p.writes).toHaveLength(1);
     expect(p.users.has("buyer")).toBe(true);
-    expect(f.engine.cashOf("buyer")).toBe(9000);
+    expect(f.engine.cashOf("buyer")).toBe(10000 - PRICE);
     await p.flush();
     expect(p.commits[0]!.tables.holdings![0].quantity).toBe(1);
     expect(
       p.commits[0]!.state.accounts.find((a) => a.userId === "buyer")!.cash,
-    ).toBe(9000);
-    expect(manager.bondValueOf("buyer")).toBe(1000);
+    ).toBe(10000 - PRICE);
+    expect(manager.bondValueOf("buyer")).toBe(PRICE);
     manager.stop();
   });
 
-  it("refuses a purchase that would overdraw cash", async () => {
+  it("refuses a price that does not exceed free cash", async () => {
     const f = fixtures();
     const manager = new MarketsManager(
       f.engine,
       f.redis as any,
       f.db as any,
       f.challenge as any,
-      [{ ...standard, id: "whale", price: 50_000, faceValue: 50_000 }],
+      [standard],
       [],
       60000,
       f.emit,
       f.refresh,
     );
     await manager.start();
-    await manager.purchaseBond("buyer", "whale", 1, 1);
+    await manager.purchaseBond("buyer", "standard", 10_000, 1);
     expect(f.engine.cashOf("buyer")).toBe(10000);
     expect(f.tables.holdings).toHaveLength(0);
     expect(manager.bondValueOf("buyer")).toBe(0);
@@ -315,33 +328,39 @@ describe("manager checkpoint transactions", () => {
       expect.objectContaining({
         type: "alert",
         userId: "buyer",
-        message: expect.stringContaining("Insufficient free cash"),
+        message: expect.stringContaining("Price must exceed free cash"),
       }),
     ]);
     manager.stop();
   });
 
-  it("queues all coupon rows and marks every recipient before the first emit", async () => {
+  it("queues all payout rows and marks every recipient before the first emit", async () => {
     const f = fixtures();
     const p = queuedPersistence(f);
+    const now = Date.now();
+    f.challenge.endsAt = new Date(now + 10 * 60_000);
     f.tables.holdings!.push(
       {
         id: "h1",
         challengeId: "eden",
         userId: "one",
         bondId: "standard",
+        name: "Standard",
         quantity: 1,
-        faceValue: 1100,
-        couponsPaid: 10,
+        price: 1000,
+        faceValue: 2000,
+        couponsPaid: 0,
       },
       {
         id: "h2",
         challengeId: "eden",
         userId: "two",
         bondId: "standard",
-        quantity: 2,
-        faceValue: 1100,
-        couponsPaid: 20,
+        name: "Standard",
+        quantity: 1,
+        price: 1000,
+        faceValue: 2000,
+        couponsPaid: 0,
       },
     );
     const manager = new MarketsManager(
@@ -358,15 +377,15 @@ describe("manager checkpoint transactions", () => {
     manager.setPersistence(p.hook);
     await manager.start();
     p.beforeEmit.mockImplementation(() => {
-      expect(f.tables.holdings!.map((r) => r.couponsPaid)).toEqual([10, 20]);
+      expect(f.tables.holdings!.map((r) => r.couponsPaid)).toEqual([0, 0]);
       expect([...p.users].sort()).toEqual(["one", "two"]);
-      expect(f.engine.cashOf("one")).toBe(10050);
-      expect(f.engine.cashOf("two")).toBe(10100);
+      expect(f.engine.cashOf("one")).toBe(10200);
+      expect(f.engine.cashOf("two")).toBe(10200);
     });
-    await manager.payCoupons(1);
+    await manager.payCoupons(now);
     expect(p.commits).toHaveLength(1);
     expect(p.commits[0]!.tables.holdings!.map((r) => r.couponsPaid)).toEqual([
-      60, 120,
+      200, 200,
     ]);
     expect(p.commits[0]!.users.sort()).toEqual(["one", "two"]);
     manager.stop();
@@ -390,7 +409,7 @@ describe("manager checkpoint transactions", () => {
       new Error("DB unavailable"),
     );
     await expect(
-      manager.purchaseBond("buyer", "standard", 1, 1),
+      manager.purchaseBond("buyer", "standard", PRICE, 1),
     ).rejects.toThrow("DB unavailable");
     expect(f.engine.cashOf("buyer")).toBe(10000);
     expect(manager.bondValueOf("buyer")).toBe(0);
@@ -398,17 +417,21 @@ describe("manager checkpoint transactions", () => {
     manager.stop();
   });
 
-  it("rolls back every coupon row if the checkpoint commit fails", async () => {
+  it("rolls back every payout row if the checkpoint commit fails", async () => {
     const f = fixtures();
     const p = queuedPersistence(f);
+    const now = Date.now();
+    f.challenge.endsAt = new Date(now + 10 * 60_000);
     f.tables.holdings!.push(
       {
         id: "h1",
         challengeId: "eden",
         userId: "one",
         bondId: "standard",
+        name: "Standard",
         quantity: 1,
-        faceValue: 1100,
+        price: 1000,
+        faceValue: 2000,
         couponsPaid: 0,
       },
       {
@@ -416,8 +439,10 @@ describe("manager checkpoint transactions", () => {
         challengeId: "eden",
         userId: "two",
         bondId: "standard",
+        name: "Standard",
         quantity: 1,
-        faceValue: 1100,
+        price: 1000,
+        faceValue: 2000,
         couponsPaid: 0,
       },
     );
@@ -435,7 +460,7 @@ describe("manager checkpoint transactions", () => {
     manager.setPersistence(p.hook);
     await manager.start();
     p.beforeCommit.mockRejectedValueOnce(new Error("checkpoint write failed"));
-    await expect(manager.payCoupons(1)).rejects.toThrow(
+    await expect(manager.payCoupons(now)).rejects.toThrow(
       "checkpoint write failed",
     );
     expect(p.commits).toHaveLength(0);
@@ -443,10 +468,10 @@ describe("manager checkpoint transactions", () => {
     expect([...p.users].sort()).toEqual(["one", "two"]);
     await p.flush();
     expect(p.commits[0]!.tables.holdings!.map((r) => r.couponsPaid)).toEqual([
-      50, 50,
+      200, 200,
     ]);
     expect(p.commits[0]!.state.accounts.map((a) => a.cash)).toEqual([
-      10050, 10050,
+      10200, 10200,
     ]);
     manager.stop();
   });
@@ -898,15 +923,17 @@ describe("bond holdings", () => {
       manager.stop();
     },
   );
-  it("serializes competing purchases and carries principal at cost across restarts", async () => {
+  it("serializes competing purchases and marks remaining principal across restarts", async () => {
     const f = fixtures();
+    const now = Date.now();
+    f.challenge.endsAt = new Date(now + 10 * 60_000);
     const bond = {
       id: "standard",
       name: "Standard",
       price: 1000,
-      faceValue: 1100,
-      maxPerUser: 2,
-      couponPer5Min: 50,
+      faceValue: 2000,
+      maxPerUser: 1,
+      payoutMultiplier: 2,
     };
     const manager = new MarketsManager(
       f.engine,
@@ -921,48 +948,19 @@ describe("bond holdings", () => {
     );
     await manager.start();
     await Promise.all([
-      manager.purchaseBond("u", "standard", 2, 1),
-      manager.purchaseBond("u", "standard", 2, 1),
+      manager.purchaseBond("u", "standard", 10_001, 1),
+      manager.purchaseBond("u", "standard", 10_001, 1),
     ]);
     expect(f.tables.holdings).toHaveLength(1);
-    expect(f.tables.holdings![0].quantity).toBe(2);
-    expect(f.engine.cashOf("u")).toBe(8000);
-    expect(manager.bondValueOf("u")).toBe(2000);
-    await manager.payCoupons(2);
-    expect(f.engine.cashOf("u")).toBe(8100);
+    expect(f.tables.holdings![0].quantity).toBe(1);
+    expect(f.engine.cashOf("u")).toBe(-1);
+    expect(manager.bondValueOf("u")).toBe(10_001);
+    await manager.payCoupons(now);
+    expect(f.engine.cashOf("u")).toBe(-1 + 2000.2);
+    expect(f.tables.holdings![0].couponsPaid).toBe(2000.2);
     manager.stop();
     await manager.start();
-    expect(manager.bondValueOf("u")).toBe(2000);
-    manager.stop();
-  });
-
-  it("charges negative pegged coupons per bond", async () => {
-    const f = fixtures();
-    f.engine.setPrice("A", 2200);
-    const bond = {
-      id: "peg",
-      name: "Peg",
-      price: 1000,
-      faceValue: 1000,
-      maxPerUser: 1,
-      peggedYield: { symbol: "A", base: 2000, divisor: 10 },
-    };
-    const manager = new MarketsManager(
-      f.engine,
-      f.redis as any,
-      f.db as any,
-      f.challenge as any,
-      [bond],
-      [],
-      60000,
-      f.emit,
-      f.refresh,
-    );
-    await manager.start();
-    await manager.purchaseBond("u", "peg", 1, 1);
-    await manager.payCoupons(2);
-    expect(f.engine.cashOf("u")).toBe(8980);
-    expect(f.tables.holdings![0].couponsPaid).toBe(-20);
+    expect(manager.bondValueOf("u")).toBeCloseTo(10_001 * (1 - 2000.2 / 20002));
     manager.stop();
   });
 });

@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { bondMarkValue } from "@qtp/shared";
 import type { Database } from "./client.js";
 import {
   bondHoldings,
@@ -187,9 +188,9 @@ export async function getChallengeValuation(
     const account = accounts.get(bond.userId);
     if (!account || challenge.type !== "new_eden") continue;
     account.bonds.push(bond);
-    // Coupons already flow into cash. Only outstanding principal, at cost, belongs
-    // here: bonds never mature in-event, so face value would be unearned PnL.
-    account.bondValue += Math.max(0, bond.quantity) * bond.price;
+    // Coupons already flow into cash. Mark remaining principal at cost ×
+    // remaining payout fraction so unearned credits are not booked as PnL.
+    account.bondValue += bondMarkValue(bond);
   }
   for (const account of accounts.values()) {
     account.marketValue = account.positionValue + account.bondValue;

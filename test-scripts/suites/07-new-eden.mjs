@@ -119,12 +119,14 @@ export async function suiteNewEden(t, ctx) {
     );
   });
 
-  await t.test("bond catalog + purchase + maxPerUser", async () => {
+  await t.test("bond catalog + once-only purchase", async () => {
     const cat = await http.get(`/api/markets/${cid()}/bonds`, { token: ctx.t1.token });
     t.ok(cat.templates.some((b) => b.id === "standard"));
+    const book = await http.get(`/api/portfolio/${cid()}`, { token: ctx.t1.token });
+    const price = (book.freeCash ?? book.cash) + 1;
     const buy = await http.post(
       "/api/markets/bonds/purchase",
-      { challengeId: cid(), bondId: "standard", quantity: 1 },
+      { challengeId: cid(), bondId: "standard", price },
       { token: ctx.t1.token },
     );
     t.eq(buy.status, "accepted");
@@ -138,29 +140,13 @@ export async function suiteNewEden(t, ctx) {
       { timeout: 15_000, label: "bond holding" },
     );
     t.eq(held.holdings[0].quantity, 1);
+    t.approx(held.holdings[0].price, price);
 
-    await http.post(
-      "/api/markets/bonds/purchase",
-      { challengeId: cid(), bondId: "standard", quantity: 1 },
-      { token: ctx.t1.token },
-    );
-    await sleep(800);
-    const again = await http.get(`/api/markets/${cid()}/bonds`, { token: ctx.t1.token });
-    const qty = again.holdings.find((h) => h.bondId === "standard")?.quantity ?? 0;
-    t.ok(qty <= 2, `maxPerUser=2, held ${qty}`);
-    await poll(
-      async () => {
-        const c = await http.get(`/api/markets/${cid()}/bonds`, { token: ctx.t1.token });
-        const n = c.holdings.find((h) => h.bondId === "standard")?.quantity ?? 0;
-        return n >= 2 ? c : null;
-      },
-      { timeout: 12_000, label: "second bond settled" },
-    );
     await t.throws(
       () =>
         http.post(
           "/api/markets/bonds/purchase",
-          { challengeId: cid(), bondId: "standard", quantity: 1 },
+          { challengeId: cid(), bondId: "standard", price: price + 1 },
           { token: ctx.t1.token },
         ),
       { status: 409, error: "bond_limit" },
@@ -172,7 +158,7 @@ export async function suiteNewEden(t, ctx) {
       () =>
         http.post(
           "/api/markets/bonds/purchase",
-          { challengeId: cid(), bondId: "nope", quantity: 1 },
+          { challengeId: cid(), bondId: "nope", price: 1 },
           { token: ctx.t1.token },
         ),
       { status: 400, error: "unknown_bond" },

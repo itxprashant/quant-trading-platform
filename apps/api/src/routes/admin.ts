@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   auctions,
@@ -25,18 +25,30 @@ import {
 } from "@qtp/db";
 import {
   EDEN_EVENT_AERIUM,
+  EDEN_EVENT_CUES,
   EDEN_EVENT_DURATION_MINUTES,
   EDEN_EVENT_OPTIONS,
+  edenCueBlockers,
+  edenCueReceiptId,
+  edenCueStatus,
+  edenEventCue,
+  edenEventFlow,
   edenEventStateAt,
   zAdminAccountEditInput,
+  zAdminEnrollInput,
   zCreateOtcInput,
   zEdenConfig,
   zEdenOptionsConfig,
   zEtfConfig,
   zPostNewsInput,
   zSymbolConfig,
+  zTraderPanel,
+  traderVisibilityOf,
   type AdminAccountView,
+  type AdminCueSheet,
+  type AdminCueView,
   type ChallengeConfig,
+  type EdenEventAction,
   type EngineCommand,
 } from "@qtp/shared";
 import { redisKeys } from "@qtp/shared";
@@ -81,6 +93,52 @@ function scriptedHaltAt(challenge: Challenge, now: number): boolean {
     minuteMs > 0 &&
     edenEventStateAt(((now - start) / minuteMs) * 60).phase === "halftime"
   );
+}
+
+function cueStepLabel(action: EdenEventAction): string {
+  switch (action.kind) {
+    case "market_open":
+      return "Open AERIUM and unfreeze";
+    case "bond_available":
+      return `List ${action.bond.name}`;
+    case "list_underlying":
+    case "list_etf":
+      return `List ${action.config.symbol}`;
+    case "freeze":
+      return "Freeze trading, offer rescue loans";
+    case "unfreeze":
+      return "Resume trading";
+    case "options_open":
+      return "Start option cycles";
+    case "news":
+      return action.audience === "premium"
+        ? "Headline to premium feed"
+        : "Headline to everyone";
+    case "auction_open":
+      return "Bidding opens";
+    case "auction_resolve":
+      return "Auction resolves";
+    case "otc_offer":
+      return `Offer to every trader (${action.expiresAtSecond - action.atSecond} s to answer)`;
+    case "etf_window":
+      return action.open ? "ETF window opens" : "ETF window closes";
+    case "vote_open":
+      return "Vote opens";
+    case "vote_resolve":
+      return "Vote closes";
+    case "grant_open":
+      return "Grant mission opens";
+    case "grant_award":
+      return "Grant awarded";
+    case "vega_prepare":
+      return "Vega bots load options";
+    case "vega_resolve":
+      return "Vega bots dump";
+    case "bot_volatility":
+      return `Bot volatility ×${action.multiplier}`;
+    case "end":
+      return "Halt, final rankings";
+  }
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
@@ -348,6 +406,44 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, hidden: body.hidden };
   });
 
+  // Hide or reveal Eden panels for non-admins. Engine work continues either way.
+  app.post("/:challengeId/trader-visibility", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      z.object({ panel: zTraderPanel, visible: z.boolean() }),
+      req.body,
+      reply,
+    );
+    if (!body) return;
+    if (!z.string().uuid().safeParse(challengeId).success)
+      return reply.code(404).send({ error: "not_found" });
+    const row = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, challengeId),
+      columns: { id: true, traderVisibility: true },
+    });
+    if (!row) return reply.code(404).send({ error: "not_found" });
+
+    const visibility = {
+      ...traderVisibilityOf(row.traderVisibility),
+      [body.panel]: body.visible,
+    };
+    await app.db
+      .update(challenges)
+      .set({ traderVisibility: visibility })
+      .where(eq(challenges.id, challengeId));
+    await publishBroadcast(app.redis, challengeId, [
+      {
+        target: "all",
+        msg: {
+          type: "trader_visibility",
+          challengeId,
+          data: visibility,
+        },
+      },
+    ]);
+    return { ok: true, visibility };
+  });
+
   // Lock / unlock a symbol for trading (dynamic asset introduction).
   app.post("/:challengeId/tradeable", async (req, reply) => {
     const { challengeId } = req.params as { challengeId: string };
@@ -597,7 +693,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { offer };
   });
 
-  // Every enrolled trader's persisted cash and inventory, for the account editor.
+  // Trader roster for the account editor: enrolled balances plus registered
+  // traders who have not joined this challenge yet.
   app.get("/:challengeId/accounts", async (req, reply) => {
     const params = validate(
       z.object({ challengeId: z.string().uuid() }),
@@ -605,7 +702,16 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       reply,
     );
     if (!params) return;
-    const [rows, held] = await Promise.all([
+    const [traders, rows, held] = await Promise.all([
+      app.db
+        .select({
+          userId: users.id,
+          username: users.username,
+          displayName: users.displayName,
+        })
+        .from(users)
+        .where(eq(users.role, "trader"))
+        .orderBy(users.username),
       app.db
         .select({
           userId: participants.userId,
@@ -616,8 +722,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         })
         .from(participants)
         .innerJoin(users, eq(users.id, participants.userId))
-        .where(eq(participants.challengeId, params.challengeId))
-        .orderBy(users.username),
+        .where(eq(participants.challengeId, params.challengeId)),
       app.db
         .select({
           userId: positions.userId,
@@ -628,17 +733,96 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         .from(positions)
         .where(eq(positions.challengeId, params.challengeId)),
     ]);
-    const accounts: AdminAccountView[] = rows.map((row) => ({
-      ...row,
-      positions: held
-        .filter((p) => p.userId === row.userId && p.quantity !== 0)
-        .map(({ symbol, quantity, avgPrice }) => ({
-          symbol,
-          quantity,
-          avgPrice,
-        })),
-    }));
+    const enrolled = new Map(
+      rows.map((row) => [
+        row.userId,
+        {
+          ...row,
+          enrolled: true,
+          positions: held
+            .filter((p) => p.userId === row.userId && p.quantity !== 0)
+            .map(({ symbol, quantity, avgPrice }) => ({
+              symbol,
+              quantity,
+              avgPrice,
+            })),
+        } satisfies AdminAccountView,
+      ]),
+    );
+    const accounts: AdminAccountView[] = traders.map((trader) => {
+      const row = enrolled.get(trader.userId);
+      if (row) return row;
+      return {
+        userId: trader.userId,
+        username: trader.username,
+        displayName: trader.displayName,
+        enrolled: false,
+        cash: 0,
+        loanDebt: 0,
+        positions: [],
+      };
+    });
+    const traderIds = new Set(traders.map((t) => t.userId));
+    for (const row of enrolled.values()) {
+      if (!traderIds.has(row.userId)) accounts.push(row);
+    }
+    accounts.sort((a, b) => a.username.localeCompare(b.username));
     return { accounts };
+  });
+
+  // Enroll registered traders in this challenge (starting cash, no join click).
+  app.post("/:challengeId/enroll", async (req, reply) => {
+    const params = validate(
+      z.object({ challengeId: z.string().uuid() }),
+      req.params,
+      reply,
+    );
+    if (!params) return;
+    const body = validate(zAdminEnrollInput, req.body, reply);
+    if (!body) return;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, params.challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+    if (
+      challenge.status === "ended" ||
+      (challenge.endsAt && challenge.endsAt.getTime() <= Date.now())
+    ) {
+      return reply.code(409).send({ error: "challenge_not_joinable" });
+    }
+
+    let ids = body.userIds ?? [];
+    if (body.allTraders) {
+      const traders = await app.db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.role, "trader"));
+      ids = traders.map((t) => t.id);
+    } else {
+      const found = await app.db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(inArray(users.id, ids), eq(users.role, "trader")));
+      ids = found.map((t) => t.id);
+    }
+    if (ids.length === 0) return { enrolled: 0, userIds: [] as string[] };
+
+    const inserted = await app.db
+      .insert(participants)
+      .values(
+        ids.map((userId) => ({
+          challengeId: params.challengeId,
+          userId,
+          startingCash: challenge.config.startingCash,
+          cash: challenge.config.startingCash,
+        })),
+      )
+      .onConflictDoNothing()
+      .returning({ userId: participants.userId });
+    return {
+      enrolled: inserted.length,
+      userIds: inserted.map((row) => row.userId),
+    };
   });
 
   // Set a trader's cash and/or inventory absolutely or by delta; the engine applies it.
@@ -929,6 +1113,117 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
+  const cueReceipts = async (challengeId: string) =>
+    app.db
+      .select({
+        actionId: eventActions.actionId,
+        completedAt: eventActions.completedAt,
+      })
+      .from(eventActions)
+      .where(eq(eventActions.challengeId, challengeId));
+
+  // Playbook cue sheet. Admin-only because it carries the scripted headlines.
+  app.get("/:challengeId/cues", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    if (!z.string().uuid().safeParse(challengeId).success)
+      return reply.code(404).send({ error: "not_found" });
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+    const rows = await cueReceipts(challenge.id);
+    const receipts = new Set(rows.map((row) => row.actionId));
+    const completedAt = new Map(
+      rows.map((row) => [row.actionId, row.completedAt]),
+    );
+    const cues: AdminCueView[] = EDEN_EVENT_CUES.map((cue) => {
+      const anchor = cue.actions[0]!.atSecond;
+      const headlines = new Map<string, AdminCueView["headlines"][number]>();
+      for (const action of cue.actions)
+        if (action.kind === "news")
+          headlines.set(action.news.id, {
+            minute: action.news.minute,
+            classification: action.news.classification,
+            text: action.news.headline,
+          });
+      return {
+        id: cue.id,
+        label: cue.label,
+        minute: cue.minute,
+        kind: cue.kind,
+        status: edenCueStatus(cue, receipts),
+        blockedBy: edenCueBlockers(cue, receipts),
+        firedAt:
+          completedAt.get(edenCueReceiptId(cue.id))?.toISOString() ?? null,
+        steps: cue.actions.map((action) => ({
+          offsetSec: action.atSecond - anchor,
+          label: cueStepLabel(action),
+          done: receipts.has(action.id),
+        })),
+        headlines: [...headlines.values()],
+      };
+    });
+    const sheet: AdminCueSheet = {
+      flow:
+        challenge.type === "new_eden"
+          ? edenEventFlow(challenge.config.eden)
+          : "host",
+      next:
+        cues.find((c) => c.status === "ready" || c.status === "blocked")?.id ??
+        null,
+      cues,
+    };
+    return sheet;
+  });
+
+  // Fire one playbook cue; the engine runs its beats with their built-in timing.
+  app.post("/:challengeId/cues/run", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(
+      z.object({ cueId: z.string().min(1).max(64) }),
+      req.body,
+      reply,
+    );
+    if (!body) return;
+    if (!z.string().uuid().safeParse(challengeId).success)
+      return reply.code(404).send({ error: "not_found" });
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+    if (
+      challenge.type !== "new_eden" ||
+      edenEventFlow(challenge.config.eden) !== "cues"
+    )
+      return reply.code(409).send({ error: "not_cue_mode" });
+    if (challenge.status !== "live" || challenge.finalizedAt)
+      return reply.code(409).send({ error: "challenge_not_live" });
+    const cue = edenEventCue(body.cueId);
+    if (!cue) return reply.code(404).send({ error: "unknown_cue" });
+    const receipts = new Set(
+      (await cueReceipts(challenge.id)).map((row) => row.actionId),
+    );
+    const status = edenCueStatus(cue, receipts);
+    if (status === "running" || status === "done")
+      return reply.code(409).send({ error: "cue_already_run" });
+    if (status === "blocked")
+      return reply.code(409).send({
+        error: "cue_blocked",
+        blockedBy: edenCueBlockers(cue, receipts),
+      });
+    // The engine drops OTC offers while frozen, so the cue would do nothing.
+    if (challenge.frozen && cue.actions.some((a) => a.kind === "otc_offer"))
+      return reply.code(409).send({ error: "market_frozen" });
+    const cmd: EngineCommand = {
+      type: "run_cue",
+      challengeId: challenge.id,
+      cueId: cue.id,
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, challenge.id, cmd);
+    return reply.code(202).send({ ok: true });
+  });
+
   // Reset trading state for a single challenge (orders, trades, positions, prices).
   app.post("/:challengeId/reset", async (req, reply) => {
     const { challengeId: requestedId } = req.params as { challengeId: string };
@@ -984,18 +1279,21 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         // An admin start that won the row lock before us must prevent reset.
         if (current.status === "live") return "pause_before_reset";
         await renew();
-        const config: ChallengeConfig = current.config.eden?.eventScript
-          ? {
-              ...current.config,
-              symbols: [{ ...EDEN_EVENT_AERIUM }],
-              eden: {
-                ...current.config.eden,
-                bonds: [],
-                etfs: [],
-                options: { ...EDEN_EVENT_OPTIONS, enabled: false },
-              },
-            }
-          : current.config;
+        // Both playbook flows grow the config as they run; restore their preset.
+        const eden = current.config.eden;
+        const config: ChallengeConfig =
+          eden && edenEventFlow(eden) !== "host"
+            ? {
+                ...current.config,
+                symbols: [{ ...EDEN_EVENT_AERIUM }],
+                eden: {
+                  ...eden,
+                  bonds: [],
+                  etfs: [],
+                  options: { ...EDEN_EVENT_OPTIONS, enabled: false },
+                },
+              }
+            : current.config;
         // Hold this row lock until cache cleanup completes, so lifecycle writers
         // cannot start a new run halfway through the reset.
         await tx

@@ -19,6 +19,7 @@ import {
   type ScorablePortfolio,
 } from "@qtp/core";
 import {
+  bondMarkValue,
   redisKeys,
   type BondHolding,
   type Loan,
@@ -234,10 +235,7 @@ export async function portfolioRoutes(app: FastifyInstance): Promise<void> {
         : ((await getTraderMetrics(app.redis, challengeId, req.user.sub)) ??
           undefined);
 
-      marketValue += bondRows.reduce(
-        (sum, b) => sum + Math.max(0, b.quantity) * b.price,
-        0,
-      );
+      marketValue += bondRows.reduce((sum, b) => sum + bondMarkValue(b), 0);
       const loanDebt = isEden
         ? (finalAccount?.loanDebt ?? participant.loanDebt)
         : 0;

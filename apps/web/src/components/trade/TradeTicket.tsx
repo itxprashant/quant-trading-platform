@@ -20,7 +20,6 @@ export function TradeTicket({
   refreshKey = 0,
   price,
   onPriceChange,
-  refPrice,
   frozen = false,
   positionQty = 0,
 }: {
@@ -64,7 +63,6 @@ export function TradeTicket({
     loadOpen();
   }, [loadOpen, refreshKey]);
 
-  const qtyNum = parseInt(quantity, 10) || 0;
   const openBuyQty = openOrders
     .filter((o) => o.symbol === symbol && o.side === "buy")
     .reduce((s, o) => s + o.remainingQuantity, 0);
@@ -294,21 +292,6 @@ export function TradeTicket({
             from the last trade.
           </p>
         )}
-
-        {type === "limit" &&
-          refPrice != null &&
-          qtyNum > 0 &&
-          parseFloat(price) > 0 && (
-            <div className="flex flex-wrap justify-between gap-2 border-t border-border pt-3 text-xs text-muted">
-              <span>Estimated notional</span>
-              <span className="mono text-text">
-                {(qtyNum * parseFloat(price)).toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </span>
-            </div>
-          )}
 
         <Button
           variant={side === "buy" ? "buy" : "sell"}

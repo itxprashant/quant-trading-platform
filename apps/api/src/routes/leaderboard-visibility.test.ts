@@ -137,6 +137,13 @@ async function fixture(leaderboardHidden: boolean) {
         user: { sub: "admin", role: "admin" },
         log: { info: vi.fn() },
       }),
+    togglePanel: (body: unknown, id = ID) =>
+      call(handlers.get("POST /:challengeId/trader-visibility"), {
+        params: { challengeId: id },
+        body,
+        user: { sub: "admin", role: "admin" },
+        log: { info: vi.fn() },
+      }),
   };
 }
 
@@ -203,6 +210,45 @@ describe("admin leaderboard visibility toggle", () => {
       });
     expect((await f.toggle({ hidden: "yes" })).statusCode).toBe(400);
     expect(f.rows[0].leaderboardHidden).toBe(false);
+    expect(publishBroadcast).not.toHaveBeenCalled();
+  });
+});
+
+describe("admin trader visibility toggle", () => {
+  it("merges one panel into the stored map and broadcasts it", async () => {
+    const f = await fixture(false);
+    const res = await f.togglePanel({ panel: "bank", visible: false });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.visibility.bank).toBe(false);
+    expect(res.body.visibility.etfs).toBe(true);
+    expect(f.rows[0].traderVisibility.bank).toBe(false);
+    expect(publishBroadcast).toHaveBeenCalledWith({}, ID, [
+      {
+        target: "all",
+        msg: {
+          type: "trader_visibility",
+          challengeId: ID,
+          data: res.body.visibility,
+        },
+      },
+    ]);
+  });
+
+  it("rejects unknown challenges, panels, and malformed bodies", async () => {
+    const f = await fixture(false);
+    for (const id of [OTHER, "not-a-uuid"])
+      expect(await f.togglePanel({ panel: "etfs", visible: false }, id)).toEqual(
+        {
+          statusCode: 404,
+          body: { error: "not_found" },
+        },
+      );
+    expect((await f.togglePanel({ panel: "news", visible: false })).statusCode).toBe(
+      400,
+    );
+    expect((await f.togglePanel({ panel: "bank" })).statusCode).toBe(400);
+    expect(f.rows[0].traderVisibility).toBeUndefined();
     expect(publishBroadcast).not.toHaveBeenCalled();
   });
 });
