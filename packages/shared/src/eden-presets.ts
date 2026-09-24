@@ -59,10 +59,10 @@ export const EDEN_EVENT_OPTIONS: EdenOptionsConfig = {
   strikeSteps: 1,
 };
 export const EDEN_EVENT_BOTS: EdenBotConfig = {
-  hftMarketMakers: 2,
-  momentumTraders: 4,
-  vegaSnipers: 1,
-  parityArbers: 1,
+  hftMarketMakers: 0,
+  momentumTraders: 0,
+  vegaSnipers: 0,
+  parityArbers: 0,
   spread: 1,
   quoteSize: 10,
   intensity: 0.5,
@@ -83,7 +83,7 @@ export const EDEN_EVENT_DEFAULTS = {
   auctionWinnerFraction: 0.3,
   premiumLeadSec: 10,
   premiumAccessMinutes: 15,
-  otcReplySec: 15,
+  otcReplySec: 40,
   otcBargainDelaySec: 5,
   etfWindowSec: 30,
   voteDurationSec: 60,

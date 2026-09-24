@@ -67,7 +67,7 @@ In scripted mode, **do not** fire manual news, auctions, OTC offers, votes, or g
 
 In host mode the game minute drives carry, loan repayment, bond payouts, option cycle length, and the 10-minute ETF window cadence. Durations you type into the host desk (auction, vote, grant, OTC reply) are **wall seconds**. So are the 15-second option exercise window, the 30-second ETF window, and the 5-second OTC bargain settlement delay. None of these scale with `ENGINE_MINUTE_MS`.
 
-With playbook cues, the spacing between steps inside a cue is game time and **does** scale: at 6 s per game minute, the grant's award lands 30 wall seconds after you run it, not 5 minutes. The OTC reply window, auction bidding, and vote are also game time inside a cue, so at 6 s per game minute a 15-second OTC reply shrinks to 1.5 s. Rehearse player-facing beats on the real-time clock.
+With playbook cues, the spacing between steps inside a cue is game time and **does** scale: at 6 s per game minute, the grant's award lands 30 wall seconds after you run it, not 5 minutes. The OTC reply window, auction bidding, and vote are also game time inside a cue, so at 6 s per game minute a 40-second OTC reply shrinks to 4 s. Rehearse player-facing beats on the real-time clock.
 
 ---
 
@@ -192,7 +192,7 @@ Everything below is read when the challenge goes live. Save it first.
 |---------|-------|-------|
 | Starting instruments | **Instruments** | Leave only what trades at the open (the preset uses AERIUM at 1,000). List the rest live (§8). |
 | Economy rules | **New Eden economy** | Carry, loan multiplier, margin threshold, forced liquidation, position cap |
-| Bots | **New Eden economy** → bot counts | Preset: 2 HFT makers, 4 momentum, 1 vega, 1 parity arb |
+| Bots | **New Eden economy** → bot counts | Preset: all 0. Raise a count to enable that archetype. |
 | **Bond templates** | **New Eden economy** → Bond templates | **Must be saved before go-live.** The engine reads bond templates only when the challenge starts. Bonds added mid-event appear in the list but cannot be bought. For the playbook's two bonds, see the templates in `packages/shared/src/eden-presets.ts` (`EDEN_EVENT_BONDS`). |
 | Premium feed | **New Eden economy** | Auction winner fraction, news lead, access minutes |
 
@@ -304,7 +304,7 @@ To run the same story the script tells, fire these by hand. Minutes are game min
 | Minute | Do | Control |
 |--------|----|---------|
 | 0 | Open: challenge goes live, AERIUM trades | Starts at, or **Start** |
-| 2.5, then every 10 | OTC offer to one or more traders (skip during halftime) | Deal Desk offer, 15 s reply |
+| 2.5, then every 10 | OTC offer to one or more traders (skip during halftime) | Deal Desk offer, 40 s reply |
 | Every 5 (not 60–70) | Headline, alternating signal and noise | News & announcements |
 | 10 / 18 | Announce the standard / Aerium-pegged bond | Announcement (templates saved in §5.2) |
 | 15, 30, 45, 75, 90, 105, 120 | Premium auction, then an embargoed headline | Premium auction; News with embargo |
@@ -342,7 +342,7 @@ The **Playbook cues** panel lists all 46 cues in playbook order, each with its g
 | Cue | Playbook minute | What it runs | Needs |
 |-----|-----------------|--------------|-------|
 | **Open market** | 0 | Lists AERIUM and unfreezes the market | — |
-| Deal Desk slot (12) | 2.5, 12.5 … 122.5, not 62.5 | One playbook offer to every trader, 15 s to answer | Open market; unfrozen market |
+| Deal Desk slot (12) | 2.5, 12.5 … 122.5, not 62.5 | One playbook offer to every trader, 40 s to answer | Open market; unfrozen market |
 | Headline (15) | every 5, outside the scene minutes | Premium release, public release 10 s later | Open market, plus any symbol it moves |
 | **List** bond (2) | 10, 18 | Makes the standard / Aerium-pegged bond purchasable | Open market |
 | Premium feed auction (7) | 15, 30, 45, 75, 90, 105, 120 | Bidding for 30 s, then resolves; winners get headlines early for 15 minutes | Open market |

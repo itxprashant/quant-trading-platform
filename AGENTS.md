@@ -176,7 +176,7 @@ draft → scheduled → live → paused → ended
 
 Each challenge has isolated: command stream, event stream, broadcast channel, order books, bots, and leaderboard.
 
-**New Eden freeze (halftime):** Status stays `live` but `challenges.frozen = true`. Matching and new risk stop; the timeline, cost of carry, bond payouts, and loan deductions continue. This is **not** the same as `paused` (which tears down the runner). Halftime is scripted at game minutes 60–70.
+**New Eden freeze (halftime):** Status stays `live` but `challenges.frozen = true`. Matching and new risk stop; the timeline and cost of carry continue. Bond payouts and loan deductions pause (due loan dates are pushed forward so the break is not billed). This is **not** the same as `paused` (which tears down the runner). Halftime is scripted at game minutes 60–70.
 
 ### 7. Redis data model
 

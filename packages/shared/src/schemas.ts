@@ -109,9 +109,9 @@ export type EdenRules = z.infer<typeof zEdenRules>;
 /** Four New Eden bot archetypes (Section 4 of comp_desc). */
 export const zEdenBotConfig = z.object({
   /** HFT market makers quoting two-sided around fair value with skew. */
-  hftMarketMakers: z.number().int().min(0).max(10).default(2),
+  hftMarketMakers: z.number().int().min(0).max(10).default(0),
   /** Momentum retail bots that chase news headlines. */
-  momentumTraders: z.number().int().min(0).max(30).default(4),
+  momentumTraders: z.number().int().min(0).max(30).default(0),
   /** Vega snipers that buy volatility ahead of high-impact events. */
   vegaSnipers: z.number().int().min(0).max(10).default(0),
   /** Parity arbitrageurs enforcing put-call parity on options. */
@@ -225,6 +225,8 @@ export const zEdenConfig = z.object({
   premiumLeadSec: z.number().int().positive().default(10),
   /** Premium access duration (minutes) after winning an auction. */
   premiumAccessMinutes: z.number().int().positive().default(15),
+  /** Seconds a Deal Desk offer stays open. */
+  otcReplySec: z.number().int().min(5).max(300).default(40),
 });
 export type EdenConfig = z.infer<typeof zEdenConfig>;
 
@@ -668,7 +670,7 @@ export const zCreateOtcInput = z.object({
   /** Net cash to the trader on settlement (positive = trader is paid). */
   cashToTrader: z.number().default(0),
   /** Seconds the trader has to respond before the offer expires. */
-  expiresSec: z.number().int().min(5).max(300).default(15),
+  expiresSec: z.number().int().min(5).max(300).default(40),
 });
 export type CreateOtcInput = z.infer<typeof zCreateOtcInput>;
 

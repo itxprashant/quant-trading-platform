@@ -443,6 +443,24 @@ describe("EdenSettlements", () => {
     });
   });
 
+  it("does not collect installments while the market is frozen", async () => {
+    const f = fixture();
+    f.addLoan();
+    await f.settlements.issueLoan("loan", NOW);
+    const cash = f.engine.cashOf(user(1));
+    f.deps.challenge.frozen = true;
+    await f.settlements.repayLoans(NOW + 60_000);
+    expect(f.engine.cashOf(user(1))).toBe(cash);
+    expect(f.tables.loans![0]).toMatchObject({
+      remaining: 240,
+      nextPaymentAt: new Date(NOW + 120_000),
+    });
+    f.deps.challenge.frozen = false;
+    await f.settlements.repayLoans(NOW + 120_000);
+    expect(f.engine.cashOf(user(1))).toBe(cash - 80);
+    expect(f.tables.loans![0].remaining).toBe(160);
+  });
+
   it("drains failed funding writes before retrying, without funding twice", async () => {
     const f = fixture();
     f.addLoan();

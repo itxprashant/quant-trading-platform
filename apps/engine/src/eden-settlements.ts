@@ -181,9 +181,54 @@ export class EdenSettlements {
     await this.d.refreshPortfolios([loan.userId], now);
   }
 
+  /** Push due dates forward so a freeze does not accrue installments. */
+  private async postponeDueLoans(now: number): Promise<void> {
+    const { db, challenge, minuteMs } = this.d;
+    const rows = await db
+      .select()
+      .from(loans)
+      .where(
+        and(
+          eq(loans.challengeId, challenge.id),
+          eq(loans.status, "active"),
+          isNotNull(loans.fundedAt),
+          lte(loans.nextPaymentAt, new Date(now)),
+        ),
+      );
+    if (rows.length === 0) return;
+    const nextPaymentAt = new Date(now + minuteMs);
+    await this.commit(
+      [],
+      async (tx) => {
+        for (const loan of rows) {
+          const changed = await tx
+            .update(loans)
+            .set({ nextPaymentAt })
+            .where(
+              and(
+                eq(loans.id, loan.id),
+                eq(loans.challengeId, challenge.id),
+                eq(loans.status, "active"),
+                loan.nextPaymentAt
+                  ? eq(loans.nextPaymentAt, loan.nextPaymentAt)
+                  : isNull(loans.nextPaymentAt),
+              ),
+            )
+            .returning({ id: loans.id });
+          if (changed.length !== 1)
+            throw new Error(`Loan freeze deferral changed: ${loan.id}`);
+        }
+      },
+    );
+  }
+
   async repayLoans(now: number, final = false): Promise<void> {
     await this.drain();
     const { db, engine, challenge, minuteMs } = this.d;
+    if (challenge.frozen && !final) {
+      await this.postponeDueLoans(now);
+      return;
+    }
     const end = challenge.endsAt?.getTime();
     const close = final || (end != null && now >= end);
     const rows = await db

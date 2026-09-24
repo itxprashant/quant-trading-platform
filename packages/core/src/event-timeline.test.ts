@@ -674,7 +674,7 @@ describe("script executor", () => {
   it("skips halted/expired OTC, missing calls, missing bailout holdings, and late Vega preparation", async () => {
     const f = fixture();
     await run(f, "otc/62.5");
-    await run(f, "otc/12.5", start + 13 * 60000);
+    await run(f, "otc/12.5", start + 14 * 60000);
     await run(f, "otc/72.5");
     await run(f, "otc/112.5");
     await run(f, "vega/prepare", start + 90 * 60000);

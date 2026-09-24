@@ -301,19 +301,28 @@ describe("New Eden account and order invariants", () => {
     ).toMatchObject({ sellOrderId: "r2" });
   });
 
-  it("cancels the older own order instead of self matching", () => {
+  it("matches a trader against their own resting order", () => {
     const e = engine();
-    e.placeOrder(order({ side: "sell", price: 100 }));
+    e.placeOrder(order({ side: "buy", price: 900, quantity: 1 }));
     const events = e.placeOrder(
-      order({ orderId: "take", orderType: "market", price: null }),
+      order({
+        orderId: "take",
+        side: "sell",
+        price: 900,
+        quantity: 1,
+      }),
     );
-    expect(events.filter((ev) => ev.type === "trade")).toEqual([]);
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ orderId: "o", status: "cancelled" }),
-      ]),
-    );
-    expect(e.metricsOf("alice").volume).toBe(0);
+    expect(events.filter((ev) => ev.type === "trade")).toEqual([
+      expect.objectContaining({
+        buyerId: "alice",
+        sellerId: "alice",
+        price: 900,
+        quantity: 1,
+      }),
+    ]);
+    expect(e.openOrderCount("alice")).toBe(0);
+    expect(e.positionOf("alice", "A")).toBe(0);
+    expect(e.metricsOf("alice").volume).toBe(2);
   });
 
   it("partially filled IOC is terminal cancelled and never rests", () => {

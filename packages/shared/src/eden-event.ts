@@ -466,7 +466,7 @@ function buildSchedule(): readonly EdenEventAction[] {
     add(`otc/${offer.minute}`, offer.minute * 60, {
       kind: "otc_offer",
       offer,
-      expiresAtSecond: offer.minute * 60 + 15,
+      expiresAtSecond: offer.minute * 60 + EDEN_EVENT_DEFAULTS.otcReplySec,
     });
   }
   // Anchored to the ETF's 45-minute introduction, not process startup.

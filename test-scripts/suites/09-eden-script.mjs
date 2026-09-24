@@ -238,7 +238,7 @@ export async function suiteScriptedEden(t, ctx) {
       t.eq(offer.legs[0].quantity, 5);
       t.approx(offer.legs[0].price, 1000, 25, `offer price ${offer.legs[0].price} should be ~FV`);
       const window = (Date.parse(offer.expiresAt) - (obs.startsAt + 150 * obs.secondMs)) / obs.secondMs;
-      t.approx(window, 15, 1.5, `reply window ${window} game seconds`);
+      t.approx(window, 40, 1.5, `reply window ${window} game seconds`);
     }
   });
 

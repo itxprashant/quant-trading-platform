@@ -60,8 +60,16 @@ export function earlyLeadSec(item: NewsItem, now: number): number | null {
   return ms > 0 ? Math.ceil(ms / 1000) : null;
 }
 
-function Meta({ item, now }: { item: NewsItem; now: number }) {
-  const lead = earlyLeadSec(item, now);
+function Meta({
+  item,
+  now,
+  premium,
+}: {
+  item: NewsItem;
+  now: number;
+  premium: boolean;
+}) {
+  const lead = premium ? earlyLeadSec(item, now) : null;
   return (
     <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint">
       <span className="rounded-sm border border-border px-1 py-px text-[10px] uppercase tracking-wide text-muted">
@@ -187,7 +195,7 @@ export function NewsFeed({
             <p className="break-words text-[15px] font-medium leading-snug text-text">
               {lead.message}
             </p>
-            <Meta item={lead} now={now} />
+            <Meta item={lead} now={now} premium={premium} />
           </article>
           <ul className="divide-y divide-border">
             {rest.map((item) => (
@@ -209,7 +217,7 @@ export function NewsFeed({
                   <p className="break-words text-sm leading-snug text-text">
                     {item.message}
                   </p>
-                  <Meta item={item} now={now} />
+                  <Meta item={item} now={now} premium={premium} />
                 </div>
               </li>
             ))}

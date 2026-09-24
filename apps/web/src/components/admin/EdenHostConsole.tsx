@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import type {
-  AdminAccountView,
-  Challenge,
-  OptionContract,
-  OtcLeg,
+import {
+  EDEN_EVENT_DEFAULTS,
+  type AdminAccountView,
+  type Challenge,
+  type OptionContract,
+  type OtcLeg,
 } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
@@ -266,7 +267,11 @@ function OtcBuilder({
   const [userId, setUserId] = useState("");
   const [description, setDescription] = useState("");
   const [cashToTrader, setCashToTrader] = useState("0");
-  const [expiresSec, setExpiresSec] = useState("15");
+  const [expiresSec, setExpiresSec] = useState(
+    String(
+      challenge.config.eden?.otcReplySec ?? EDEN_EVENT_DEFAULTS.otcReplySec,
+    ),
+  );
   const [legs, setLegs] = useState<OtcLeg[]>([
     { symbol: symbols[0] ?? "", quantity: 1, price: 100 },
   ]);

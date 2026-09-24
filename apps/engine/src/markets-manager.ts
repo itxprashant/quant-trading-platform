@@ -263,6 +263,7 @@ export class MarketsManager {
   }
 
   private async payBondPayouts(now: number): Promise<void> {
+    if (this.challenge.frozen) return;
     const rows = await this.db
       .select()
       .from(bondHoldingsT)

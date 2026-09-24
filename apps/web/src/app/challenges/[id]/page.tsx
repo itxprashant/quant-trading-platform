@@ -224,14 +224,14 @@ export default function TradePage() {
       [
         {
           item: last.item,
-          early: earlyLeadSec(last.item, now) != null,
+          early: Boolean(auction.premium && earlyLeadSec(last.item, now) != null),
           receivedAt: now,
         },
         ...toasts.filter((t) => t.item.id !== last.item.id),
       ].slice(0, 8),
     );
     setNewsReceivedAt((seen) => ({ ...seen, [last.item.id]: now }));
-  }, [rt.lastNews]);
+  }, [rt.lastNews, auction.premium]);
 
   useEffect(() => {
     setAuctionMinimized(false);
@@ -563,7 +563,7 @@ export default function TradePage() {
 
         <aside
           aria-label="Markets"
-          className={cn("lg:flex", DESK_SIDE)}
+          className={cn(DESK_SIDE, "lg:flex lg:overflow-visible")}
         >
           <MarketList
             instruments={instruments}
@@ -653,20 +653,6 @@ export default function TradePage() {
                   )}
                 </span>
               )}
-              <button
-                type="button"
-                aria-pressed={chartVisible}
-                onClick={toggleChart}
-                className={cn(
-                  "flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-                  chartVisible
-                    ? "border-accent/40 bg-accent-subtle text-accent"
-                    : "border-border text-muted hover:border-border-strong hover:text-text",
-                )}
-              >
-                <LineChart className="size-3.5" aria-hidden />
-                Chart
-              </button>
             </div>
           </Panel>
 
@@ -727,23 +713,6 @@ export default function TradePage() {
             </div>
           </div>
 
-          {chartVisible && (
-            <Panel className="h-[360px] min-w-0 overflow-hidden p-1 2xl:h-[440px]">
-              {activeSymbol ? (
-                <PriceChart
-                  challengeId={challengeId}
-                  symbol={activeSymbol}
-                  lastPrice={livePrice}
-                  book={book}
-                />
-              ) : (
-                <p className="grid h-full place-items-center text-sm text-muted">
-                  No instruments are listed yet.
-                </p>
-              )}
-            </Panel>
-          )}
-
           <OpenOrders
             challengeId={challengeId}
             refreshKey={orderRefresh}
@@ -771,6 +740,44 @@ export default function TradePage() {
               frozen={marketFrozen || challenge.status !== "live"}
             />
           )}
+
+          <Panel className="min-w-0 overflow-hidden">
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <h2 className="text-xs font-medium tracking-wide text-muted">
+                Chart
+              </h2>
+              <button
+                type="button"
+                aria-pressed={chartVisible}
+                onClick={toggleChart}
+                className={cn(
+                  "flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                  chartVisible
+                    ? "border-accent/40 bg-accent-subtle text-accent"
+                    : "border-border text-muted hover:border-border-strong hover:text-text",
+                )}
+              >
+                <LineChart className="size-3.5" aria-hidden />
+                {chartVisible ? "Hide" : "Show"}
+              </button>
+            </div>
+            {chartVisible ? (
+              <div className="h-[360px] border-t border-border p-1 2xl:h-[440px]">
+                {activeSymbol ? (
+                  <PriceChart
+                    challengeId={challengeId}
+                    symbol={activeSymbol}
+                    lastPrice={livePrice}
+                    book={book}
+                  />
+                ) : (
+                  <p className="grid h-full place-items-center text-sm text-muted">
+                    No instruments are listed yet.
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </Panel>
         </div>
 
         <aside

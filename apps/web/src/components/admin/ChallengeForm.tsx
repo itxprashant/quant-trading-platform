@@ -60,11 +60,7 @@ function defaultEden(): EdenConfig & { eventScript?: boolean } {
       forcedLiquidation: true,
       positionCap: 100,
     },
-    bots: {
-      ...EDEN_EVENT_BOTS,
-      vegaSnipers: 0,
-      parityArbers: 0,
-    },
+    bots: structuredClone(EDEN_EVENT_BOTS),
     options: {
       ...EDEN_EVENT_OPTIONS,
       underlyings: [],
@@ -73,6 +69,7 @@ function defaultEden(): EdenConfig & { eventScript?: boolean } {
     auctionWinnerFraction: EDEN_EVENT_DEFAULTS.auctionWinnerFraction,
     premiumLeadSec: EDEN_EVENT_DEFAULTS.premiumLeadSec,
     premiumAccessMinutes: EDEN_EVENT_DEFAULTS.premiumAccessMinutes,
+    otcReplySec: EDEN_EVENT_DEFAULTS.otcReplySec,
   };
 }
 
@@ -722,10 +719,21 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                   }),
                 )}
               </Field>
+              <Field label="Deal reply (s)" hint="How long a Deal Desk offer stays open.">
+                {numField(eden.otcReplySec ?? EDEN_EVENT_DEFAULTS.otcReplySec, (n) =>
+                  setEden({
+                    ...eden,
+                    otcReplySec: Math.max(5, Math.min(300, Math.round(n))),
+                  }),
+                )}
+              </Field>
             </div>
             <h3 className="mb-3 mt-5 border-t border-border pt-4 text-xs font-semibold uppercase tracking-wide text-muted">
               Bot ecosystem
             </h3>
+            <p className="mb-3 text-[11px] text-faint">
+              Counts start at 0. Raise them here if you want bots in this event.
+            </p>
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label="HFT market makers">
                 {numField(eden.bots?.hftMarketMakers ?? 0, (n) =>

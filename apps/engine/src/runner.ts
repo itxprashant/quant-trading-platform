@@ -42,6 +42,7 @@ import {
   EDEN_EVENT_NEWS,
   EDEN_EVENT_VERSION,
   type BroadcastEnvelope,
+  type BondTemplate,
   type EdenConfig,
   type EdenEventAction,
   type EngineCommand,
@@ -624,7 +625,8 @@ export class ChallengeRunner {
       addSpotSymbol: (cfg, locked, ts) => this.addSpotSymbol(cfg, locked, ts),
       addEtf: (cfg, ts) => this.addEtf(cfg, ts),
       addBond: async (template) => {
-        (await this.ensureMarkets()).listBond(template);
+        const listed = (await this.ensureMarkets()).listBond(template);
+        if (listed) await this.announceBond(template, Date.now());
       },
       openOptions: async (config) => {
         this.eden = this.challenge.config.eden;
@@ -1144,6 +1146,48 @@ export class ChallengeRunner {
     ]);
   }
 
+  /** Tell every trader a government bond series is now for sale. */
+  private async announceBond(template: BondTemplate, ts: number): Promise<void> {
+    const multiplier = template.payoutMultiplier ?? 2;
+    const message = `${template.name} is listed. Choose a principal above your free cash; ${multiplier}× is paid through the close.`;
+    const item: NewsItem = {
+      id: eventActionUuid(this.challenge.id, `bond-listed/${template.id}`),
+      challengeId: this.challenge.id,
+      message,
+      level: "info",
+      feed: "announcement",
+      createdAt: new Date(ts).toISOString(),
+    };
+    await this.db
+      .insert(challengeNews)
+      .values({
+        id: item.id,
+        challengeId: this.challenge.id,
+        message,
+        level: "info",
+        feed: "announcement",
+        kind: "neutral",
+        publishedAt: new Date(ts),
+        createdAt: new Date(ts),
+      })
+      .onConflictDoNothing();
+    await pushNews(this.redis, this.challenge.id, item);
+    await publishBroadcast(this.redis, this.challenge.id, [
+      {
+        target: "all",
+        msg: { type: "news", challengeId: this.challenge.id, data: item },
+      },
+      {
+        target: "all",
+        msg: {
+          type: "alert",
+          challengeId: this.challenge.id,
+          data: { level: "info", message, ts },
+        },
+      },
+    ]);
+  }
+
   /** Apply a host account override, persist it, and tell the trader. */
   private async setAccount(
     cmd: Extract<EngineCommand, { type: "admin_set_account" }>,
@@ -1341,6 +1385,11 @@ export class ChallengeRunner {
       }
       await this.emit(events);
     });
+    // Halftime / host freeze is not a payment period for bonds or loans.
+    if (this.frozen) {
+      await this.settlements.repayLoans(now);
+      return;
+    }
     if (this.markets) {
       await step("coupons", () => this.markets!.payCoupons(now));
     }
@@ -1359,13 +1408,19 @@ export class ChallengeRunner {
           this.marginNotices.delete(id);
           continue;
         }
-        if (
+        const first = !this.marginNotices.has(id);
+        const canFlatten =
           !this.frozen &&
           this.eden.rules.forcedLiquidation &&
-          this.engine.absInventoryOf(id) > 0
-        ) {
+          this.engine.absInventoryOf(id) > 0;
+        if (canFlatten && first) {
           events.push(...this.liquidate(id, "cash exhausted", now));
-        } else if (now - (this.marginNotices.get(id) ?? 0) >= 1000) {
+        } else if (canFlatten) {
+          events.push(...this.engine.cancelUserOrders(id, now));
+          for (const c of this.engine.liquidationCommands(id, now)) {
+            events.push(...this.engine.placeOrder(c));
+          }
+        } else if (first) {
           events.push({
             type: "margin_call",
             challengeId: this.challenge.id,

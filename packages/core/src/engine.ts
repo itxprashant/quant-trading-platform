@@ -1336,14 +1336,6 @@ export class ChallengeEngine {
         if (cmd.side === "sell" && best.price < cmd.price) break;
       }
 
-      // Cancel the older crossing order rather than generate a wash trade.
-      if (best.userId === cmd.userId) {
-        book.remove(best.id);
-        events.push(this.orderUpdate(best, symbol, "cancelled", cmd.ts));
-        touched.add(symbol);
-        continue;
-      }
-
       const takerCap = Math.min(
         this.capacity(cmd.userId, symbol, cmd.side),
         cmd.force ? Infinity : this.fundable(cmd.userId, cmd.side, best.price),

@@ -756,6 +756,20 @@ describe("ChallengeRunner integration boundaries", () => {
     },
   );
 
+  it("does not re-alert a trader who is still under the margin threshold", async () => {
+    const f = fixture(true, true);
+    f.engine.restoreAccount(USER, {
+      cash: 0,
+      positions: [{ symbol: "A", quantity: 2, avgPrice: 100 }],
+    });
+    const first: EngineEvent[] = [];
+    await f.runtime.emit(first);
+    expect(first.filter((e) => e.type === "margin_call")).toHaveLength(1);
+    const again: EngineEvent[] = [];
+    await f.runtime.emit(again);
+    expect(again.filter((e) => e.type === "margin_call")).toHaveLength(0);
+  });
+
   it("disconnects the blocking reader on stop and discards a late command batch", async () => {
     const f = fixture();
     const lateRead = deferred<{
