@@ -378,7 +378,7 @@ The flagship scripted tournament ("The New Eden Exchange"). Full narrative playb
 | **Scripted** | `config.eden.eventScript: true` | Engine runs versioned 130-game-minute timeline autonomously |
 | **Manual** | `eventScript: false` | Host drives news, auctions, OTC, etc. via admin console |
 
-Enable via admin **New Eden playbook preset** (`ChallengeForm.tsx`). Seeded challenge **New Eden Exchange** has `eventScript: true` but no `startsAt` until configured.
+Enable via admin **New Eden playbook preset** (`ChallengeForm.tsx`); the checkbox can be changed while the challenge is `draft` or `scheduled`. Seeded challenge **New Eden Exchange** has `eventScript: true` but no `startsAt` until configured.
 
 ### Timeline summary (scripted)
 
@@ -424,7 +424,7 @@ Accelerated local dry run: `ENGINE_MINUTE_MS=6000 pnpm dev` (~13 wall minutes fo
 
 | Doc | Audience | Content |
 |-----|----------|---------|
-| [`docs/new-eden-simulation-guide.md`](docs/new-eden-simulation-guide.md) | Organizers | End-to-end simulation with real players — enrollment, dry run, production |
+| [`docs/new-eden-simulation-guide.md`](docs/new-eden-simulation-guide.md) | Organizers | Host-driven simulation with real players — host-mode setup, enrollment, run sheet, dry run, production |
 | [`docs/new-eden-host-guide.md`](docs/new-eden-host-guide.md) | Hosts | Manual admin controls + API reference (for manual mode or emergencies) |
 | [`docs/EVENT-IMPLEMENTATION.md`](docs/EVENT-IMPLEMENTATION.md) | Engineers | Implementation details, recovery, schema backfill, release gates |
 | [`event.md`](event.md) | Hosts | Full narrative playbook, traps, minute-by-minute script |

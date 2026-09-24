@@ -121,7 +121,13 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
 
   function togglePlaybook(enabled: boolean) {
     if (!enabled) {
-      setEden((e) => ({ ...e, eventScript: false }));
+      // The host desk's "Open cycle" keeps autoCycle, which would start a
+      // self-rolling chain on the first manual open.
+      setEden((e) => ({
+        ...e,
+        eventScript: false,
+        ...(e.options ? { options: { ...e.options, autoCycle: false } } : {}),
+      }));
       return;
     }
     setSymbols([structuredClone(EDEN_EVENT_AERIUM)]);
@@ -204,13 +210,20 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
       else await post("/api/challenges", payload);
       router.push("/admin");
     } catch (err) {
+      const code =
+        err instanceof ApiError
+          ? (err.body as { error?: unknown } | null)?.error
+          : undefined;
       const issues =
         err instanceof ApiError &&
         Array.isArray((err.body as { issues?: unknown[] })?.issues)
           ? (err.body as { issues: { path: string; message: string }[] }).issues
               .map((i) => `${i.path}: ${i.message}`)
               .join(", ")
-          : "Could not save challenge.";
+          : code === "event_clock_immutable" ||
+              code === "started_event_config_immutable"
+            ? "This event has already run, so its schedule and playbook mode are locked. Reset it first."
+            : "Could not save challenge.";
       setError(issues);
     } finally {
       setSaving(false);
@@ -258,7 +271,11 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                   type="checkbox"
                   className="size-4 accent-accent"
                   checked={eden.eventScript ?? false}
-                  disabled={!!existing && existing.status !== "draft"}
+                  disabled={
+                    !!existing &&
+                    existing.status !== "draft" &&
+                    existing.status !== "scheduled"
+                  }
                   onChange={(e) => togglePlaybook(e.target.checked)}
                 />
                 New Eden playbook preset
@@ -285,7 +302,8 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                 through a 5s settlement delay. Host mode (toggle off) has no
                 automatic timeline: the host opens markets, publishes news and
                 runs operations manually. Disabling keeps the current
-                configuration.
+                instruments and economy settings and turns off automatic option
+                cycles. The mode locks once the event has started.
               </p>
               {eden.eventScript && (
                 <p className="text-xs text-warning">

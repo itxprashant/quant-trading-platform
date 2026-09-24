@@ -202,18 +202,21 @@ describe("challenge clock/config guards", () => {
     }
   });
 
-  it("allows initial scheduling and script configuration before startup", async () => {
-    const f = await fixture();
-    const config = {
-      ...f.row().config,
-      eden: { ...f.row().config.eden, eventScript: false },
-    };
-    expect(
-      (await f.patch({ startsAt: "2026-10-02T12:00:00.000Z", config }))
-        .statusCode,
-    ).toBe(200);
-    expect(f.row().config.eden.eventScript).toBe(false);
-  });
+  it.each(["draft", "scheduled"])(
+    "allows initial scheduling and script configuration before startup (%s)",
+    async (status: string) => {
+      const f = await fixture(status);
+      const config = {
+        ...f.row().config,
+        eden: { ...f.row().config.eden, eventScript: false },
+      };
+      expect(
+        (await f.patch({ startsAt: "2026-10-02T12:00:00.000Z", config }))
+          .statusCode,
+      ).toBe(200);
+      expect(f.row().config.eden.eventScript).toBe(false);
+    },
+  );
 
   it("rejects script toggles and all config replacement after a script starts", async () => {
     const f = await fixture("paused");

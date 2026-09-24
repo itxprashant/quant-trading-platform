@@ -2,57 +2,58 @@
 
 How to run **The New Eden Exchange** on Quantstorm with real players — from a local dry run through a production rehearsal to the live tournament.
 
-This guide focuses on **simulation with humans on the platform**. The scripted timeline, economy rules, bots, and instruments are implemented in the engine; your job is to stand up the environment, enroll players on time, and stay out of the script’s way.
+This guide runs the event in **host mode**: the host drives every beat of the event (listings, news, auctions, OTC offers, halftime, votes, grants, close) from the admin page, while the engine keeps the economy, bots, and prices running underneath. Your job is to stand up the environment, enroll players, and run the event from `/admin/[id]`.
+
+A fully automated **scripted mode** also exists (see §1.2). Pick one mode per challenge before it starts; the choice cannot change once the event has run.
 
 **Related docs**
 
 | Document | Purpose |
 |----------|---------|
 | [`event.md`](../event.md) | Full host playbook — narrative, traps, and minute-by-minute script |
-| [`new-eden-host-guide.md`](./new-eden-host-guide.md) | Manual host controls and admin API reference |
+| [`new-eden-host-guide.md`](./new-eden-host-guide.md) | Every host control and its admin API request shape |
 | [`EVENT-IMPLEMENTATION.md`](./EVENT-IMPLEMENTATION.md) | Implementation details, clock semantics, and rollout notes |
 
 ---
 
-## 1. What the platform runs for you
+## 1. Host mode and scripted mode
 
-When **New Eden playbook preset** (`config.eden.eventScript: true`) is enabled, the engine executes a fixed **130-game-minute** timeline:
+The mode is the **New Eden playbook preset** checkbox on the challenge form (`config.eden.eventScript`). It can be changed while the challenge is `draft` or `scheduled`, and locks once the event has run.
 
-| Category | Automated behavior |
-|----------|-------------------|
-| **Markets** | AERIUM opens at minute 0; NEURO at 30; ORBITAL ETF at 45; options at 70 |
-| **News** | 24 ticker beats (12 signal / 12 noise) every 5 minutes outside halftime |
-| **Auctions** | 7 blind premium-feed rounds at minutes 15, 30, 45, 75, 90, 105, 120 |
-| **OTC Deal Desk** | 13 scheduled private offers (from minute 2.5, every 10 minutes; halftime skipped) |
-| **Bonds** | Standard bond at 10m; Aerium-pegged bond at 18m |
-| **ETF windows** | 30-second create/redeem windows every 10 minutes from 45m |
-| **Halftime** | Freeze at 60m, reopen at 70m (positions retained; carry and loans continue) |
-| **Policy vote** | Solidarity Tax opens at 80m, resolves at 81m |
-| **Government grant** | AERIUM hoarding mission at 100m, awarded at 105m |
-| **Bots** | HFT market makers, momentum traders, vega snipers, parity arbers |
-| **Economy** | Cost of carry, margin calls, forced liquidation, predatory loans (2× repay bleed) |
-| **Close** | Final halt, option expiry, debt closeout, durable rankings at 130m |
+### 1.1 Host mode (preset off) — this guide
 
-**Host rule:** Do **not** manually fire news, auctions, OTC offers, votes, or grants while the script is running — you will double events and confuse players.
+Nothing on the event timeline happens until you trigger it. These keep running on their own once the challenge is live:
 
-Manual controls remain useful for emergencies (price override, account correction, freeze). See [`new-eden-host-guide.md`](./new-eden-host-guide.md).
+| Runs automatically | Notes |
+|--------------------|-------|
+| **Economy** | Cost of carry every game minute, predatory-loan repayments, margin calls, forced liquidation |
+| **Bots** | HFT market makers, momentum traders, vega snipers, parity arbers — from the saved bot counts |
+| **Prices** | Autonomous random walk on every listed symbol, plus any drift you set |
+| **Bond coupons** | Every 5 game minutes on bonds players hold |
+| **ETF windows** | Once an ETF is listed, a 30-second create/redeem window opens every 10 game minutes; you can also open or close one by hand |
+| **Option cycles** | Each cycle you open closes itself after its cycle length and opens a 15-second exercise window; the next cycle does not open until you open it |
+| **Auction, vote, grant deadlines** | Each resolves on its own timer once you open it |
+| **Close** | At **Ends at** (if set), or when you click **End**: trading halts, options expire, debt is closed out, final rankings are saved |
+
+Turning the preset off keeps the current instruments, cash, limits, and bot counts. It also turns off automatic option cycles, so **Open cycle** opens one cycle at a time.
+
+### 1.2 Scripted mode (preset on)
+
+The engine runs a fixed **130-game-minute** timeline by itself: listings at 10/18/30/45/70m, 24 headlines, 7 auctions, 13 OTC slots, halftime 60–70m, vote at 80m, shock at 90m, grant at 100m, close at 130m. The host only monitors. Full schedule: [`event.md`](../event.md) and `packages/shared/src/eden-event.ts`.
+
+In scripted mode, **do not** fire manual news, auctions, OTC offers, votes, or grants — they double the scripted beats. The rest of this guide assumes host mode.
 
 ---
 
-## 2. Simulation modes
+## 2. Clock
 
-| Mode | Clock | Duration | Best for |
-|------|-------|----------|----------|
-| **Accelerated dry run** | `ENGINE_MINUTE_MS=6000` (6 s / game minute) | ~13 wall minutes | Smoke-test the full script locally |
-| **Rehearsal** | `ENGINE_MINUTE_MS=60000` (default) | 130 wall minutes | Full player UX, real reaction windows |
-| **Production event** | 60 s / game minute on the VM | 2 h 10 m | The actual tournament |
+| Mode | Clock | Best for |
+|------|-------|----------|
+| **Accelerated dry run** | `ENGINE_MINUTE_MS=6000` (6 s / game minute) | Checking controls and economy locally |
+| **Rehearsal** | `ENGINE_MINUTE_MS=60000` (default) | Full player UX, real reaction windows |
+| **Production event** | 60 s / game minute on the VM | The actual tournament |
 
-**Wall-time caveats (rehearsal and production only):**
-
-- Option exercise after cycle close: **15 wall seconds**
-- OTC bargain settlement delay: **5 wall seconds**
-
-These do **not** scale with `ENGINE_MINUTE_MS`. An accelerated dry run validates the script and data flow, not interaction-window pressure.
+In host mode the game minute drives carry, loan repayment, bond coupons, option cycle length, and the 10-minute ETF window cadence. Durations you type into the host desk (auction, vote, grant, OTC reply) are **wall seconds**. So are the 15-second option exercise window, the 30-second ETF window, and the 5-second OTC bargain settlement delay. None of these scale with `ENGINE_MINUTE_MS`.
 
 ---
 
@@ -76,7 +77,7 @@ Seeded accounts:
 | Admin | `admin` | `admin1234` |
 | Traders | `trader1` … `trader8` | `trader1234` |
 
-The seed also creates a **New Eden Exchange** challenge (`scheduled`, `eventScript: true`), but **does not enroll anyone into it** — only the live directional challenge gets auto-enrolled traders.
+The seed also creates a **New Eden Exchange** challenge (`scheduled`, preset **on**), but **does not enroll anyone into it** — only the live directional challenge gets auto-enrolled traders. §5.1 switches it to host mode.
 
 ### Production
 
@@ -89,7 +90,7 @@ The seed also creates a **New Eden Exchange** challenge (`scheduled`, `eventScri
 
 ## 4. Player onboarding
 
-Real players need accounts **and** enrollment in the New Eden challenge **before minute 2.5** (first OTC slot).
+Real players need accounts **and** enrollment in the New Eden challenge before you start sending them offers.
 
 ### 4.1 Create accounts
 
@@ -118,7 +119,7 @@ done
 
 ### 4.2 Enroll in the challenge
 
-Enrollment gives each player **$10,000 starting cash** in that challenge.
+Enrollment gives each player the challenge's starting cash (**$10,000** with the preset instruments).
 
 The web UI has **no Join button**. Two paths:
 
@@ -151,9 +152,9 @@ done
 
 **Implicit join (first order)**
 
-Opening `/challenges/[id]` and placing any order auto-enrolls the player. This works for trading but **misses OTC offers** if the first order happens after minute 2.5.
+Opening `/challenges/[id]` and placing any order auto-enrolls the player.
 
-> **Critical:** Scripted OTC offers go only to traders **enrolled by each slot’s scheduled time**. Have every participant call `/join` (or place a throwaway order) **before `startsAt`**.
+> The Deal Desk offer form lists only traders who appear on the leaderboard, so a player who has not joined yet cannot receive an offer. Have everyone call `/join` (or place a throwaway order) before you start.
 
 Verify enrollment in the admin **Trader accounts** panel or `GET /api/admin/:challengeId/accounts`.
 
@@ -161,41 +162,44 @@ Verify enrollment in the admin **Trader accounts** panel or `GET /api/admin/:cha
 
 ## 5. Challenge setup
 
-### 5.1 Use the seeded challenge or create a new one
+### 5.1 Switch the seeded challenge to host mode, or create a new one
 
-**Seeded:** Admin → `/admin` → **New Eden Exchange** → open detail page.
+**Seeded:** Admin → `/admin` → **New Eden Exchange** → **Edit**. While it is still `scheduled`, uncheck **New Eden playbook preset** and click Save. The AERIUM instrument, $10,000 cash, 100-unit cap, carry, loans, and bot counts from the preset stay as they are.
 
-**New:** Admin → `/admin/new` → Type **New Eden Exchange** → enable **New Eden playbook preset**.
+**New:** Admin → `/admin/new` → Type **New Eden Exchange**, and leave **New Eden playbook preset** unchecked. To start from the preset's instruments and economy, check it once and then uncheck it before saving.
 
-The preset configures:
+If the challenge has already run, the form refuses the change ("This event has already run…"). **Reset** it first (§5.4), or create a new challenge.
 
-- Starting instrument: **AERIUM** only (FV 1000 at open)
-- Starting cash: **$10,000**
-- Position cap: **100 units** per symbol
-- Cost of carry: **$1/unit/minute**
-- Loan repay multiplier: **2×**
-- Margin call at **$0 free cash**, forced liquidation **on**
-- Default bot counts: 2 HFT makers, 4 momentum, 1 vega, 1 parity arb
+### 5.2 Configure before go-live
 
-Bonds and ETFs are **not** in the initial config — the script lists them at minutes 10, 18, and 45.
+Everything below is read when the challenge goes live. Save it first.
 
-### 5.2 Set the schedule
+| Setting | Where | Notes |
+|---------|-------|-------|
+| Starting instruments | **Instruments** | Leave only what trades at the open (the preset uses AERIUM at 1,000). List the rest live (§8). |
+| Economy rules | **New Eden economy** | Carry, loan multiplier, margin threshold, forced liquidation, position cap |
+| Bots | **New Eden economy** → bot counts | Preset: 2 HFT makers, 4 momentum, 1 vega, 1 parity arb |
+| **Bond templates** | **New Eden economy** → Bond templates | **Must be saved before go-live.** The engine reads bond templates only when the challenge starts. Bonds added mid-event appear in the list but cannot be bought. For the playbook's two bonds, see the templates in `packages/shared/src/eden-presets.ts` (`EDEN_EVENT_BONDS`). |
+| Premium feed | **New Eden economy** | Auction winner fraction, news lead, access minutes |
 
-On the challenge form:
+Bonds are purchasable from the open. If you want them to "arrive" at 10m and 18m, announce them at that point (§8); the platform cannot hold a template back.
 
-1. **Starts at** — pick the real open time (required for the engine to auto-start).
-2. **Ends at** — auto-set to **startsAt + 130 minutes** when the playbook preset is on.
+### 5.3 Set the schedule
+
+1. **Starts at** — the open. The game clock (carry, loans, coupons) counts from this time.
+2. **Ends at** — optional. If set, the engine closes the event at that time. If empty, the event runs until you click **End**. For a 130-minute event, set it to Starts at + 130 minutes. In host mode it is not filled in automatically.
 3. Save while still `draft` or `scheduled`.
+4. Only a `scheduled` challenge goes live on its own at **Starts at**. The seeded challenge is already `scheduled`. A new or reset challenge is a `draft`: click **Schedule** in the admin list, or click **Start** yourself at the open.
 
-Once live, **`startsAt`, `endsAt`, and `eventScript` are immutable**. Set the clock correctly before going live.
-
-### 5.3 Dry-run reset
+### 5.4 Dry-run reset
 
 After a test run, reset trading state without deleting users:
 
-- Admin form **Reset**, or `POST /api/admin/:challengeId/reset`
+- **End** or **Pause** the challenge first (reset is refused while it is live), then admin list **Reset**, or `POST /api/admin/:challengeId/reset`
 
-Reset clears orders, positions, news, loans, bonds, OTC, options, auctions, votes, grants, and Redis hot state. Re-set **Starts at** for the real event.
+Reset clears orders, positions, news, loans, bonds, OTC, options, auctions, votes, grants, and Redis hot state, and resets every enrolled player's cash. Enrollment is kept. The challenge returns to `draft` with **Starts at** and **Ends at** cleared.
+
+In host mode, instruments you listed during the run (NEURO, ORBITAL, option underlyings) stay in the challenge config, and the form cannot remove a listed ETF. To get back to a clean start, check and then uncheck **New Eden playbook preset**. That restores AERIUM only and clears bond templates and ETFs, so re-add your bond templates afterwards. Then set **Starts at**, save, and **Schedule** it (§5.3).
 
 ---
 
@@ -204,14 +208,15 @@ Reset clears orders, positions, news, loans, bonds, OTC, options, auctions, vote
 Complete this **before** `startsAt`:
 
 - [ ] Stack healthy: `GET /api/health`, WebSocket connects at `/ws?token=…`
-- [ ] Challenge type `new_eden`, **playbook preset enabled**
-- [ ] `startsAt` and `endsAt` saved (130-minute span)
+- [ ] Challenge type `new_eden`, **playbook preset off**
+- [ ] Bond templates saved (if you want bonds)
+- [ ] **Starts at** saved; **Ends at** saved or a plan to click **End**
 - [ ] Every player has an account and has **joined** the challenge
 - [ ] Enrollment count matches expected headcount in **Trader accounts**
 - [ ] Players know the URL: `/challenges/[id]` (trading terminal)
-- [ ] Host has admin tab open: `/admin/[id]`
-- [ ] Brief players on panels: **News**, **Deal Desk**, **Auction**, **Bank**, **Markets** (bonds/ETF), **Options** (from minute 70), **Vote**, grant banner
-- [ ] Optional: run `scripts/loadtest.mjs` against a **non-scripted** live challenge to validate gateway capacity — do not load-test the scripted event itself during a rehearsal
+- [ ] Host has admin tab open: `/admin/[id]`, plus a run sheet (§8.2)
+- [ ] Brief players on panels: **News**, **Deal Desk**, **Auction**, **Bank**, **Markets** (bonds/ETF), **Options**, **Vote**, grant banner
+- [ ] Optional: run `scripts/loadtest.mjs` against a separate live directional challenge to validate gateway capacity — not against the event itself
 
 ---
 
@@ -220,19 +225,17 @@ Complete this **before** `startsAt`:
 ### 7.1 Local accelerated dry run
 
 ```bash
-# Terminal 1 — 6 seconds per game minute (~13 min total)
+# Terminal 1 — 6 seconds per game minute
 ENGINE_MINUTE_MS=6000 pnpm dev
 ```
 
 Then:
 
-1. Log in as `admin` → `/admin` → **New Eden Exchange**.
-2. Set **Starts at** a minute or two ahead → Save.
+1. Log in as `admin` → `/admin` → **New Eden Exchange** → switch to host mode (§5.1).
+2. Set **Starts at** a minute or two ahead → Save (§5.3). Or click **Start** when ready.
 3. Enroll traders (§4.2).
-4. At `startsAt`, the engine flips the challenge **live** automatically.
-5. Watch the script unfold on the admin page and in a trader tab.
-
-If you manually **Start** before `startsAt`, the runner starts but keeps the market **frozen** until minute 0 — you cannot unfreeze early.
+4. When the challenge goes live, AERIUM trades immediately.
+5. Drive the event from `/admin/[id]` (§8) and watch a trader tab.
 
 ### 7.2 Full rehearsal or production (real-time)
 
@@ -244,71 +247,87 @@ pnpm dev
 # Deploy via CI registry; see AGENTS.md
 ```
 
-Timeline for players and host:
+---
 
-| Wall time (from `startsAt`) | Game minute | What happens |
-|----------------------------|-------------|--------------|
-| 0:00 | 0 | AERIUM opens; trading begins |
-| 0:02:30 | 2.5 | First OTC offers (DM modal in terminal) |
-| 0:05 | 5 | First signal headline |
-| 0:10 | 10 | Standard bond available; noise headline |
-| 0:15 | 15 | Blind auction #1 + signal headline |
-| 0:30 | 30 | NEURO lists; auction #2 |
-| 0:45 | 45 | ORBITAL ETF lists; auction #3 |
-| 1:00 | 60 | **Halftime freeze** — matching stops; carry/loans continue |
-| 1:10 | 70 | Reopen; **options** go live |
-| 1:20 | 80 | Solidarity Tax vote |
-| 1:30 | 90 | Dis-correlation shock (AERIUM −300, NEURO +200) |
-| 1:40 | 100 | Government grant mission on AERIUM |
-| 2:00 | 120 | Bot volatility ×3; final auction |
-| 2:10 | 130 | Trading halted; final rankings |
+## 8. Running the event from the admin page
 
-Full narrative and host traps: [`event.md`](../event.md).
+All controls are on `/admin/[id]` under **Live operations**, which appears once the challenge is `live`. Request shapes and edge cases for each control: [`new-eden-host-guide.md`](./new-eden-host-guide.md).
+
+### 8.1 Where each beat lives
+
+| Beat | Panel → control |
+|------|-----------------|
+| List a new spot asset | **Instrument listings** → **Spot** → symbol, price, volatility, tick |
+| List an ETF | **Instrument listings** → **ETF** → symbol + basket weights |
+| Start options | **New Eden / Host desk** → **Options** → **Open cycle** (all configured underlyings), or **Instrument listings** → **Options** (one underlying) |
+| Headline (signal / noise) | **News & announcements** → Feed **Market news** → Kind **Signal** (with FV symbol + delta) or **Noise**. **Publish at** queues it for later |
+| Volatility shock | Same form, tick **Volatility event (vega snipers react)** |
+| Early news for auction winners | Same form, **Premium embargo (s)** |
+| Operational message | **News & announcements** → Feed **Announcement** |
+| OTC offer | **New Eden / Host desk** → **Deal Desk offer** → trader, legs, cash adjustment, reply seconds |
+| Premium auction | **New Eden / Host desk** → **Premium auction** → duration → **Open auction** |
+| ETF create/redeem window | **New Eden / Host desk** → **ETF windows** → **Open window** / **Close window** |
+| Policy vote (wealth tax) | **New Eden / Host desk** → **Policy vote** → **Open vote** |
+| Government grant | **New Eden / Host desk** → **Government grant** → symbol, prize, duration → **Open grant** |
+| Halftime | **Market freeze** → **Freeze market**, later **Unfreeze market** |
+| Price move | **Live price controls** → **Drift** (toward a target) or **Set** (instant) |
+| Account correction | **Trader accounts** |
+| Hide / show rankings | Header → **Leaderboard: Visible / Hidden** |
+| Close | Admin list → **End** (or wait for **Ends at**) |
+
+A locked spot listing (the **locked** option when listing) has no unlock button; unlock it with `POST /api/admin/:id/tradeable { symbol, tradeable: true }`. List the asset when you want it to trade instead.
+
+### 8.2 Suggested run sheet (mirrors the playbook)
+
+To run the same story the script tells, fire these by hand. Minutes are game minutes from the open. Values come from `packages/shared/src/eden-presets.ts` and [`event.md`](../event.md).
+
+| Minute | Do | Control |
+|--------|----|---------|
+| 0 | Open: challenge goes live, AERIUM trades | Starts at, or **Start** |
+| 2.5, then every 10 | OTC offer to one or more traders (skip during halftime) | Deal Desk offer, 15 s reply |
+| Every 5 (not 60–70) | Headline, alternating signal and noise | News & announcements |
+| 10 / 18 | Announce the standard / Aerium-pegged bond | Announcement (templates saved in §5.2) |
+| 15, 30, 45, 75, 90, 105, 120 | Premium auction, then an embargoed headline | Premium auction; News with embargo |
+| 30 | List **NEURO** (price 500, volatility 2, tick 0.5) | Instrument listings → Spot |
+| 45 | List **ORBITAL** ETF (2 AERIUM + 1 NEURO) | Instrument listings → ETF |
+| 60 | Halftime freeze — carry and loans keep charging | Market freeze → Freeze market |
+| 70 | Reopen, then open the first option cycle on AERIUM | Unfreeze market; Options → Open cycle |
+| 75, 80, 85 … | Open the next option cycle as each one closes | Options → Open cycle |
+| 80 | Solidarity Tax vote (60 s) | Policy vote |
+| 90 | Shock: signal headline, AERIUM −300 and NEURO +200, volatility event | News & announcements |
+| 100 | Grant mission on AERIUM (300 s) | Government grant |
+| 130 | Close | **End**, or Ends at |
+
+Two scripted beats have no host control. The halftime rescue loans do not exist in host mode, though players can still borrow from the **Bank** panel at any time. The 3× bot volatility at minute 120 has no switch either; use **Drift** / **Set** or a volatility-event headline instead.
+
+### 8.3 Host tips
+
+- **Freeze is halftime.** Freezing stops new orders, matching, and bots; players can still cancel. Carry, loan repayments, and coupons keep running. Do not use **Pause** for halftime: pausing stops the engine runner for the challenge.
+- **Queue headlines ahead.** Use **Publish at** to schedule the next few headlines, so you are free for OTC and auctions.
+- **Options need a nudge.** Each cycle closes on its own, but the next one opens only when you click **Open cycle**.
+- **One OTC offer per trader per send.** For a desk-wide slot, send one offer to each trader.
+- **End runs final scoring.** Clicking **End** (or reaching Ends at) halts trading, expires options, closes out debt, and saves final rankings. It cannot be undone; use **Reset** to run again.
 
 ---
 
-## 8. What players do during the event
+## 9. What players do during the event
 
 Each trader works from **`/challenges/[id]`** — a single terminal with real-time WebSocket updates.
 
 | Panel | When it matters | Player action |
 |-------|-----------------|---------------|
 | **Order ticket / book** | Always | Limit orders on listed symbols |
-| **News ticker** | Every 5m | Read headlines; infer signal vs noise |
-| **Deal Desk** | From 2.5m | Accept / Reject / Bargain on OTC modals (15s deadline) |
-| **Auction** | Premium rounds | Submit one sealed bid per round |
+| **News ticker** | Whenever you publish | Read headlines; infer signal vs noise |
+| **Deal Desk** | When you send an offer | Accept / Reject / Bargain on the OTC modal before its deadline |
+| **Auction** | When you open a round | Submit one sealed bid per round |
 | **Bank** | When leveraged or margin-called | Request predatory loans |
-| **Markets** | From 10m / 45m | Buy bonds; create/redeem ETF during 30s windows |
-| **Options** | From 70m | Trade calls/puts; **Exercise** within 15s of cycle close |
-| **Vote** | ~80m | Yes/No on Solidarity Tax |
-| **Grant banner** | ~100m | Chase AERIUM inventory for the prize |
+| **Markets** | Once bonds / an ETF exist | Buy bonds; create/redeem ETF while a window is open |
+| **Options** | Once you open a cycle | Trade calls/puts; **Exercise** within 15 s of cycle close |
+| **Vote** | When you open a vote | Yes/No |
+| **Grant banner** | When you open a grant | Chase inventory of the target symbol |
 | **Portfolio** | Always | Monitor cash, positions, loan bleed |
 
 There is no separate “premium feed” UI — auction winners receive embargoed news early via the same news stream.
-
----
-
-## 9. Host role during simulation
-
-With the script enabled, the host is mostly **monitoring**, not driving.
-
-### Do
-
-- Keep `/admin/[id]` open; watch status, enrollment, and live panels
-- Monitor for stuck state after infra restarts (engine holds checkpoint recovery)
-- Use **Trader accounts** only for genuine corrections
-- Communicate out-of-band (Discord/Slack) for rules clarifications — the platform does not replace the Deal Desk DMs described in [`event.md`](../event.md) for *external* coordination, but **scripted OTC is in-app**
-- After a dry run, **Reset** and re-schedule for the real event
-
-### Do not
-
-- Post manual news, open manual auctions, or push manual OTC while scripted
-- Change `startsAt` / `endsAt` / playbook flag after go-live
-- Pause the challenge expecting “halftime” — halftime is an in-script **freeze**, not `paused` status
-
-### Optional manual overrides (emergencies)
-
-See [`new-eden-host-guide.md`](./new-eden-host-guide.md): price drift/set, account edit, freeze/unfreeze (blocked during scripted pre-open and halftime), reset.
 
 ---
 
@@ -326,19 +345,21 @@ API_URL=http://localhost:8000 WS_URL=ws://localhost:8080 node test-scripts/run.m
 node test-scripts/run.mjs
 ```
 
-Suite `09-eden-script.mjs` specifically watches a scripted New Eden through early timeline beats (open, first OTC, first headline).
+Suite `07-new-eden.mjs` exercises the host controls. `09-eden-script.mjs` covers scripted mode.
 
 ### Manual acceptance during rehearsal
 
 Confirm with real players:
 
-- [ ] All enrolled traders received cash = $10,000 at join
-- [ ] OTC modal appears by minute 2.5 with Accept/Reject/Bargain
+- [ ] All enrolled traders received the starting cash at join
+- [ ] Carry is charged each game minute on open inventory
+- [ ] OTC modal appears with Accept/Reject/Bargain when you send an offer
 - [ ] Signal headline moves prices; noise headline moves bots but not FV
 - [ ] Auction round: bid → cutoff published → early news for winners
-- [ ] Halftime at 60m stops matching; reopen at 70m enables options
+- [ ] New listings (spot, ETF, options) appear in every trader's market list
+- [ ] Freeze stops matching; unfreeze restores it
 - [ ] Vote and grant banners appear; tax/grant cash changes on portfolio
-- [ ] Final leaderboard and “Trading halted” message at 130m
+- [ ] **End** shows the “Trading halted” message and final leaderboard
 
 ---
 
@@ -349,7 +370,7 @@ For a production simulation on `quantstorm-2026.site`:
 1. Merge to `main` and wait for **Publish Docker Images** CI.
 2. Deploy: `REGISTRY=quantadevclub.azurecr.io IMAGE_TAG=sha-$(git rev-parse --short HEAD) ./scripts/registry-vm-deploy.sh`
 3. Confirm `ENGINE_MINUTE_MS` is consistent across engine containers.
-4. Create or reset the New Eden challenge in admin; set production `startsAt`.
+4. Create or reset the New Eden challenge in admin, set it to host mode, and set production `startsAt`.
 5. Share player link: `https://quantstorm-2026.site/challenges/[id]`
 6. Enroll players via §4.2 before the open.
 
@@ -361,20 +382,23 @@ If schema changed, run migrate via compose (`db:push` in migrate image) before w
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Challenge never goes live | `startsAt` is null | Set **Starts at** and save |
-| Player sees no portfolio / OTC | Not enrolled | `POST /api/challenges/:id/join` before 2.5m |
-| Double headlines or auctions | Host fired manual actions during script | Reset; do not duplicate scripted ops |
-| Options exercise feels “too fast” in dry run | 15s wall window does not scale | Rehearse at real-time clock |
+| Challenge never goes live | `startsAt` is null, or the challenge is still `draft` | Set **Starts at**, save, then **Schedule**; or click **Start** |
+| Events fire on their own | Playbook preset is on (scripted mode) | Before the event: turn it off (§5.1). After it has run: **Reset**, then turn it off |
+| Preset checkbox is greyed out | Challenge is live, paused, or ended | **Reset** (it returns to `draft`), change the mode, then schedule it again |
+| "This event has already run…" on save | The challenge has engine state from an earlier run | **Reset**, then save again |
+| Bond shows in the list but purchase does nothing | Template was added after go-live | Save bond templates before go-live (§5.2) |
+| Player missing from the Deal Desk trader list | Not enrolled | `POST /api/challenges/:id/join`, then reload the admin page |
+| Option cycles stop after one | Expected in host mode | Click **Open cycle** for each new cycle |
+| Options exercise feels “too fast” in dry run | 15 s wall window does not scale | Rehearse at real-time clock |
 | Prices flat / no bots | Engine not holding lock or challenge not live | Check engine logs; confirm Redis |
-| `event_clock_immutable` on save | Editing schedule after start | Reset challenge or create a new one |
+| `event_clock_immutable` from the API | Editing schedule or mode after start | Reset challenge or create a new one |
 | Trader cannot register | Rate limit | Wait or register from another IP |
-| Halftime confusion | Expecting `paused` status | Normal — status stays `live`, market frozen |
 
 ---
 
 ## 13. End-to-end recipe (copy-paste)
 
-**Local accelerated simulation with 8 real players:**
+**Local accelerated host-mode simulation with 8 real players:**
 
 ```bash
 pnpm infra:up && pnpm db:push && pnpm db:seed
@@ -382,12 +406,12 @@ ENGINE_MINUTE_MS=6000 pnpm dev
 ```
 
 1. Admin → `/admin` → **New Eden Exchange** → note challenge ID from URL.
-2. Set **Starts at** → Save.
+2. Uncheck **New Eden playbook preset**; set **Starts at** (and optionally **Ends at**) → Save.
 3. Run bulk enroll script from §4.2.
 4. Open 8 browser profiles (or incognito tabs) → `/login` as `trader1`…`trader8`.
-5. Each opens `/challenges/[id]` before `startsAt`.
-6. Admin watches `/admin/[id]`; do not touch scripted controls.
-7. After ~13 minutes, confirm final rankings → **Reset** → set real `startsAt` for the live event.
+5. Each opens `/challenges/[id]`.
+6. When it goes live, drive the run sheet from `/admin/[id]` (§8.2).
+7. Click **End**, confirm final rankings → **Reset** → restore a clean config (§5.4) → set the real **Starts at** → **Schedule**.
 
 ---
 
@@ -396,10 +420,9 @@ ENGINE_MINUTE_MS=6000 pnpm dev
 | Item | Value |
 |------|-------|
 | Challenge type | `new_eden` |
-| Script length | 130 game minutes |
-| Starting cash | $10,000 |
-| Instruments (timeline) | AERIUM → NEURO (30m) → ORBITAL ETF (45m) → options (70m) |
-| Admin console | `/admin/[challengeId]` |
+| Mode switch | **New Eden playbook preset** (`config.eden.eventScript`), `draft` / `scheduled` only |
+| Starting cash (preset) | $10,000 |
+| Admin console | `/admin/[challengeId]` → Live operations |
 | Trader terminal | `/challenges/[challengeId]` |
 | Join API | `POST /api/challenges/:id/join` |
 | Game clock env | `ENGINE_MINUTE_MS` (default 60000) |
