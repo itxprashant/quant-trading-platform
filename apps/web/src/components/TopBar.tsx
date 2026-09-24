@@ -12,7 +12,7 @@ export function Brand() {
   return (
     <Link
       href="/"
-      aria-label="Quanta home"
+      aria-label="Quantstorm home"
       className="flex shrink-0 items-center gap-2.5"
     >
       <svg
@@ -29,7 +29,7 @@ export function Brand() {
         />
       </svg>
       <span className="text-[21px] font-semibold tracking-[-0.06em]">
-        quanta<span className="text-accent">.</span>
+        quantstorm<span className="text-accent">.</span>
       </span>
     </Link>
   );

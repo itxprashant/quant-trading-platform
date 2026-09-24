@@ -1,6 +1,6 @@
 # New Eden — Host Runbook
 
-A practical guide for running a **New Eden** event on Quanta. It maps every
+A practical guide for running a **New Eden** event on Quantstorm. It maps every
 game mechanic to the concrete host action that drives it — which control in the
 admin UI, and the REST endpoint underneath for scripting or emergencies.
 

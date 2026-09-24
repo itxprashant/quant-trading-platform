@@ -1,12 +1,12 @@
-# AGENTS.md — Quanta Quant Trading Platform
+# AGENTS.md — Quantstorm Quant Trading Platform
 
 Guide for AI coding agents working in this repository. Read this before making changes.
 
 ## Project summary
 
-**Quanta** is a competitive quant trading challenge platform: market-making contests, directional PnL races, and the scripted **New Eden Exchange** tournament format. Participants trade synthetic instruments in real time; organizers run events via an admin UI.
+**Quantstorm** is a competitive quant trading challenge platform: market-making contests, directional PnL races, and the scripted **New Eden Exchange** tournament format. Participants trade synthetic instruments in real time; organizers run events via an admin UI.
 
-- **Production URL:** https://quanta.devclub.in
+- **Production URL:** https://quantstorm-2026.site
 - **GitHub:** https://github.com/itxprashant/quant-trading-platform
 - **Stack:** TypeScript monorepo (pnpm + turbo), Next.js 15, Fastify, Postgres 17, Redis 7, Docker
 - **Design bar:** Dark trading-terminal aesthetic — see `PRODUCT.md` and `DESIGN.md`. Data-first, dense, no generic SaaS or neon crypto clichés.
@@ -25,7 +25,7 @@ Guide for AI coding agents working in this repository. Read this before making c
 
 ### 1. High-level overview
 
-Quanta is an event-driven trading platform: the **API** accepts authenticated REST requests, the **matching engine** owns order books and emits events, the **gateway** fans out real-time updates over WebSockets, and the **scoring worker** computes leaderboards. **Postgres** is the system of record; **Redis** is the command bus, event log, hot cache, pub/sub layer, and coordination plane.
+Quantstorm is an event-driven trading platform: the **API** accepts authenticated REST requests, the **matching engine** owns order books and emits events, the **gateway** fans out real-time updates over WebSockets, and the **scoring worker** computes leaderboards. **Postgres** is the system of record; **Redis** is the command bus, event log, hot cache, pub/sub layer, and coordination plane.
 
 ```mermaid
 flowchart TB
@@ -89,7 +89,7 @@ flowchart LR
     NSG[NSG :22 :80 :443]
   end
 
-  DNS[quanta.devclub.in] --> NSG --> VM
+  DNS[quantstorm-2026.site] --> NSG --> VM
   Git --> CI
   Git --> Pub --> ACR
   ACR -->|docker pull| VM
@@ -97,7 +97,7 @@ flowchart LR
 
 | Layer | Components |
 |-------|------------|
-| **DNS / TLS** | `quanta.devclub.in` → `20.205.227.58`; Let's Encrypt via certbot |
+| **DNS / TLS** | `quantstorm-2026.site` → `20.205.227.58`; Let's Encrypt via certbot |
 | **Reverse proxy** | nginx — `/` → web, `/api/` → api, `/ws` → gateway |
 | **App containers** | migrate, api, gateway, engine, scoring, web |
 | **Data containers** | postgres (volume `qtp-pgdata`), redis (volume `qtp-redisdata`) |
@@ -575,7 +575,7 @@ Use a **non-scripted** challenge for load tests; do not load-test a live New Ede
 | VM | `quanta-b2ms` (`Standard_D2s_v3`, 8 GB) |
 | Region | `southeastasia` |
 | Public IP | `20.205.227.58` |
-| Domain | `quanta.devclub.in` (HTTPS via Let's Encrypt) |
+| Domain | `quantstorm-2026.site` (HTTPS via Let's Encrypt) |
 | SSH | `ssh -i ~/.ssh/quanta_azure azureuser@20.205.227.58` |
 | ACR | `quantadevclub.azurecr.io` |
 
@@ -643,7 +643,7 @@ See `scripts/changed-services.sh` and `scripts/lib/service-graph.sh` for depende
 | `./scripts/azure-deploy.sh` | Provision VM + initial deploy |
 | `./scripts/setup-ci-registry.sh` | Create ACR, VM docker login |
 | `./scripts/setup-github-secrets.sh` | Push ACR creds to GitHub Actions |
-| `./scripts/setup-https.sh --remote` | Certbot + TLS for `quanta.devclub.in` |
+| `./scripts/setup-https.sh --remote` | Certbot + TLS for `quantstorm-2026.site` |
 
 Full registry docs: `infra/azure/CI-REGISTRY.md`
 
@@ -668,8 +668,8 @@ Full registry docs: `infra/azure/CI-REGISTRY.md`
 GitHub Actions variables (repo settings):
 
 - `ACR_LOGIN_SERVER` = `quantadevclub.azurecr.io`
-- `NEXT_PUBLIC_API_URL` = `https://quanta.devclub.in`
-- `NEXT_PUBLIC_WS_URL` = `wss://quanta.devclub.in`
+- `NEXT_PUBLIC_API_URL` = `https://quantstorm-2026.site`
+- `NEXT_PUBLIC_WS_URL` = `wss://quantstorm-2026.site`
 
 Secrets: `ACR_USERNAME`, `ACR_PASSWORD`
 
@@ -731,7 +731,7 @@ Backend entrypoints: `api` → `dist/server.js`; others → `dist/index.js` (set
 | `DATABASE_URL` | api, engine, gateway, scoring, migrate | Postgres connection string |
 | `REDIS_URL` | api, gateway, engine, scoring | Redis connection |
 | `JWT_SECRET` | api, gateway | Must match across services |
-| `CORS_ORIGINS` | api | Production: `https://quanta.devclub.in` |
+| `CORS_ORIGINS` | api | Production: `https://quantstorm-2026.site` |
 | `NEXT_PUBLIC_API_URL` | web (build) | Baked at Docker build |
 | `NEXT_PUBLIC_WS_URL` | web (build) | Use `wss://` in production |
 | `ENGINE_TICK_MS` | engine | Autonomous price tick (default 1000 ms prod) |

@@ -83,7 +83,7 @@ export default function ChallengesPage() {
       >
         <header className="border-b border-border pb-8">
           <p className="mono mb-4 text-xs uppercase tracking-[0.16em] text-muted">
-            Quanta / Competition desk
+            Quantstorm / Competition desk
           </p>
           <div className="flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
             <div>

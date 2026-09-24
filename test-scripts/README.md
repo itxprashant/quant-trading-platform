@@ -1,6 +1,6 @@
 # Production feature tests
 
-Black-box scripts that hit the deployed Quanta stack (`https://quanta.devclub.in` by default). They check trader, admin, and New Eden challenge features, plus auth, matching, WebSocket fan-out, rate limits, and edge cases.
+Black-box scripts that hit the deployed Quantstorm stack (`https://quantstorm-2026.site` by default). They check trader, admin, and New Eden challenge features, plus auth, matching, WebSocket fan-out, rate limits, and edge cases.
 
 They **create isolated `E2E *` challenges**, never place orders on existing live events, and **end** those challenges when the run finishes. They do not reset or drop production tables.
 
@@ -14,8 +14,8 @@ Requires Node 22+ (global `fetch` + `WebSocket`). No extra packages.
 
 | Env | Default |
 |-----|---------|
-| `API_URL` | `https://quanta.devclub.in` |
-| `WS_URL` | `wss://quanta.devclub.in` |
+| `API_URL` | `https://quantstorm-2026.site` |
+| `WS_URL` | `wss://quantstorm-2026.site` |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `admin1234` |
 | `TRADER_PASSWORD` | `trader1234` |
 | `SKIP_CLEANUP=1` | leave e2e challenges live |

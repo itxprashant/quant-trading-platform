@@ -1,4 +1,4 @@
-# Quanta — Bug & Security Audit
+# Quantstorm — Bug & Security Audit
 
 **Date:** 2026-08-04
 **Commit audited:** `6652c98` (main)
@@ -53,7 +53,7 @@ The `migrate` container runs `pnpm db:push && pnpm db:seed` on every `docker com
 
 Eight trader accounts follow with the password `trader1234`. Both passwords are printed by the seed script, documented in `AGENTS.md`, and committed to a public GitHub repository.
 
-**Impact:** Anyone who reads the repository can log in to `https://quanta.devclub.in` as an administrator. Admin capability includes setting prices directly, moving fair value, issuing loans and grants to arbitrary users, creating OTC deals, posting news, deleting all trading data for a challenge, and reading the full user list. Because the account was created on the first production deploy, `onConflictDoNothing` will not overwrite it — but it will not fix it either.
+**Impact:** Anyone who reads the repository can log in to `https://quantstorm-2026.site` as an administrator. Admin capability includes setting prices directly, moving fair value, issuing loans and grants to arbitrary users, creating OTC deals, posting news, deleting all trading data for a challenge, and reading the full user list. Because the account was created on the first production deploy, `onConflictDoNothing` will not overwrite it — but it will not fix it either.
 
 **Compounding factor:** the API exposes no password-change or password-reset endpoint (`apps/api/src/routes/auth.ts` has only `register`, `login`, `me`). Even a diligent operator cannot rotate this credential through the product; it requires a direct `UPDATE` against the `users` table.
 

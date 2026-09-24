@@ -1,10 +1,10 @@
-# PRODUCT.md — Quanta
+# PRODUCT.md — Quantstorm
 
 > Product context for the impeccable design workflow. Register: **product**.
 
 ## Product Purpose
 
-Quanta is a platform for running competitive quantitative trading challenges:
+Quantstorm is a platform for running competitive quantitative trading challenges:
 market-making contests, directional PnL races, and admin-configurable formats.
 Organizers spin up events; hundreds to thousands of participants trade synthetic
 instruments in real time and are ranked on a live leaderboard. The product must

@@ -1,5 +1,5 @@
 ###############################################################################
-# Quanta platform — AWS infrastructure skeleton
+# Quantstorm platform — AWS infrastructure skeleton
 #
 # This is an intentionally high-level skeleton showing the target topology for
 # thousands of concurrent users. Fill in security groups, IAM, task definitions,
@@ -120,7 +120,7 @@ resource "aws_appautoscaling_policy" "gateway_conns" {
   target_tracking_scaling_policy_configuration {
     customized_metric_specification {
       metric_name = "qtp_ws_connections"
-      namespace   = "Quanta/${var.environment}"
+      namespace   = "Quantstorm/${var.environment}"
       statistic   = "Average"
       unit        = "Count"
     }

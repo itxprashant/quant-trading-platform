@@ -92,7 +92,7 @@ function LoginInner() {
         >
           <div>
             <p className="mono text-xs uppercase tracking-[0.16em] text-muted">
-              The Quanta exchange
+              The Quantstorm exchange
             </p>
             <h2
               id="welcome-heading"
@@ -297,7 +297,7 @@ function LoginInner() {
             <div className="mt-7 flex flex-wrap items-center gap-x-2 border-t border-border pt-5 text-sm">
               <span className="text-muted">
                 {mode === "login"
-                  ? "New to Quanta?"
+                  ? "New to Quantstorm?"
                   : "Already have an account?"}
               </span>
               <button

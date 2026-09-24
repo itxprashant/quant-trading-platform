@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Load-test harness for the Quanta platform.
+ * Load-test harness for the Quantstorm platform.
  *
  * Spins up many concurrent WebSocket clients (to exercise the gateway fan-out)
  * plus a pool of order-placing clients (to exercise API + matching engine), and

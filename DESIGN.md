@@ -1,4 +1,4 @@
-# Quanta Design System
+# Quantstorm Design System
 
 Register: **product**, with a more expressive public overview page.
 Visual direction: **exchange workbench**.

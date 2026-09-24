@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision a Standard_B2ms Azure VM and deploy Quanta via Docker Compose.
+# Provision a Standard_B2ms Azure VM and deploy Quantstorm via Docker Compose.
 #
 # Prerequisites: az login, ssh key at ~/.ssh/id_rsa.pub (or auto-generated)
 #
@@ -22,7 +22,7 @@ VM_NAME="${VM_NAME:-quanta-b2ms}"
 VM_SIZE="${VM_SIZE:-Standard_B2ms}"
 ADMIN_USER="${ADMIN_USER:-azureuser}"
 DEPLOY_DIR="${DEPLOY_DIR:-/home/${ADMIN_USER}/quanta}"
-DOMAIN="${DOMAIN:-quanta.devclub.in}"
+DOMAIN="${DOMAIN:-quantstorm-2026.site}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://${DOMAIN}}"
 
 echo "==> Azure deploy: $VM_NAME ($VM_SIZE) in $LOCATION"
@@ -229,7 +229,7 @@ fi
 
 echo ""
 echo "============================================"
-echo "  Quanta deployed on Azure B2ms"
+echo "  Quantstorm deployed on Azure B2ms"
 echo "  URL:      ${PUBLIC_BASE_URL}  (http://${PUBLIC_IP})"
 echo "  HTTPS:    ./scripts/setup-https.sh --remote  (after DNS points here)"
 echo "  Admin:    admin / admin1234"

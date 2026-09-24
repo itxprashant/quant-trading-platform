@@ -57,7 +57,7 @@ fi
 
 if [[ "$CREATE_REPO" == "1" ]] && ! gh repo view "$GITHUB_REPO" &>/dev/null; then
   echo "==> Creating GitHub repo $GITHUB_REPO..."
-  gh repo create "$GITHUB_REPO" --private --description "Quanta quant trading competition platform"
+  gh repo create "$GITHUB_REPO" --private --description "Quantstorm quant trading competition platform"
 fi
 
 if ! gh repo view "$GITHUB_REPO" &>/dev/null; then

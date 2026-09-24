@@ -1,4 +1,4 @@
-# Quanta — Quant Trading Challenge Platform
+# Quantstorm — Quant Trading Challenge Platform
 
 A polished, customizable platform for running competitive quantitative trading
 challenges (market making, directional PnL, and admin-configurable formats),

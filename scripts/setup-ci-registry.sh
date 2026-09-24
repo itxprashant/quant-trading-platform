@@ -19,7 +19,7 @@ ACR_NAME="${ACR_NAME:-quantadevclub}"
 VM_NAME="${VM_NAME:-quanta-b2ms}"
 ADMIN_USER="${ADMIN_USER:-azureuser}"
 SSH_KEY="${HOME}/.ssh/quanta_azure"
-DOMAIN="${DOMAIN:-quanta.devclub.in}"
+DOMAIN="${DOMAIN:-quantstorm-2026.site}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://${DOMAIN}}"
 SECRETS_FILE="$ROOT/.acr-github-secrets.env"
 
