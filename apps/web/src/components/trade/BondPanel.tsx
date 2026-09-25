@@ -45,7 +45,7 @@ export function useBondMarket(challengeId: string, enabled: boolean) {
 
 /**
  * Government bonds sit off the watchlist: each series is bought once, at a
- * trader-chosen principal that must exceed free cash, then pays that amount
+ * trader-chosen principal that cannot exceed free cash, then pays that amount
  * times the multiplier uniformly through the session end.
  */
 export function BondPanel({
@@ -90,7 +90,8 @@ export function BondPanel({
       busy ||
       frozen ||
       !Number.isFinite(price) ||
-      !(price > free) ||
+      price <= 0 ||
+      price > free ||
       price > 1_000_000
     )
       return;
@@ -122,8 +123,8 @@ export function BondPanel({
       />
       <div className="space-y-4 p-3">
         <p className="text-xs text-muted">
-          Each series once. Price must exceed free cash ({money(free)}). You
-          receive the chosen multiple uniformly until the session ends.
+          Each series once. Purchase cannot exceed free cash ({money(free)}).
+          You receive the chosen multiple uniformly until the session ends.
         </p>
         {refreshError && (
           <p role="alert" className="text-xs text-down">
@@ -138,7 +139,10 @@ export function BondPanel({
           const price = Number(prices[t.id]) || 0;
           const payment = loanPayment(price, multiplier, endsAt, now);
           const valid =
-            Number.isFinite(price) && price > free && price <= 1_000_000;
+            Number.isFinite(price) &&
+            price > 0 &&
+            price <= free &&
+            price <= 1_000_000;
           return (
             <div key={t.id} className="space-y-2">
               <div className="flex flex-wrap items-end justify-between gap-2">
@@ -154,8 +158,9 @@ export function BondPanel({
                   <Input
                     type="number"
                     min={0}
+                    max={Math.max(0, free)}
                     step={100}
-                    placeholder="Price"
+                    placeholder="Amount"
                     aria-label={`${t.name} price`}
                     value={prices[t.id] ?? ""}
                     onChange={(e) =>
@@ -194,6 +199,8 @@ function errText(err: unknown, fallback: string): string {
     if (code === "bond_limit") return "Already bought this bond.";
     if (code === "invalid_bond_deadline")
       return "Bonds need a future session end.";
+    if (code === "insufficient_cash")
+      return "Purchase cannot exceed free cash.";
     return code ?? fallback;
   }
   return fallback;

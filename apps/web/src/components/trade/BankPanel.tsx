@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { loanPayment } from "@/lib/eden";
 import { Landmark } from "lucide-react";
-import type { Portfolio } from "@qtp/shared";
+import { edenLoansClosed, type Portfolio } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -19,18 +19,26 @@ export function BankPanel({
   challengeId,
   portfolio,
   multiplier = 2,
+  startsAt,
   endsAt,
+  scheduledClock = false,
   carryRate = 1,
   disabled = false,
+  threshold = 0,
   onChange,
   className,
 }: {
   challengeId: string;
   portfolio: Portfolio | null;
   multiplier?: number;
+  startsAt?: string | null;
   endsAt?: string | null;
+  /** Scripted / cue events: lockout uses game minutes from the session span. */
+  scheduledClock?: boolean;
   carryRate?: number;
   disabled?: boolean;
+  /** Free-cash floor that blocks buys and starts a margin call. */
+  threshold?: number;
   onChange?: () => void;
   className?: string;
 }) {
@@ -45,8 +53,11 @@ export function BankPanel({
 
   const principal = Number(amount) || 0;
   const free = portfolio?.freeCash ?? 0;
-  const breach = free <= 0;
-  const payment = loanPayment(principal, multiplier, endsAt, now);
+  const breach = free <= threshold;
+  const lockout = edenLoansClosed(now, endsAt, startsAt, scheduledClock);
+  const payment = lockout
+    ? null
+    : loanPayment(principal, multiplier, endsAt, now);
 
   async function borrow() {
     if (
@@ -114,8 +125,8 @@ export function BankPanel({
 
       {portfolio && breach && (
         <div className="border-b border-down/30 bg-down-subtle px-3 py-1.5 text-[11px] leading-snug text-down">
-          Free cash exhausted. A margin call is live; borrowing does not undo
-          liquidation.
+          Cash below limit — working buys cancelled, sells only. Borrow to
+          restore cash before forced liquidation.
         </div>
       )}
 
@@ -156,9 +167,11 @@ export function BankPanel({
           </Button>
         </div>
         <p className="mt-1.5 text-[11px] leading-snug text-muted">
-          {payment != null
-            ? `${money(payment)}/min`
-            : "Needs a future session end"}{" "}
+          {lockout
+            ? "No new loans in the last 10 minutes"
+            : payment != null
+              ? `${money(payment)}/min`
+              : "Needs a future session end"}{" "}
           · {multiplier}× · carry {money(carryRate)}/unit
           {portfolio ? ` · ${money(carryNow)} now` : ""}
         </p>

@@ -13,6 +13,11 @@ interface VoteView {
   myVote: "yes" | "no" | null;
 }
 
+/** Hide the opening-time rich list; tax ranks are recomputed at close. */
+function publicVoteDescription(description: string): string {
+  return description.replace(/\s*Current top cohort:.*$/i, "").trim();
+}
+
 function secsLeft(expiresAt: string): number {
   return Math.max(
     0,
@@ -70,6 +75,13 @@ export function VotePanel({
   if (!proposal) return null;
 
   const open = proposal.status === "open" && secsLeft(proposal.expiresAt) > 0;
+  const resultsHoldMs = 15_000;
+  if (
+    !open &&
+    Date.now() >= new Date(proposal.expiresAt).getTime() + resultsHoldMs
+  ) {
+    return null;
+  }
   const total = proposal.yes + proposal.no;
   const yesPct = total > 0 ? Math.round((proposal.yes / total) * 100) : 0;
 
@@ -121,7 +133,9 @@ export function VotePanel({
       <div className="space-y-3 p-3">
         <div>
           <p className="text-sm font-medium">{proposal.title}</p>
-          <p className="mt-0.5 text-xs text-muted">{proposal.description}</p>
+          <p className="mt-0.5 text-xs text-muted">
+            {publicVoteDescription(proposal.description)}
+          </p>
         </div>
 
         <div className="space-y-1">

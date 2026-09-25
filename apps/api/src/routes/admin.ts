@@ -35,8 +35,10 @@ import {
   edenEventFlow,
   edenEventStateAt,
   zAdminAccountEditInput,
+  zAdminBotsInput,
+  zAdminCashAllInput,
   zAdminEnrollInput,
-  zCreateOtcInput,
+  zCreateOtcBody,
   zEdenConfig,
   zEdenOptionsConfig,
   zEtfConfig,
@@ -647,11 +649,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-  // Create a Deal Desk OTC offer for a specific trader.
+  // Create a Deal Desk OTC offer for one trader or every enrolled trader.
   app.post("/:challengeId/otc", async (req, reply) => {
     const { challengeId } = req.params as { challengeId: string };
     const body = validate(
-      zCreateOtcInput.omit({ challengeId: true }),
+      zCreateOtcBody,
       req.body,
       reply,
     );
@@ -659,38 +661,55 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     if (!(await challengeExists(challengeId))) {
       return reply.code(404).send({ error: "not_found" });
     }
+    const targets = body.sendToAll
+      ? (
+          await app.db
+            .select({ userId: participants.userId })
+            .from(participants)
+            .where(eq(participants.challengeId, challengeId))
+        ).map((r) => r.userId)
+      : body.userId
+        ? [body.userId]
+        : [];
+    if (targets.length === 0) {
+      return reply.code(409).send({ error: "no_traders" });
+    }
     const expiresAt = new Date(Date.now() + body.expiresSec * 1000);
-    const [row] = await app.db
+    const rows = await app.db
       .insert(otcOffers)
-      .values({
-        challengeId,
-        userId: body.userId,
-        description: body.description,
-        legs: body.legs,
-        cashToTrader: body.cashToTrader,
-        status: "pending",
-        expiresAt,
-        createdBy: req.user.sub,
-      })
+      .values(
+        targets.map((userId) => ({
+          challengeId,
+          userId,
+          description: body.description,
+          legs: body.legs,
+          cashToTrader: body.cashToTrader,
+          status: "pending" as const,
+          expiresAt,
+          createdBy: req.user.sub,
+        })),
+      )
       .returning();
-    const offer = {
-      id: row!.id,
+    const offers = rows.map((row) => ({
+      id: row.id,
       challengeId,
-      userId: row!.userId,
-      description: row!.description,
-      legs: row!.legs,
-      cashToTrader: row!.cashToTrader,
-      status: row!.status,
-      expiresAt: row!.expiresAt.toISOString(),
-      createdAt: row!.createdAt.toISOString(),
-    };
-    await publishBroadcast(app.redis, challengeId, [
-      {
-        target: body.userId,
-        msg: { type: "otc_offer", challengeId, data: offer },
-      },
-    ]);
-    return { offer };
+      userId: row.userId,
+      description: row.description,
+      legs: row.legs,
+      cashToTrader: row.cashToTrader,
+      status: row.status,
+      expiresAt: row.expiresAt.toISOString(),
+      createdAt: row.createdAt.toISOString(),
+    }));
+    await publishBroadcast(
+      app.redis,
+      challengeId,
+      offers.map((offer) => ({
+        target: offer.userId,
+        msg: { type: "otc_offer" as const, challengeId, data: offer },
+      })),
+    );
+    return { offer: offers[0], offers, count: offers.length };
   });
 
   // Trader roster for the account editor: enrolled balances plus registered
@@ -897,6 +916,81 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       },
       "admin account edit",
     );
+    return reply.code(202).send({ ok: true });
+  });
+
+  // Set every enrolled trader's cash to the same absolute value.
+  app.post("/:challengeId/accounts/cash-all", async (req, reply) => {
+    const params = validate(
+      z.object({ challengeId: z.string().uuid() }),
+      req.params,
+      reply,
+    );
+    if (!params) return;
+    const body = validate(zAdminCashAllInput, req.body, reply);
+    if (!body) return;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, params.challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+    if (challenge.status !== "live" || challenge.finalizedAt) {
+      return reply.code(409).send({ error: "challenge_not_live" });
+    }
+    const seated = await app.db
+      .select({ userId: participants.userId })
+      .from(participants)
+      .where(eq(participants.challengeId, params.challengeId));
+    if (seated.length === 0) {
+      return reply.code(409).send({ error: "no_traders" });
+    }
+    const ts = Date.now();
+    for (const row of seated) {
+      const cmd: EngineCommand = {
+        type: "admin_set_account",
+        challengeId: params.challengeId,
+        userId: row.userId,
+        cash: body.cash,
+        ts,
+      };
+      await publishCommand(app.redis, params.challengeId, cmd);
+    }
+    req.log.info(
+      {
+        adminId: req.user.sub,
+        challengeId: params.challengeId,
+        cash: body.cash,
+        traders: seated.length,
+      },
+      "admin set cash for all",
+    );
+    return reply.code(202).send({ ok: true, count: seated.length });
+  });
+
+  // Replace live bot counts without pausing the event.
+  app.post("/:challengeId/bots", async (req, reply) => {
+    const params = validate(
+      z.object({ challengeId: z.string().uuid() }),
+      req.params,
+      reply,
+    );
+    if (!params) return;
+    const body = validate(zAdminBotsInput, req.body, reply);
+    if (!body) return;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, params.challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+    if (challenge.status !== "live" || challenge.finalizedAt) {
+      return reply.code(409).send({ error: "challenge_not_live" });
+    }
+    const cmd: EngineCommand = {
+      type: "set_bots",
+      challengeId: params.challengeId,
+      ...(body.bots ? { bots: body.bots } : {}),
+      ...(body.edenBots ? { edenBots: body.edenBots } : {}),
+      ts: Date.now(),
+    };
+    await publishCommand(app.redis, params.challengeId, cmd);
     return reply.code(202).send({ ok: true });
   });
 

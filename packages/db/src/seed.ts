@@ -58,9 +58,9 @@ async function main() {
 
   const directionalConfig: ChallengeConfig = {
     symbols: [
-      { symbol: "X1", name: "Synthetic One", initialPrice: 100, volatility: 0.5, tickSize: 0.01 },
-      { symbol: "X2", name: "Synthetic Two", initialPrice: 100, volatility: 0.7, tickSize: 0.01 },
-      { symbol: "X3", name: "Synthetic Three", initialPrice: 100, volatility: 0.4, tickSize: 0.01 },
+      { symbol: "X1", name: "Synthetic One", initialPrice: 100, volatility: 0, tickSize: 0.01 },
+      { symbol: "X2", name: "Synthetic Two", initialPrice: 100, volatility: 0, tickSize: 0.01 },
+      { symbol: "X3", name: "Synthetic Three", initialPrice: 100, volatility: 0, tickSize: 0.01 },
     ],
     startingCash: 0,
     minPosition: -50,
@@ -75,8 +75,8 @@ async function main() {
 
   const mmConfig: ChallengeConfig = {
     symbols: [
-      { symbol: "MM1", name: "MarketMaker Alpha", initialPrice: 50, volatility: 0.3, tickSize: 0.01 },
-      { symbol: "MM2", name: "MarketMaker Beta", initialPrice: 75, volatility: 0.5, tickSize: 0.01 },
+      { symbol: "MM1", name: "MarketMaker Alpha", initialPrice: 50, volatility: 0, tickSize: 0.01 },
+      { symbol: "MM2", name: "MarketMaker Beta", initialPrice: 75, volatility: 0, tickSize: 0.01 },
     ],
     startingCash: 0,
     minPosition: -100,

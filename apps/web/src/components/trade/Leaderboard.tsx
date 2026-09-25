@@ -34,13 +34,16 @@ function Row({
   cols,
   metric,
   mm,
+  final,
 }: {
   e: LeaderboardEntry;
   highlight?: boolean;
   cols: string;
   metric: "score" | "pnl";
   mm: boolean;
+  final: boolean;
 }) {
+  const value = final ? (e.settlement ?? e.pnl) : metric === "pnl" ? e.pnl : e.score;
   return (
     <div
       className={cn(
@@ -62,12 +65,10 @@ function Row({
         </span>
       )}
       <span
-        className={cn(
-          "mono text-right",
-          dirClass(metric === "pnl" ? e.pnl : e.score),
-        )}
+        className={cn("mono text-right", !final && dirClass(value))}
+        title={final ? "Ending settlement" : undefined}
       >
-        {signed(metric === "pnl" ? e.pnl : e.score)}
+        {final ? money(value) : signed(value)}
       </span>
     </div>
   );
@@ -81,6 +82,7 @@ export function Leaderboard({
   compact = false,
   hidden = false,
   isAdmin = false,
+  final = false,
   className,
 }: {
   entries: LeaderboardEntry[];
@@ -92,20 +94,22 @@ export function Leaderboard({
   /** Host has withheld rankings from traders. */
   hidden?: boolean;
   isAdmin?: boolean;
+  /** Close-event settlement board (free cash + mid × position). */
+  final?: boolean;
   className?: string;
 }) {
   if (hidden && !isAdmin) {
     return (
       <Panel className={cn("min-w-0 overflow-hidden", className)}>
-        <PanelHeader title="Leaderboard" />
+        <PanelHeader title={final ? "Final standings" : "Leaderboard"} />
         <p className="px-3 py-6 text-center text-xs text-faint">
           Rankings are hidden by the host.
         </p>
       </Panel>
     );
   }
-  const showSpread = mm && !compact;
-  const limit = compact ? 10 : 12;
+  const showSpread = mm && !compact && !final;
+  const limit = final ? entries.length : compact ? 10 : 12;
   const me = entries.find((e) => e.userId === meId);
   const top = entries.slice(0, limit);
   const cols = compact
@@ -123,7 +127,7 @@ export function Leaderboard({
     <Panel
       className={cn("flex h-full min-w-0 flex-col overflow-hidden", className)}
     >
-      <PanelHeader title="Leaderboard">
+      <PanelHeader title={final ? "Final standings" : "Leaderboard"}>
         {hidden ? (
           <span className="rounded-sm border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning">
             Hidden from traders
@@ -154,7 +158,7 @@ export function Leaderboard({
             <span>Trader</span>
             {showSpread && <span className="text-right">Spread</span>}
             <span className="text-right">
-              {metric === "pnl" ? "PnL" : "Score"}
+              {final ? "Settlement" : metric === "pnl" ? "PnL" : "Score"}
             </span>
           </div>
           {top.length === 0 ? (
@@ -170,6 +174,7 @@ export function Leaderboard({
                 cols={cols}
                 metric={metric}
                 mm={showSpread}
+                final={final}
               />
             ))
           )}
@@ -183,7 +188,14 @@ export function Leaderboard({
           className="overflow-x-auto border-t border-border focus-visible:outline-offset-[-2px]"
         >
           <div className={minWidth}>
-            <Row e={me} highlight cols={cols} metric={metric} mm={showSpread} />
+            <Row
+              e={me}
+              highlight
+              cols={cols}
+              metric={metric}
+              mm={showSpread}
+              final={final}
+            />
           </div>
         </div>
       )}

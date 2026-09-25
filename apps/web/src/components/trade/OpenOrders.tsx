@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, X } from "lucide-react";
-import type { Order } from "@qtp/shared";
+import { formatInstrumentLabel, type Order } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { ApiError, del, get, post } from "@/lib/api";
 import { money } from "@/lib/format";
@@ -193,7 +193,9 @@ export function OpenOrders({
                     {o.side === "buy" ? "Buy" : "Sell"}
                   </td>
                   <td className="px-2 py-2 capitalize text-muted">{o.type}</td>
-                  <td className="mono px-2 py-2">{o.symbol}</td>
+                  <td className="mono px-2 py-2">
+                    {formatInstrumentLabel(o.symbol)}
+                  </td>
                   <td className="mono px-2 py-2 text-right text-muted">
                     {o.remainingQuantity}/{o.quantity}
                   </td>
@@ -206,7 +208,7 @@ export function OpenOrders({
                       onClick={() => cancel(o)}
                       disabled={cancellingAll || cancellingId === o.id}
                       className="grid size-7 place-items-center rounded-md text-muted hover:bg-down-subtle hover:text-down focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
-                      aria-label={`Cancel ${o.side} order for ${o.symbol}, ${o.remainingQuantity} remaining`}
+                      aria-label={`Cancel ${o.side} order for ${formatInstrumentLabel(o.symbol)}, ${o.remainingQuantity} remaining`}
                     >
                       {cancellingId === o.id ? (
                         <Loader2 className="size-3.5 animate-spin" />

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Portfolio, PricePoint } from "@qtp/shared";
+import { formatInstrumentLabel, type Portfolio, type PricePoint } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { FlashValue } from "@/components/ui/Value";
 import { money, signed, dirClass } from "@/lib/format";
@@ -88,7 +88,6 @@ export function PortfolioPanel({
           <>
             <div className="grid grid-cols-2 border-b border-border">
               <Stat label="Cash" value={money(portfolio.cash)} />
-              <Stat label="Market value" value={money(portfolio.marketValue)} />
               <div className="min-w-0 space-y-1 px-3 py-2.5">
                 <div className="text-[11px] text-muted">Total PnL</div>
                 <FlashValue
@@ -120,14 +119,6 @@ export function PortfolioPanel({
                   tone="text-down"
                 />
               )}
-              <div className="min-w-0 space-y-1 px-3 py-2.5">
-                <div className="text-[11px] text-muted">Score</div>
-                <FlashValue
-                  value={portfolio.score}
-                  format={(n) => money(n)}
-                  className="text-sm font-semibold text-accent"
-                />
-              </div>
             </div>
 
             {portfolio.bonds && portfolio.bonds.length > 0 && (
@@ -250,7 +241,7 @@ export function PortfolioPanel({
                               selected && "text-accent",
                             )}
                           >
-                            {p.symbol}
+                            {formatInstrumentLabel(p.symbol)}
                           </th>
                           <td
                             className={cn(

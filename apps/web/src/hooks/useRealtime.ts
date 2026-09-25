@@ -18,6 +18,7 @@ import type {
 } from "@qtp/shared";
 import { TOKEN_KEY, WS_URL } from "@/lib/config";
 import { get } from "@/lib/api";
+import { applyPortfolioUpdate } from "@/lib/portfolio";
 
 export interface TradePrint {
   symbol: string;
@@ -111,7 +112,10 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, trades };
     }
     case "portfolio":
-      return { ...state, portfolio: msg.data };
+      return {
+        ...state,
+        portfolio: applyPortfolioUpdate(state.portfolio, msg.data),
+      };
     case "leaderboard":
       return { ...state, leaderboard: msg.data };
     case "leaderboard_visibility":
@@ -151,15 +155,22 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, alerts: [alert, ...state.alerts].slice(0, ALERT_MAX) };
     }
     case "margin_call": {
+      const id = msg.data.liquidated ? "mc:flat" : "mc:warn";
       const alert: AlertMsg = {
-        id: `mc:${msg.data.ts}`,
+        id,
         level: "urgent",
         message: msg.data.liquidated
           ? `Margin call — positions liquidated (free cash $${msg.data.freeCash.toFixed(0)}).`
           : `Margin warning — free cash $${msg.data.freeCash.toFixed(0)}.`,
         ts: msg.data.ts,
       };
-      return { ...state, alerts: [alert, ...state.alerts].slice(0, ALERT_MAX) };
+      return {
+        ...state,
+        alerts: [alert, ...state.alerts.filter((a) => a.id !== id)].slice(
+          0,
+          ALERT_MAX,
+        ),
+      };
     }
     case "option_cycle":
       return { ...state, optionContracts: msg.data.contracts };
@@ -245,7 +256,7 @@ export function useRealtime(
   const [state, dispatch] = useReducer(reducer, initial);
   const wsRef = useRef<WebSocket | null>(null);
   const [, force] = useState(0);
-  const revisions = useRef({ options: 0, otc: 0, grant: 0 });
+  const revisions = useRef({ options: 0, otc: 0, grant: 0, vote: 0 });
 
   useEffect(() => {
     if (!challengeId) return;
@@ -291,6 +302,7 @@ export function useRealtime(
           if (msg.type === "otc_offer" || msg.type === "otc_result")
             revisions.current.otc++;
           if (msg.type === "grant") revisions.current.grant++;
+          if (msg.type === "vote") revisions.current.vote++;
           // Bot cancel-replace can emit many book snapshots in one tick.
           // Keep only the latest per symbol and paint once the burst settles.
           if (msg.type === "book") {
@@ -352,12 +364,16 @@ export function useRealtime(
               dispatch({ t: "restore", v: { otcOffers: v } });
           }),
         recoverEden &&
-          get<{ grant: GrantMission | null }>(`/api/votes/${challengeId}`).then(
-            (v) => {
-              if (!cancelled && started.grant === revisions.current.grant)
-                dispatch({ t: "restore", v: { grant: v.grant } });
-            },
-          ),
+          get<{
+            proposal: VoteProposal | null;
+            grant: GrantMission | null;
+          }>(`/api/votes/${challengeId}`).then((v) => {
+            if (cancelled) return;
+            const patch: Partial<RealtimeState> = {};
+            if (started.grant === revisions.current.grant) patch.grant = v.grant;
+            if (started.vote === revisions.current.vote) patch.vote = v.proposal;
+            if (Object.keys(patch).length) dispatch({ t: "restore", v: patch });
+          }),
       ]);
       loading = false;
     }

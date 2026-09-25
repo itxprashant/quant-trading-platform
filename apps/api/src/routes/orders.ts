@@ -103,6 +103,27 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       }
 
       let acceptedQty = input.quantity;
+      if (
+        !isAdmin &&
+        input.side === "buy" &&
+        challenge.type === "new_eden"
+      ) {
+        const threshold =
+          challenge.config.eden?.rules.marginCallThreshold ?? 0;
+        const [part] = await tx
+          .select({ cash: participants.cash })
+          .from(participants)
+          .where(
+            and(
+              eq(participants.challengeId, input.challengeId),
+              eq(participants.userId, req.user.sub),
+            ),
+          );
+        if ((part?.cash ?? 0) <= threshold) {
+          return { error: "buys_blocked" as const };
+        }
+      }
+
       if (!isAdmin) {
         const [posRow] = await tx
           .select({ qty: positions.quantity })
@@ -195,6 +216,9 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       return { acceptedQty, volumeRemaining: volume.remaining };
     });
     if ("error" in result) {
+      if (result.error === "buys_blocked") {
+        return reply.code(409).send({ error: "buys_blocked" });
+      }
       if (result.error === "no_capacity") {
         return reply.code(409).send({ error: "no_capacity" });
       }
@@ -225,6 +249,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       price: input.price ?? null,
       ts: Date.now(),
       ...(isAdmin ? { admin: true } : {}),
+      ...(input.timeInForce === "IOC" ? { timeInForce: "IOC" } : {}),
     };
     await publishCommand(app.redis, input.challengeId, cmd);
 

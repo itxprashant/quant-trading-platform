@@ -1,5 +1,7 @@
 import type { OrderSide, OrderStatus, OrderType } from "./domain.js";
 import type {
+  BotConfig,
+  EdenBotConfig,
   EtfConfig,
   FvEffect,
   MomentumEffect,
@@ -24,6 +26,8 @@ export type EngineCommand =
       ts: number;
       /** Bypass maxOrderQuantity (per-order and working-size) for admins. */
       admin?: boolean;
+      /** Immediate-or-cancel: fill what is available and cancel the rest. */
+      timeInForce?: "IOC";
     }
   | {
       type: "cancel_order";
@@ -219,6 +223,14 @@ export type EngineCommand =
       type: "run_cue";
       challengeId: string;
       cueId: string;
+      ts: number;
+    }
+  | {
+      /** Replace live bot counts without pausing the runner. */
+      type: "set_bots";
+      challengeId: string;
+      bots?: BotConfig;
+      edenBots?: EdenBotConfig;
       ts: number;
     }
   | {

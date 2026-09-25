@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { resolveAuction } from "./auction.js";
-import { grantWinner, tallyVote, wealthTaxTransfers } from "./policy.js";
+import {
+  grantWinner,
+  grantWinners,
+  tallyVote,
+  wealthTaxTransfers,
+} from "./policy.js";
 
 describe("resolveAuction", () => {
   it("returns no winners when nobody bids", () => {
@@ -144,6 +149,15 @@ describe("grantWinner", () => {
         { id: "c", qty: 3 },
       ]),
     ).toBe("b");
+  });
+  it("returns every holder tied at the maximum positive quantity", () => {
+    expect(
+      grantWinners([
+        { id: "a", qty: 12 },
+        { id: "b", qty: 12 },
+        { id: "c", qty: 3 },
+      ]),
+    ).toEqual(["a", "b"]);
   });
   it("returns null when nobody holds a positive position", () => {
     expect(

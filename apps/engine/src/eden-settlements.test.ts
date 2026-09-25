@@ -885,15 +885,16 @@ describe("EdenSettlements", () => {
   it("awards a deterministic grant exactly once and resolves an empty cohort", async () => {
     const f = fixture();
     f.addGrant();
-    f.engine.settleFill(user(2), "A", 3, 0);
+    f.engine.settleFill(user(2), "A", 4, 0);
     f.engine.settleFill(user(1), "A", 3, 0);
     await f.settlements.awardGrant("grant", NOW);
     await f.settlements.awardGrant("grant", NOW);
     expect(f.tables.grantMissions![0]).toMatchObject({
       status: "awarded",
-      winnerId: user(1),
+      winnerId: user(2),
     });
-    expect(f.engine.cashOf(user(1))).toBe(1100);
+    expect(f.engine.cashOf(user(2))).toBe(1100);
+    expect(f.engine.cashOf(user(1))).toBe(1000);
     f.tables.grantMissions!.push({
       ...f.tables.grantMissions![0],
       id: "empty",
@@ -905,6 +906,21 @@ describe("EdenSettlements", () => {
       status: "awarded",
       winnerId: null,
     });
+  });
+
+  it("splits the grant equally among tied largest holders", async () => {
+    const f = fixture();
+    f.addGrant();
+    f.engine.settleFill(user(2), "A", 3, 0);
+    f.engine.settleFill(user(1), "A", 3, 0);
+    await f.settlements.awardGrant("grant", NOW);
+    expect(f.tables.grantMissions![0]).toMatchObject({
+      status: "awarded",
+      winnerId: user(1),
+    });
+    expect(f.engine.cashOf(user(1))).toBe(1050);
+    expect(f.engine.cashOf(user(2))).toBe(1050);
+    expect(f.engine.cashOf(user(3))).toBe(1000);
   });
 
   it("uses a stable rescue loan intent for repeated halftime actions", async () => {

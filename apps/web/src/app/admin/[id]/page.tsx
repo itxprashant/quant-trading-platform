@@ -22,6 +22,7 @@ import { ChallengeForm } from "@/components/admin/ChallengeForm";
 import { AccountEditor } from "@/components/admin/AccountEditor";
 import { EdenHostConsole } from "@/components/admin/EdenHostConsole";
 import { PlaybookCues } from "@/components/admin/PlaybookCues";
+import { ShowFinalLeaderboard } from "@/components/trade/FinalStandings";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
@@ -313,7 +314,7 @@ function AddInstrumentControls({ challenge }: { challenge: Challenge }) {
   const [symbol, setSymbol] = useState("");
   const [name, setName] = useState("");
   const [initialPrice, setInitialPrice] = useState("100");
-  const [volatility, setVolatility] = useState("0.5");
+  const [volatility, setVolatility] = useState("0");
   const [tickSize, setTickSize] = useState("0.01");
   const [locked, setLocked] = useState(false);
 
@@ -1086,6 +1087,37 @@ function EditInner() {
                   <EdenHostConsole challenge={challenge} />
                 )}
                 <NewsControls challenge={challenge} />
+              </section>
+            )}
+            {challenge.status === "ended" && (
+              <section
+                id="final-standings"
+                aria-labelledby="final-heading"
+                className="mb-8 scroll-mt-20 space-y-4"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2
+                      id="final-heading"
+                      className="text-lg font-semibold tracking-tight"
+                    >
+                      Final standings
+                    </h2>
+                    <p className="mt-1 text-xs text-muted">
+                      Ending settlement is free cash plus each position marked
+                      at the book mid.
+                    </p>
+                  </div>
+                  <ShowFinalLeaderboard
+                    challengeId={challenge.id}
+                    hidden={challenge.leaderboardHidden}
+                    onRevealed={load}
+                  />
+                </div>
+                {challenge.type === "new_eden" &&
+                  edenEventFlow(challenge.config.eden) === "cues" && (
+                    <PlaybookCues challenge={challenge} onChange={load} />
+                  )}
               </section>
             )}
             <section

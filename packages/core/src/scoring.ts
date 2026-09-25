@@ -13,6 +13,14 @@ export function profitPnl(
   return cash + marketValue - loanDebt - startingCash;
 }
 
+/**
+ * Event-close wealth: free cash plus every asset marked at mid
+ * (`marketValue` is already Σ mid×qty plus remaining bond marks).
+ */
+export function endingSettlement(cash: number, marketValue: number): number {
+  return cash + marketValue;
+}
+
 export interface ScorablePortfolio {
   userId: string;
   pnl: number;

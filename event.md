@@ -36,7 +36,7 @@ The exchange is populated by algorithmic participants that act as both liquidity
 Separate from the open order book, the Host runs the "Deal Desk" via DMs. Deals are offered exactly on the 2.5-minute offset of the 10-minute intervals (e.g., Minutes 2.5, 12.5, 22.5...). This offset ensures deals overlap with maximum order book chaos.
 The Workflow:
     1. The Offer: Host DMs a player: "I am offering a block of X asset for $Y. You have 15 seconds to reply: ACCEPT, REJECT, or BARGAIN [Price]."
-    2. The Bargain: If a player replies BARGAIN [New Price], they run a risk. The Host runs a background probability check based on distance from Fair Value (e.g., trying to underpay by 5% gives a 10% chance of rejection; trying to underpay by 20% gives an 80% chance of instant rejection).
+    2. The Bargain: If a player replies BARGAIN [New Price], they run a risk. The Host runs a background probability check based on distance from Fair Value. Underpaying a buy or overasking a sell is linear: 0% off fair → 0% rejection; 25% off fair → 100% rejection.
     3. The Obligation: If accepted, the trade is binding. A player cannot back out if a new Ticker flash drops during the 5-second bargaining delay.
 Pre-Determined OTC Deals (Host Cheat Sheet)
 Note: These prices assume the host checks current FV. Prices below are marked as % of current FV.

@@ -128,6 +128,14 @@ type Runtime = {
     stop: ReturnType<typeof vi.fn>;
     payCoupons: ReturnType<typeof vi.fn>;
     bondValueOf: () => number;
+    bondsOf?: (userId: string) => Array<{
+      bondId: string;
+      name: string;
+      quantity: number;
+      price: number;
+      faceValue: number;
+      couponsPaid: number;
+    }>;
   };
   timeline?: Pick<EventTimeline, "tick">;
   enqueue(task: () => Promise<void>): Promise<void>;
@@ -707,7 +715,7 @@ describe("ChallengeRunner integration boundaries", () => {
   });
 
   it.each([false, true])(
-    "enforces exhausted cash immediately in emit, frozen=%s",
+    "warns on exhausted cash and flattens after the borrow grace, frozen=%s",
     async (frozen: boolean) => {
       const f = fixture(true, frozen);
       f.engine.restoreAccount(USER, {
@@ -725,17 +733,31 @@ describe("ChallengeRunner integration boundaries", () => {
       f.engine.adjustCash(USER, -1);
       const place = vi.spyOn(f.engine, "placeOrder");
       const cancel = vi.spyOn(f.engine, "cancelUserOrders");
-      const events: EngineEvent[] = [];
-      await f.runtime.emit(events);
-      expect(events).toEqual(
+      const first: EngineEvent[] = [];
+      await f.runtime.emit(first);
+      expect(first).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ type: "margin_call", userId: USER }),
+          expect.objectContaining({
+            type: "margin_call",
+            userId: USER,
+            liquidated: false,
+          }),
         ]),
       );
+      expect(first.some((e) => e.type === "trade")).toBe(false);
+      expect(f.engine.positionOf(USER, "A")).toBe(2);
+      expect(place).not.toHaveBeenCalled();
+
+      vi.setSystemTime(START + 30_000);
+      const later: EngineEvent[] = [];
+      await f.runtime.emit(later);
       if (frozen) {
         expect(place).not.toHaveBeenCalled();
-        expect(cancel).not.toHaveBeenCalled();
-        expect(events.some((e) => e.type === "trade")).toBe(false);
+        expect(cancel.mock.calls.length).toBeGreaterThan(0);
+        expect(cancel.mock.calls.every((call) => call[2] === "buy")).toBe(
+          true,
+        );
+        expect(later.some((e) => e.type === "trade")).toBe(false);
         expect(f.engine.positionOf(USER, "A")).toBe(2);
         expect(
           await f.runtime.process({
@@ -748,7 +770,7 @@ describe("ChallengeRunner integration boundaries", () => {
         ).toEqual([]);
         expect(place).not.toHaveBeenCalled();
       } else {
-        expect(events.some((e) => e.type === "trade")).toBe(true);
+        expect(later.some((e) => e.type === "trade")).toBe(true);
         expect(f.engine.positionOf(USER, "A")).toBe(0);
         expect(f.engine.cashOf(USER)).toBe(200);
       }
@@ -768,6 +790,113 @@ describe("ChallengeRunner integration boundaries", () => {
     const again: EngineEvent[] = [];
     await f.runtime.emit(again);
     expect(again.filter((e) => e.type === "margin_call")).toHaveLength(0);
+  });
+
+  it("flattens after the grace once and does not spam margin alerts", async () => {
+    const f = fixture(true, false);
+    f.engine.restoreAccount(USER, {
+      cash: 0,
+      positions: [{ symbol: "A", quantity: 2, avgPrice: 100 }],
+    });
+    const warn: EngineEvent[] = [];
+    await f.runtime.emit(warn);
+    expect(warn.filter((e) => e.type === "margin_call")).toEqual([
+      expect.objectContaining({ liquidated: false }),
+    ]);
+    expect(f.engine.positionOf(USER, "A")).toBe(2);
+
+    vi.setSystemTime(START + 30_000);
+    const flatten: EngineEvent[] = [];
+    await f.runtime.emit(flatten);
+    expect(flatten.filter((e) => e.type === "margin_call")).toHaveLength(1);
+    expect(flatten.filter((e) => e.type === "alert")).toHaveLength(0);
+
+    const again: EngineEvent[] = [];
+    await f.runtime.emit(again);
+    expect(again.filter((e) => e.type === "margin_call")).toHaveLength(0);
+    expect(again.filter((e) => e.type === "alert")).toHaveLength(0);
+  });
+
+  it("cancels working buys and blocks new buys once cash is at the floor, but still allows sells", async () => {
+    const f = fixture(true);
+    f.engine.restoreAccount(USER, {
+      cash: 100,
+      positions: [{ symbol: "A", quantity: 2, avgPrice: 100 }],
+    });
+    f.engine.placeOrder({
+      orderId: "bid",
+      userId: USER,
+      symbol: "A",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 90,
+      ts: START,
+    });
+    f.engine.placeOrder({
+      orderId: "ask",
+      userId: USER,
+      symbol: "A",
+      side: "sell",
+      orderType: "limit",
+      quantity: 1,
+      price: 110,
+      ts: START,
+    });
+    f.engine.adjustCash(USER, -100);
+    const first: EngineEvent[] = [];
+    await f.runtime.emit(first);
+    expect(first).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "order_update",
+          orderId: "bid",
+          status: "cancelled",
+        }),
+        expect.objectContaining({
+          type: "alert",
+          message: expect.stringContaining("Sells only"),
+        }),
+        expect.objectContaining({
+          type: "margin_call",
+          liquidated: false,
+        }),
+      ]),
+    );
+    expect(f.engine.snapshot("A").bids).toEqual([]);
+    expect(f.engine.snapshot("A").asks).toHaveLength(1);
+
+    const sell = await f.runtime.process({
+      type: "place_order",
+      challengeId: "challenge",
+      orderId: "00000000-0000-4000-a000-0000000000aa",
+      userId: USER,
+      symbol: "A",
+      side: "sell",
+      orderType: "limit",
+      quantity: 1,
+      price: 120,
+      ts: START,
+    });
+    expect(
+      sell.some((e) => e.type === "order_update" && e.status === "rejected"),
+    ).toBe(false);
+
+    const buy = await f.runtime.process({
+      type: "place_order",
+      challengeId: "challenge",
+      orderId: "00000000-0000-4000-a000-0000000000bb",
+      userId: USER,
+      symbol: "A",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 80,
+      ts: START,
+    });
+    expect(buy).toMatchObject([
+      expect.objectContaining({ type: "order_update", status: "rejected" }),
+    ]);
   });
 
   it("disconnects the blocking reader on stop and discards a late command batch", async () => {
@@ -828,6 +957,40 @@ describe("ChallengeRunner integration boundaries", () => {
         message: "The host adjusted your account: cash 2500.00, A 7.",
       }),
     ]);
+  });
+
+  it("includes bond holdings and their mark on live portfolio broadcasts", async () => {
+    const f = fixture(true);
+    const holding = {
+      bondId: "standard",
+      name: "Standard Bond",
+      quantity: 1,
+      price: 10000,
+      faceValue: 20000,
+      couponsPaid: 0,
+    };
+    f.runtime.markets = {
+      stop: vi.fn(),
+      payCoupons: vi.fn(),
+      bondValueOf: () => 10000,
+      bondsOf: () => [holding],
+    };
+    await f.runtime.enqueue(async () => {
+      await f.runtime.process({
+        type: "admin_set_account",
+        challengeId: "challenge",
+        userId: USER,
+        cash: 1000,
+        ts: START,
+      });
+    });
+    const envelopes = bus.publishBroadcast.mock.calls.at(-1)?.[2] as Array<{
+      msg: { type: string; data: { marketValue: number; bonds?: unknown } };
+    }>;
+    const portfolio = envelopes.find((e) => e.msg.type === "portfolio")?.msg
+      .data;
+    expect(portfolio?.bonds).toEqual([holding]);
+    expect(portfolio?.marketValue).toBe(10000);
   });
 
   it("applies a delta account edit to the live account and reports signed changes", async () => {

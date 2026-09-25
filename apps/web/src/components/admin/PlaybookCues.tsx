@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Check } from "lucide-react";
 import type { AdminCueSheet, AdminCueView, Challenge } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
@@ -9,6 +15,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ApiError, get, post } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { ShowFinalLeaderboard } from "@/components/trade/FinalStandings";
 
 const KIND_LABEL: Record<AdminCueView["kind"], string> = {
   market: "Market",
@@ -117,6 +124,16 @@ export function PlaybookCues({
   const next = sheet?.cues.find((c) => c.id === sheet.next);
   const done = sheet?.cues.filter((c) => c.status === "done").length ?? 0;
   const rows = sheet?.cues.filter((c) => !hideDone || c.status !== "done");
+  const closeDone =
+    challenge.status === "ended" ||
+    sheet?.cues.some((c) => c.id === "close" && c.status === "done") === true;
+  const boardButton = (
+    <ShowFinalLeaderboard
+      challengeId={challenge.id}
+      hidden={challenge.leaderboardHidden}
+      onRevealed={onChange}
+    />
+  );
 
   return (
     <Panel className="min-w-0 rounded-md backdrop-blur-none">
@@ -160,7 +177,16 @@ export function PlaybookCues({
                 )}
               </div>
             ) : (
-              <p className="text-sm text-muted">Every cue has run.</p>
+              <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-muted">Every cue has run.</p>
+                {closeDone && (
+                  <ShowFinalLeaderboard
+                    challengeId={challenge.id}
+                    hidden={challenge.leaderboardHidden}
+                    onRevealed={onChange}
+                  />
+                )}
+              </div>
             )}
             {next && (
               <Button
@@ -206,6 +232,11 @@ export function PlaybookCues({
                 canRun={live && busy === null}
                 busy={busy === cue.id}
                 onRun={() => run(cue)}
+                showLeaderboard={
+                  cue.id === "close" && cue.status === "done"
+                    ? boardButton
+                    : null
+                }
               />
             ))}
           </ul>
@@ -222,6 +253,7 @@ function CueRow({
   canRun,
   busy,
   onRun,
+  showLeaderboard,
 }: {
   cue: AdminCueView;
   isNext: boolean;
@@ -229,6 +261,7 @@ function CueRow({
   canRun: boolean;
   busy: boolean;
   onRun: () => void;
+  showLeaderboard?: ReactNode;
 }) {
   const stepsDone = cue.steps.filter((s) => s.done).length;
   const pending = cue.steps.find((s) => !s.done);
@@ -304,12 +337,15 @@ function CueRow({
       </div>
       <div className="flex items-center gap-2 pt-0.5">
         {cue.status === "done" ? (
-          <span className="flex items-center gap-1 text-xs text-muted">
-            <Check className="size-3.5" aria-hidden />
-            <span className="mono">
-              {cue.firedAt ? clock(cue.firedAt) : "Done"}
+          <div className="flex flex-col items-end gap-2">
+            <span className="flex items-center gap-1 text-xs text-muted">
+              <Check className="size-3.5" aria-hidden />
+              <span className="mono">
+                {cue.firedAt ? clock(cue.firedAt) : "Done"}
+              </span>
             </span>
-          </span>
+            {showLeaderboard}
+          </div>
         ) : cue.status === "running" ? (
           <Badge tone="info">Running</Badge>
         ) : (

@@ -59,7 +59,7 @@ export class EdenBotEngine {
 
   constructor(
     private readonly engine: ChallengeEngine,
-    private readonly cfg: EdenBotConfig,
+    private cfg: EdenBotConfig,
     symbols: SymbolConfig[],
   ) {
     for (const s of symbols) this.symbolCfg.set(s.symbol, s);
@@ -73,6 +73,35 @@ export class EdenBotEngine {
       this.cfg.parityArbers > 0 ||
       this.vega.size > 0
     );
+  }
+
+  setConfig(cfg: EdenBotConfig, now = Date.now()): CancelOrderCommand[] {
+    this.cfg = cfg;
+    const cancels: CancelOrderCommand[] = [];
+    for (const [key, prev] of [...this.mmQuotes]) {
+      const rank = Number(key.split(":")[2]);
+      if (!Number.isInteger(rank) || rank < cfg.hftMarketMakers) continue;
+      const botId = `bot:hft:${rank}`;
+      const symbol = key.slice(botId.length + 1);
+      if (prev.bidId)
+        cancels.push({
+          orderId: prev.bidId,
+          userId: botId,
+          symbol,
+          side: "buy",
+          ts: now,
+        });
+      if (prev.askId)
+        cancels.push({
+          orderId: prev.askId,
+          userId: botId,
+          symbol,
+          side: "sell",
+          ts: now,
+        });
+      this.mmQuotes.delete(key);
+    }
+    return cancels;
   }
 
   /** Call after manager restoration and cancellation of saved bot quotes. */

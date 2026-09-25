@@ -11,11 +11,37 @@ import type { Redis } from "@qtp/bus";
 const mocks = {
   now: 1_800_000_000_000,
   frozen: false,
+  endsInMs: 20 * 60_000,
   getFairValues: vi.fn(async () => ({ AERIUM: 1000, NEURO: 500 })),
   getPrice: vi.fn(async () => null),
   getTraderMetrics: vi.fn(async () => null),
   publishBroadcast: vi.fn(async () => {}),
   publishCommand: vi.fn(async () => {}),
+  bargainAskPct: vi.fn(
+    (
+      legs: Array<{ quantity: number; price: number; fairValue: number }>,
+      counterCash: number,
+    ) => {
+      let buyFv = 0;
+      let sellFv = 0;
+      let paidForBuys = 0;
+      let receivedForSells = 0;
+      for (const leg of legs) {
+        if (leg.quantity > 0) {
+          buyFv += leg.quantity * leg.fairValue;
+          paidForBuys += leg.quantity * leg.price;
+        } else if (leg.quantity < 0) {
+          const qty = -leg.quantity;
+          sellFv += qty * leg.fairValue;
+          receivedForSells += qty * leg.price;
+        }
+      }
+      const surplus =
+        counterCash + receivedForSells - paidForBuys + buyFv - sellFv;
+      const notional = buyFv + sellFv;
+      return surplus > 0 && notional > 0 ? surplus / notional : 0;
+    },
+  ),
   bargainRejectProbability: vi.fn(() => 0),
   computeScore: vi.fn(() => 0),
   profitPnl: vi.fn(() => 0),
@@ -89,6 +115,7 @@ const apps: ReturnType<typeof Fastify>[] = [];
 
 async function fixture() {
   mocks.frozen = false;
+  mocks.endsInMs = 20 * 60_000;
   vi.spyOn(Date, "now").mockImplementation(() => mocks.now);
   const offer: any = {
     id: offerId,
@@ -119,7 +146,7 @@ async function fixture() {
           status: "live",
           type: "new_eden",
           frozen: mocks.frozen,
-          endsAt: new Date(mocks.now + 60000),
+          endsAt: new Date(mocks.now + mocks.endsInMs),
           config: { eden: { rules: { positionCap: 100 } } },
         }),
       },
@@ -238,24 +265,37 @@ describe("bailout choice responses", () => {
     expect(response.statusCode).toBe(202);
     const nextPaymentAt = new Date(mocks.now + 60000).toISOString();
     expect(response.json().loan).toMatchObject({
-      installment: 200,
+      installment: 10,
       nextPaymentAt,
       fundedAt: null,
     });
     f.loanRows[0].fundedAt = new Date(mocks.now);
     const list = await f.app.inject({ url: `/loans/${challengeId}` });
     expect(list.json()[0]).toMatchObject({
-      installment: 200,
+      installment: 10,
       nextPaymentAt,
       fundedAt: new Date(mocks.now).toISOString(),
     });
     const portfolio = await f.app.inject({ url: `/portfolio/${challengeId}` });
     expect(portfolio.statusCode).toBe(200);
     expect(portfolio.json().loans[0]).toMatchObject({
-      installment: 200,
+      installment: 10,
       nextPaymentAt,
       fundedAt: new Date(mocks.now).toISOString(),
     });
+  });
+
+  it("refuses a new loan in the last 10 minutes", async () => {
+    const f = await fixture();
+    mocks.endsInMs = 10 * 60_000;
+    const response = await f.app.inject({
+      method: "POST",
+      url: "/loans/request",
+      payload: { challengeId, principal: 100 },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "loan_window_closed" });
+    expect(f.loanRows).toEqual([]);
   });
   it.each([
     {},
@@ -341,7 +381,7 @@ describe("bailout choice responses", () => {
       counterCash: 300,
     });
     expect(response.statusCode).toBe(200);
-    // 3 NEURO at FV 500, quote 450: fair side payment is 150; surplus 150 / 1500.
+    // Sell 3 NEURO at 450 vs FV 500, counter 300: overask 150 / 1500.
     expect(mocks.bargainRejectProbability).toHaveBeenCalledWith(0.1);
     expect(f.offer.legs).toEqual([
       { symbol: "NEURO", quantity: -3, price: 450 },
@@ -360,6 +400,17 @@ describe("bailout choice responses", () => {
       challengeId,
       expect.objectContaining({ legs: f.offer.legs, cashToTrader: 300 }),
     );
+  });
+
+  it("bargains buy-side underpay on the same linear scale", async () => {
+    const f = await fixture();
+    f.offer.choices = null;
+    f.offer.legs = [{ symbol: "NEURO", quantity: 3, price: 450 }];
+    f.offer.cashToTrader = 0;
+    const response = await f.respond({ action: "bargain", counterCash: 0 });
+    expect(response.statusCode).toBe(200);
+    // Buy 3 NEURO at 450 vs FV 500: underpay 150 / 1500.
+    expect(mocks.bargainRejectProbability).toHaveBeenCalledWith(0.1);
   });
 
   it("blocks new accepts/bargains while frozen, but permits rejecting pending offers", async () => {

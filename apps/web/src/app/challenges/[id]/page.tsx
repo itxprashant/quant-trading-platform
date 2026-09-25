@@ -1,18 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft,
   LineChart,
   Trophy,
-  Vote,
   Wifi,
   WifiOff,
 } from "lucide-react";
 import {
+  edenEventFlow,
   isTraderPanelVisible,
+  orderQtyPresetsOf,
   traderVisibilityOf,
   type Challenge,
   type LeaderboardEntry,
@@ -22,6 +23,7 @@ import {
 } from "@qtp/shared";
 import { ApiError, get } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { applyPortfolioUpdate } from "@/lib/portfolio";
 import { useRealtime } from "@/hooks/useRealtime";
 import { useAuction } from "@/hooks/useAuction";
 import { useChartVisible } from "@/hooks/useChartVisible";
@@ -36,6 +38,7 @@ import { TradeTicket } from "@/components/trade/TradeTicket";
 import { PortfolioPanel } from "@/components/trade/PortfolioPanel";
 import { OpenOrders } from "@/components/trade/OpenOrders";
 import { Leaderboard } from "@/components/trade/Leaderboard";
+import { FinalStandingsDialog } from "@/components/trade/FinalStandings";
 import {
   MarketList,
   type MarketInstrument,
@@ -51,7 +54,6 @@ import { MarketsPanel } from "@/components/trade/MarketsPanel";
 import { BondPanel, useBondMarket } from "@/components/trade/BondPanel";
 import { DealDesk } from "@/components/trade/DealDesk";
 import { AuctionPopup } from "@/components/trade/AuctionPopup";
-import { VotePanel } from "@/components/trade/VotePanel";
 import { GrantBanner } from "@/components/trade/GrantBanner";
 import { money, signed, dirClass } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -91,6 +93,8 @@ export default function TradePage() {
   );
   const [auctionMinimized, setAuctionMinimized] = useState(false);
   const [chartVisible, toggleChart] = useChartVisible();
+  const [finalOpen, setFinalOpen] = useState(false);
+  const wasLeaderboardHidden = useRef<boolean | null>(null);
 
   const isEden = challenge?.type === "new_eden";
   const rt = useRealtime(challengeId, isEden);
@@ -137,7 +141,7 @@ export default function TradePage() {
   // Initial / refreshed portfolio via REST (WS pushes live updates after).
   useEffect(() => {
     if (rt.portfolio?.challengeId === challengeId)
-      setRestPortfolio(rt.portfolio);
+      setRestPortfolio((prev) => applyPortfolioUpdate(prev, rt.portfolio!));
   }, [rt.portfolio, challengeId]);
   useEffect(() => {
     if (!user) return;
@@ -338,6 +342,18 @@ export default function TradePage() {
   const livePrice = rt.prices.get(activeSymbol);
 
   const metric = challenge?.type === "market_making" ? "score" : "pnl";
+  const isFinal = challenge?.status === "ended";
+
+  useEffect(() => {
+    if (!isFinal) {
+      wasLeaderboardHidden.current = leaderboardHidden;
+      return;
+    }
+    if (wasLeaderboardHidden.current && !leaderboardHidden) {
+      setFinalOpen(true);
+    }
+    wasLeaderboardHidden.current = leaderboardHidden;
+  }, [isFinal, leaderboardHidden]);
 
   const selectInstrument = (row: MarketInstrument, price?: number) => {
     setActiveSymbol(row.symbol);
@@ -404,6 +420,12 @@ export default function TradePage() {
   }
 
   const marketFrozen = rt.frozen ?? challenge.frozen ?? false;
+  const marginThreshold =
+    challenge.config.eden?.rules.marginCallThreshold ?? 0;
+  const buysBlocked =
+    isEden &&
+    portfolio != null &&
+    (portfolio.freeCash ?? portfolio.cash) <= marginThreshold;
   const scripted = isEden && !!challenge.config.eden?.eventScript;
   const change =
     activeRow && livePrice && activeRow.initialPrice > 0
@@ -413,7 +435,7 @@ export default function TradePage() {
     ? rt.leaderboard
     : restLeaderboard;
   const myRank = leaderboardEntries.find((e) => e.userId === user?.id)?.rank;
-  const voteOpen = rt.vote?.status === "open";
+  const qtyPresets = orderQtyPresetsOf(challenge.config);
 
   const newsFeed = (className?: string) => (
     <NewsFeed
@@ -424,11 +446,13 @@ export default function TradePage() {
     />
   );
   const dealDesk = (className?: string) =>
-    isEden && showDealDesk ? (
+    isEden && (showDealDesk || (showVotes && rt.vote)) ? (
       <DealDesk
         docked
-        offers={rt.otcOffers}
+        challengeId={challengeId}
+        offers={showDealDesk ? rt.otcOffers : []}
         result={rt.otcResult}
+        vote={showVotes ? rt.vote : null}
         className={className}
       />
     ) : null;
@@ -452,11 +476,13 @@ export default function TradePage() {
         }
         onChange={() => setOrderRefresh((n) => n + 1)}
         frozen={marketFrozen || challenge.status !== "live"}
+        buysBlocked={buysBlocked}
         closedHint={
           scripted && activeKind === "spot"
             ? "Options open after halftime, at game minute 70."
             : undefined
         }
+        qtyPresets={qtyPresets}
       />
     ) : null;
   const marketsTicket = (
@@ -546,12 +572,33 @@ export default function TradePage() {
                   : "Reconnecting..."}
             </span>
           </div>
-          {marketFrozen && (
+          {marketFrozen && !isFinal && (
             <div
               role="status"
               className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
             >
               Market frozen — you can only cancel pending orders.
+            </div>
+          )}
+          {isFinal && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface px-3 py-2 text-xs"
+            >
+              <span className="text-muted">
+                {leaderboardHidden && !isAdmin
+                  ? "Event closed. Final standings will be published by the host."
+                  : "Event closed. Ending settlement is free cash plus each position at the book mid."}
+              </span>
+              {(!leaderboardHidden || isAdmin) && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setFinalOpen(true)}
+                >
+                  View final standings
+                </Button>
+              )}
             </div>
           )}
           {rt.status !== "open" && (
@@ -580,35 +627,18 @@ export default function TradePage() {
               multiplier={
                 challenge.config.eden?.rules.loanRepayMultiplier ?? 2
               }
+              startsAt={challenge.startsAt}
               endsAt={challenge.endsAt}
+              scheduledClock={edenEventFlow(challenge.config.eden) !== "host"}
               carryRate={
                 challenge.config.eden?.rules.costOfCarryPerUnitPerMinute ?? 1
               }
               disabled={challenge.status !== "live"}
+              threshold={marginThreshold}
               onChange={() => setOrderRefresh((n) => n + 1)}
               className="shrink-0"
             />
           )}
-          {showVotes && rt.vote ? (
-            <DockPopup
-              label="Policy vote"
-              placement="end"
-              className="shrink-0"
-              openSignal={voteOpen ? rt.vote?.id : null}
-              icon={<Vote className="size-3.5" aria-hidden />}
-              badge={
-                voteOpen ? (
-                  <span className="absolute -right-1 -top-1 size-2 rounded-full bg-warning" />
-                ) : null
-              }
-            >
-              <VotePanel
-                challengeId={challengeId}
-                liveVote={rt.vote}
-                className="shadow-md"
-              />
-            </DockPopup>
-          ) : null}
         </aside>
 
         <div className={DESK_CENTER}>
@@ -698,10 +728,12 @@ export default function TradePage() {
                     onPriceChange={setLimitPrice}
                     refPrice={livePrice?.price}
                     frozen={marketFrozen}
+                    buysBlocked={buysBlocked}
                     positionQty={
                       portfolio?.positions.find((p) => p.symbol === activeSymbol)
                         ?.quantity ?? 0
                     }
+                    qtyPresets={qtyPresets}
                   />
                   {activeKind === "etf" ? marketsTicket : null}
                 </div>
@@ -791,7 +823,7 @@ export default function TradePage() {
 
       <div className="fixed bottom-3 left-3 z-40">
         <DockPopup
-          label="Leaderboard"
+          label={isFinal ? "Final standings" : "Leaderboard"}
           icon={<Trophy className="size-3.5" aria-hidden />}
           badge={
             myRank != null && !(leaderboardHidden && !isAdmin) ? (
@@ -808,10 +840,18 @@ export default function TradePage() {
             mm={challenge.type === "market_making"}
             hidden={leaderboardHidden}
             isAdmin={isAdmin}
+            final={isFinal}
             className="max-h-[min(480px,70dvh)] shadow-md"
           />
         </DockPopup>
       </div>
+
+      <FinalStandingsDialog
+        entries={leaderboardEntries}
+        open={finalOpen && (!leaderboardHidden || isAdmin)}
+        onClose={() => setFinalOpen(false)}
+        meId={user?.id}
+      />
 
       {isEden && showAuctions && (
         <AuctionPopup

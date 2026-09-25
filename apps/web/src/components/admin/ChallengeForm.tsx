@@ -12,6 +12,7 @@ import type {
   ScoringConfig,
   SymbolConfig,
 } from "@qtp/shared";
+import { orderQtyPresetsOf } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
@@ -30,7 +31,7 @@ const blankSymbol = (): SymbolConfig => ({
   symbol: "",
   name: "",
   initialPrice: 100,
-  volatility: 0.5,
+  volatility: 0,
   tickSize: 0.01,
 });
 
@@ -115,8 +116,12 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
   const [endsAt, setEndsAt] = useState(
     existing?.endsAt ? existing.endsAt.slice(0, 16) : "",
   );
+  const [qtyPresets, setQtyPresets] = useState<
+    [number, number, number, number]
+  >(orderQtyPresetsOf(existing?.config));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [applyingBots, setApplyingBots] = useState(false);
 
   const flow = edenEventFlow(eden);
 
@@ -204,6 +209,7 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
           })),
           ...(bots.marketMakers > 0 || bots.noiseTraders > 0 ? { bots } : {}),
           ...(type === "new_eden" ? { eden } : {}),
+          orderQtyPresets: qtyPresets,
         },
         scoring,
         startsAt: startsAt ? new Date(startsAt).toISOString() : null,
@@ -240,6 +246,35 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
       setSaving(false);
     }
   }
+
+  async function applyLiveBots() {
+    if (!existing || existing.status !== "live") return;
+    setError(null);
+    setApplyingBots(true);
+    try {
+      await post(`/api/admin/${existing.id}/bots`, {
+        bots,
+        ...(type === "new_eden"
+          ? { edenBots: { ...defaultEden().bots!, ...eden.bots } }
+          : {}),
+      });
+      setError(null);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? "Could not apply bot settings while the event is live."
+          : "Could not apply bot settings.",
+      );
+    } finally {
+      setApplyingBots(false);
+    }
+  }
+
+  const live = existing?.status === "live";
+  const started =
+    !!existing &&
+    existing.status !== "draft" &&
+    existing.status !== "scheduled";
 
   const numField = (v: number, set: (n: number) => void, step = 1) => (
     <Input
@@ -500,6 +535,34 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
               setCfg({ ...cfg, maxOrderQuantity: n }),
             )}
           </Field>
+          <Field
+            label="Qty buttons"
+            hint="Four hardcoded sizes on the buy/sell ticket. Set before the event."
+          >
+            <div className="grid grid-cols-4 gap-1.5">
+              {qtyPresets.map((n, i) => (
+                <Input
+                  key={i}
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={n}
+                  disabled={started}
+                  aria-label={`Quantity preset ${i + 1}`}
+                  onChange={(e) => {
+                    const next = Math.max(1, Math.round(Number(e.target.value)));
+                    const value = Number.isFinite(next) ? next : qtyPresets[i]!;
+                    setQtyPresets((cur) =>
+                      [cur[0], cur[1], cur[2], cur[3]].map((n, j) =>
+                        j === i ? value : n,
+                      ) as [number, number, number, number],
+                    );
+                  }}
+                  className="mono"
+                />
+              ))}
+            </div>
+          </Field>
           <Field label="Max open orders">
             {numField(cfg.maxOpenOrders, (n) =>
               setCfg({
@@ -556,6 +619,9 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
             Bots keep the market liquid. Market makers quote two-sided
             liquidity; noise traders generate taker flow for participants to
             capture.
+            {live
+              ? " Apply bot settings here without pausing the event."
+              : ""}
           </p>
           <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Market makers">
@@ -595,6 +661,17 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
               )}
             </Field>
           </div>
+          {live && type !== "new_eden" && (
+            <div className="mt-4">
+              <Button
+                size="sm"
+                onClick={applyLiveBots}
+                loading={applyingBots}
+              >
+                Apply bots now
+              </Button>
+            </div>
+          )}
         </div>
       </Panel>
 
@@ -733,6 +810,9 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
             </h3>
             <p className="mb-3 text-[11px] text-faint">
               Counts start at 0. Raise them here if you want bots in this event.
+              {live
+                ? " These counts can be applied while the event is live."
+                : ""}
             </p>
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label="HFT market makers">
@@ -814,13 +894,25 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                 )}
               </Field>
             </div>
+            {live && (
+              <div className="mt-4">
+                <Button
+                  size="sm"
+                  onClick={applyLiveBots}
+                  loading={applyingBots}
+                >
+                  Apply bots now
+                </Button>
+              </div>
+            )}
             <h3 className="mb-3 mt-5 border-t border-border pt-4 text-xs font-semibold uppercase tracking-wide text-muted">
               Bond templates
             </h3>
             <p className="mb-3 text-xs text-muted">
               Host mode: saving a template makes it available for purchase.
               Playbook cues and scripted mode issue their own two bonds. Each
-              trader buys a series once at a price above free cash and receives
+              trader buys a series once at a price that cannot exceed free cash
+              and receives
               the payout multiple uniformly until the session ends.
             </p>
             {(eden.bonds ?? []).map((bond, i) => {

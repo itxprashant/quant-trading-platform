@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import {
+  EDEN_EVENT_BOTS,
   EDEN_EVENT_DEFAULTS,
   type AdminAccountView,
   type Challenge,
+  type EdenBotConfig,
   type OptionContract,
   type OtcLeg,
 } from "@qtp/shared";
@@ -127,6 +129,15 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
         </p>
       )}
       <div className="grid gap-6 p-4 sm:p-5 lg:grid-cols-2">
+        {challenge.status === "live" && (
+          <section className="min-w-0 space-y-3 lg:col-span-2">
+            <LiveBotEditor
+              challenge={challenge}
+              onMsg={setMsg}
+              onError={setError}
+            />
+          </section>
+        )}
         {/* Options cycle */}
         <section className="min-w-0 space-y-3">
           <div className="flex items-center justify-between">
@@ -225,7 +236,13 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
                   .map((c) => c.symbol),
               ]),
             )}
-            onSent={() => setMsg("OTC offer sent")}
+            onSent={(count) =>
+              setMsg(
+                count > 1
+                  ? `OTC offer sent to ${count} traders`
+                  : "OTC offer sent",
+              )
+            }
           />
         </section>
 
@@ -252,6 +269,98 @@ export function EdenHostConsole({ challenge }: { challenge: Challenge }) {
   );
 }
 
+function LiveBotEditor({
+  challenge,
+  onMsg,
+  onError,
+}: {
+  challenge: Challenge;
+  onMsg: (m: string) => void;
+  onError: (m: string | null) => void;
+}) {
+  const [bots, setBots] = useState<EdenBotConfig>({
+    ...EDEN_EVENT_BOTS,
+    ...challenge.config.eden?.bots,
+  });
+  const [busy, setBusy] = useState(false);
+
+  async function apply() {
+    setBusy(true);
+    onError(null);
+    try {
+      await post(`/api/admin/${challenge.id}/bots`, { edenBots: bots });
+      onMsg("Bot counts applied. The runner picks them up without a pause.");
+    } catch {
+      onError("Could not apply bot counts.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function field(
+    label: string,
+    value: number,
+    patch: (n: number) => EdenBotConfig,
+    step = 1,
+  ) {
+    return (
+      <Field label={label}>
+        <Input
+          type="number"
+          step={step}
+          value={value}
+          onChange={(e) => setBots(patch(Number(e.target.value)))}
+          className="mono"
+        />
+      </Field>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+        Live bots
+      </p>
+      <p className="text-xs text-muted">
+        Change counts while the event is running. No pause required.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {field("HFT MMs", bots.hftMarketMakers, (n) => ({
+          ...bots,
+          hftMarketMakers: Math.max(0, Math.min(10, Math.round(n))),
+        }))}
+        {field("Momentum", bots.momentumTraders, (n) => ({
+          ...bots,
+          momentumTraders: Math.max(0, Math.min(30, Math.round(n))),
+        }))}
+        {field("Vega", bots.vegaSnipers, (n) => ({
+          ...bots,
+          vegaSnipers: Math.max(0, Math.min(10, Math.round(n))),
+        }))}
+        {field("Parity", bots.parityArbers, (n) => ({
+          ...bots,
+          parityArbers: Math.max(0, Math.min(10, Math.round(n))),
+        }))}
+        {field(
+          "Half-spread",
+          bots.spread,
+          (n) => ({ ...bots, spread: Math.max(0, n) }),
+          0.1,
+        )}
+        {field(
+          "Intensity",
+          bots.intensity,
+          (n) => ({ ...bots, intensity: Math.max(0, Math.min(1, n)) }),
+          0.1,
+        )}
+      </div>
+      <Button size="sm" onClick={apply} loading={busy}>
+        Apply bots
+      </Button>
+    </div>
+  );
+}
+
 function OtcBuilder({
   challenge,
   symbols,
@@ -259,12 +368,13 @@ function OtcBuilder({
 }: {
   challenge: Challenge;
   symbols: string[];
-  onSent: () => void;
+  onSent: (count: number) => void;
 }) {
   const challengeId = challenge.id;
   const [traders, setTraders] = useState<AdminAccountView[]>([]);
   const [waiting, setWaiting] = useState(0);
   const [userId, setUserId] = useState("");
+  const [sendToAll, setSendToAll] = useState(false);
   const [description, setDescription] = useState("");
   const [cashToTrader, setCashToTrader] = useState("0");
   const [expiresSec, setExpiresSec] = useState(
@@ -300,15 +410,19 @@ function OtcBuilder({
   }
 
   async function send() {
-    if (!userId || !description.trim() || legs.length === 0) {
-      setError("Pick a trader, description, and at least one leg");
+    if (
+      (!sendToAll && !userId) ||
+      !description.trim() ||
+      legs.length === 0
+    ) {
+      setError("Pick a trader or send to all, plus a description and a leg");
       return;
     }
     setError(null);
     setBusy(true);
     try {
-      await post(`/api/admin/${challengeId}/otc`, {
-        userId,
+      const res = await post<{ count?: number }>(`/api/admin/${challengeId}/otc`, {
+        ...(sendToAll ? { sendToAll: true } : { userId }),
         description: description.trim(),
         legs: legs.map((l) => ({
           symbol: l.symbol,
@@ -319,9 +433,13 @@ function OtcBuilder({
         expiresSec: Number(expiresSec),
       });
       setDescription("");
-      onSent();
+      onSent(res.count ?? 1);
     } catch {
-      setError("Failed to send offer");
+      setError(
+        sendToAll
+          ? "Failed to send offers. Enroll traders first."
+          : "Failed to send offer",
+      );
     } finally {
       setBusy(false);
     }
@@ -341,10 +459,25 @@ function OtcBuilder({
               : undefined
           }
         >
-          <Select value={userId} onChange={(e) => setUserId(e.target.value)}>
+          <Select
+            value={sendToAll ? "__all__" : userId}
+            onChange={(e) => {
+              if (e.target.value === "__all__") {
+                setSendToAll(true);
+                return;
+              }
+              setSendToAll(false);
+              setUserId(e.target.value);
+            }}
+          >
             {traders.length === 0 && (
               <option value="">
                 {waiting > 0 ? "No enrolled traders" : "No traders available"}
+              </option>
+            )}
+            {traders.length > 0 && (
+              <option value="__all__">
+                Send to all ({traders.length} enrolled)
               </option>
             )}
             {traders.map((t) => (
@@ -475,7 +608,9 @@ function OtcBuilder({
         <Button
           onClick={send}
           loading={busy}
-          disabled={!userId || !description.trim()}
+          disabled={
+            (!sendToAll && !userId) || !description.trim()
+          }
         >
           Send offer
         </Button>
@@ -514,7 +649,7 @@ function OpsControls({
   const [voteSec, setVoteSec] = useState("60");
   const [grantSymbol, setGrantSymbol] = useState(symbols[0] ?? "");
   const [grantDesc, setGrantDesc] = useState(
-    "Largest holder at the deadline wins the grant.",
+    "Largest holder at the deadline wins the grant. Tied leaders split equally.",
   );
   const [grantPrize, setGrantPrize] = useState("10000");
   const [grantSec, setGrantSec] = useState("300");

@@ -14,14 +14,14 @@ export const EDEN_EVENT_AERIUM: SymbolConfig = {
   symbol: "AERIUM",
   name: "Aerium",
   initialPrice: 1000,
-  volatility: 4,
+  volatility: 0,
   tickSize: 0.5,
 };
 export const EDEN_EVENT_NEURO: SymbolConfig = {
   symbol: "NEURO",
   name: "Neuro-Chips",
   initialPrice: 500,
-  volatility: 2,
+  volatility: 0,
   tickSize: 0.5,
 };
 export const EDEN_EVENT_ETF: EtfConfig = {

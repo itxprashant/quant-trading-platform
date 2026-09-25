@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, asc, eq, isNotNull, isNull, like, lte, or } from "drizzle-orm";
 import {
-  grantWinner,
+  grantWinners,
   resolveAuction as rankAuction,
   tallyVote,
   wealthTaxTransfers,
@@ -890,15 +890,18 @@ export class EdenSettlements {
     if (!Number.isFinite(grant.prize) || grant.prize <= 0)
       throw new Error(`Invalid grant prize: ${grantId}`);
     const traders = await this.humanTraders(grant.expiresAt.getTime());
-    const winnerId = grantWinner(
+    const winnerIds = grantWinners(
       traders.map((r) => ({
         id: r.userId,
         qty: engine.positionOf(r.userId, grant.symbol),
       })),
     );
-    if (winnerId) engine.adjustCash(winnerId, grant.prize);
+    const share =
+      winnerIds.length > 0 ? grant.prize / winnerIds.length : 0;
+    for (const id of winnerIds) engine.adjustCash(id, share);
+    const winnerId = winnerIds[0] ?? null;
     await this.commit(
-      winnerId ? [winnerId] : [],
+      winnerIds,
       async (tx) => {
         const changed = await tx
           .update(grantMissions)
@@ -916,17 +919,29 @@ export class EdenSettlements {
       },
       `grant:${grantId}`,
     );
-    await this.d.emit([
-      {
-        type: "grant_awarded",
-        challengeId: challenge.id,
-        grantId,
-        userId: winnerId,
-        symbol: grant.symbol,
-        prize: winnerId ? grant.prize : 0,
-        ts: now,
-      },
-    ]);
+    await this.d.emit(
+      winnerIds.length === 0
+        ? [
+            {
+              type: "grant_awarded",
+              challengeId: challenge.id,
+              grantId,
+              userId: null,
+              symbol: grant.symbol,
+              prize: 0,
+              ts: now,
+            },
+          ]
+        : winnerIds.map((userId) => ({
+            type: "grant_awarded" as const,
+            challengeId: challenge.id,
+            grantId,
+            userId,
+            symbol: grant.symbol,
+            prize: share,
+            ts: now,
+          })),
+    );
     await publishBroadcast(this.d.redis, challenge.id, [
       {
         target: "all",
@@ -947,7 +962,8 @@ export class EdenSettlements {
         },
       },
     ]);
-    if (winnerId) await this.d.refreshPortfolios([winnerId], now);
+    if (winnerIds.length > 0)
+      await this.d.refreshPortfolios(winnerIds, now);
   }
 
   async rescueLoans(now: number): Promise<void> {

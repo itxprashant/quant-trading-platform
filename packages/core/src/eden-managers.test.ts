@@ -232,7 +232,7 @@ describe("manager checkpoint transactions", () => {
     maxPerUser: 1,
     payoutMultiplier: 2,
   };
-  const PRICE = 10_001;
+  const PRICE = 8_000;
 
   it("queues a once-only purchase and marks the buyer before the first alert checkpoint", async () => {
     const f = fixtures();
@@ -306,7 +306,7 @@ describe("manager checkpoint transactions", () => {
     manager.stop();
   });
 
-  it("refuses a price that does not exceed free cash", async () => {
+  it("refuses a price above free cash and accepts a purchase at free cash", async () => {
     const f = fixtures();
     const manager = new MarketsManager(
       f.engine,
@@ -320,7 +320,7 @@ describe("manager checkpoint transactions", () => {
       f.refresh,
     );
     await manager.start();
-    await manager.purchaseBond("buyer", "standard", 10_000, 1);
+    await manager.purchaseBond("buyer", "standard", 10_001, 1);
     expect(f.engine.cashOf("buyer")).toBe(10000);
     expect(f.tables.holdings).toHaveLength(0);
     expect(manager.bondValueOf("buyer")).toBe(0);
@@ -328,7 +328,19 @@ describe("manager checkpoint transactions", () => {
       expect.objectContaining({
         type: "alert",
         userId: "buyer",
-        message: expect.stringContaining("Price must exceed free cash"),
+        message: expect.stringContaining("cannot exceed free cash"),
+      }),
+    ]);
+    await manager.purchaseBond("buyer", "standard", 10_000, 2);
+    expect(f.engine.cashOf("buyer")).toBe(0);
+    expect(f.tables.holdings).toHaveLength(1);
+    expect(manager.bondValueOf("buyer")).toBe(10_000);
+    expect(manager.bondsOf("buyer")).toEqual([
+      expect.objectContaining({
+        bondId: "standard",
+        quantity: 1,
+        price: 10_000,
+        couponsPaid: 0,
       }),
     ]);
     manager.stop();
@@ -673,6 +685,45 @@ describe("option lifecycle and assignment", () => {
     expect(f.tables.cycles).toHaveLength(3);
     restarted.stop();
   });
+  it("lists strikes at the current book mid plus or minus 5%", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const f = fixtures();
+    const manager = f.manager();
+    await manager.start();
+    f.engine.setFairValue("A", 100);
+    f.engine.setPrice("A", 100);
+    f.engine.restoreAccount("mm-bid", { cash: 10_000, positions: [] });
+    f.engine.restoreAccount("mm-ask", { cash: 10_000, positions: [] });
+    f.engine.placeOrder({
+      orderId: "bid",
+      userId: "mm-bid",
+      symbol: "A",
+      side: "buy",
+      orderType: "limit",
+      price: 110,
+      quantity: 1,
+      ts: Date.now(),
+    });
+    f.engine.placeOrder({
+      orderId: "ask",
+      userId: "mm-ask",
+      symbol: "A",
+      side: "sell",
+      orderType: "limit",
+      price: 130,
+      quantity: 1,
+      ts: Date.now(),
+    });
+    await manager.openOn("A");
+    expect(
+      [...new Set(manager.contractsSnapshot().map((c) => c.strike))].sort(
+        (a, b) => a - b,
+      ),
+    ).toEqual([114, 120, 126]);
+    manager.stop();
+  });
+
   it("starts from checkpoint option metadata without overwriting books, marks or cycles", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
@@ -853,10 +904,44 @@ describe("option lifecycle and assignment", () => {
     await restarted.start();
     const cash = f.engine.cashOf("seller");
     await vi.advanceTimersByTimeAsync(25_000);
-    expect(f.engine.positionOf("seller", "A")).toBe(0);
-    expect(f.engine.cashOf("seller")).toBe(cash - 104 * 120);
-    expect(f.engine.positionOf("bot:clearing", "A")).toBe(-104);
+    expect(f.engine.positionOf("seller", "A")).toBe(-100);
+    expect(f.engine.cashOf("seller")).toBe(cash - 4 * 120);
+    expect(f.engine.positionOf("bot:clearing", "A")).toBe(-4);
     restarted.stop();
+  });
+
+  it("liquidates only the assignment excess on a long book, not the whole inventory", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const f = fixtures();
+    const manager = f.manager();
+    await manager.start();
+    await manager.openOn("A");
+    const put = manager
+      .contractsSnapshot()
+      .find((c) => c.optionType === "put" && c.strike === 100)!;
+    f.engine.setPrice("A", 90);
+    f.engine.setFairValue("A", 100);
+    f.engine.restoreAccount("holder", {
+      cash: 10000,
+      positions: [{ symbol: put.symbol, quantity: 4, avgPrice: 1 }],
+    });
+    f.engine.restoreAccount("seller", {
+      cash: 10000,
+      positions: [
+        { symbol: "A", quantity: 100, avgPrice: 100 },
+        { symbol: put.symbol, quantity: -4, avgPrice: 1 },
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(300_000);
+    await manager.exercise("holder", put.symbol, 4, Date.now());
+    expect(f.engine.positionOf("seller", "A")).toBe(104);
+    const cash = f.engine.cashOf("seller");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(f.engine.positionOf("seller", "A")).toBe(100);
+    expect(f.engine.cashOf("seller")).toBe(cash + 4 * 80);
+    expect(f.engine.positionOf("bot:clearing", "A")).toBe(4);
+    manager.stop();
   });
 });
 
@@ -948,19 +1033,22 @@ describe("bond holdings", () => {
     );
     await manager.start();
     await Promise.all([
-      manager.purchaseBond("u", "standard", 10_001, 1),
-      manager.purchaseBond("u", "standard", 10_001, 1),
+      manager.purchaseBond("u", "standard", 10_000, 1),
+      manager.purchaseBond("u", "standard", 10_000, 1),
     ]);
     expect(f.tables.holdings).toHaveLength(1);
     expect(f.tables.holdings![0].quantity).toBe(1);
-    expect(f.engine.cashOf("u")).toBe(-1);
-    expect(manager.bondValueOf("u")).toBe(10_001);
+    expect(f.engine.cashOf("u")).toBe(0);
+    expect(manager.bondValueOf("u")).toBe(10_000);
+    expect(manager.bondsOf("u")).toHaveLength(1);
     await manager.payCoupons(now);
-    expect(f.engine.cashOf("u")).toBe(-1 + 2000.2);
-    expect(f.tables.holdings![0].couponsPaid).toBe(2000.2);
+    expect(f.engine.cashOf("u")).toBe(2000);
+    expect(f.tables.holdings![0].couponsPaid).toBe(2000);
+    expect(manager.bondsOf("u")[0]?.couponsPaid).toBe(2000);
     manager.stop();
     await manager.start();
-    expect(manager.bondValueOf("u")).toBeCloseTo(10_001 * (1 - 2000.2 / 20002));
+    expect(manager.bondValueOf("u")).toBeCloseTo(10_000 * (1 - 2000 / 20000));
+    expect(manager.bondsOf("u")[0]?.couponsPaid).toBe(2000);
     manager.stop();
   });
 });

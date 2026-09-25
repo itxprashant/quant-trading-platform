@@ -308,7 +308,7 @@ To run the same story the script tells, fire these by hand. Minutes are game min
 | Every 5 (not 60–70) | Headline, alternating signal and noise | News & announcements |
 | 10 / 18 | Announce the standard / Aerium-pegged bond | Announcement (templates saved in §5.2) |
 | 15, 30, 45, 75, 90, 105, 120 | Premium auction, then an embargoed headline | Premium auction; News with embargo |
-| 30 | List **NEURO** (price 500, volatility 2, tick 0.5) | Instrument listings → Spot |
+| 30 | List **NEURO** (price 500, volatility 0, tick 0.5) | Instrument listings → Spot |
 | 45 | List **ORBITAL** ETF (2 AERIUM + 1 NEURO) | Instrument listings → ETF |
 | 60 | Halftime freeze — carry and loans keep charging | Market freeze → Freeze market |
 | 70 | Reopen, then open the first option cycle on AERIUM | Unfreeze market; Options → Open cycle |
@@ -372,7 +372,7 @@ Each trader works from **`/challenges/[id]`** — a single terminal with real-ti
 | **Auction** | When you open a round | Submit one sealed bid per round |
 | **Bank** | When leveraged or margin-called | Request predatory loans |
 | **Markets** | Once an ETF exists | Create/redeem ETF while a window is open |
-| **Government bonds** | Once a bond is listed | Buy each series once at a price above free cash |
+| **Government bonds** | Once a bond is listed | Buy each series once at a price that cannot exceed free cash |
 | **Options** | Once you open a cycle | Trade calls/puts; **Exercise** within 15 s of cycle close |
 | **Vote** | When you open a vote | Yes/No |
 | **Grant banner** | When you open a grant | Chase inventory of the target symbol |

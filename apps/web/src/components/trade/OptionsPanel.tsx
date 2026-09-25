@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { Sigma } from "lucide-react";
-import type {
-  OptionContract,
-  OrderBookSnapshot,
-  Portfolio,
-  PricePoint,
+import {
+  DEFAULT_ORDER_QTY_PRESETS,
+  type OptionContract,
+  type OrderBookSnapshot,
+  type Portfolio,
+  type PricePoint,
 } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
@@ -86,7 +87,9 @@ export function OptionsPanel({
   positionCap = 100,
   onChange,
   frozen = false,
+  buysBlocked = false,
   closedHint,
+  qtyPresets = DEFAULT_ORDER_QTY_PRESETS,
 }: {
   challengeId: string;
   contracts: OptionContract[];
@@ -102,15 +105,17 @@ export function OptionsPanel({
   positionCap?: number;
   onChange?: () => void;
   frozen?: boolean;
+  buysBlocked?: boolean;
   /** Shown when no cycle is open, e.g. when options list later in the event. */
   closedHint?: string;
+  qtyPresets?: [number, number, number, number];
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [qty, setQty] = useState("1");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [type, setType] = useState<"limit" | "market">("limit");
+  const [type, setType] = useState<"limit" | "market" | "ioc">("limit");
   const [price, setPrice] = useState("");
   const [now, setNow] = useState(Date.now());
   const [restBook, setRestBook] = useState<OrderBookSnapshot>();
@@ -186,6 +191,7 @@ export function OptionsPanel({
       quantity > maxQuantity ||
       !validPrice ||
       frozen ||
+      (side === "buy" && buysBlocked) ||
       busy
     )
       return;
@@ -196,9 +202,10 @@ export function OptionsPanel({
         challengeId,
         symbol,
         side,
-        type,
+        type: type === "ioc" ? "limit" : type,
         quantity,
-        ...(type === "limit" ? { price: Number(price) } : {}),
+        ...(type === "market" ? {} : { price: Number(price) }),
+        ...(type === "ioc" ? { timeInForce: "IOC" as const } : {}),
       });
       setMessage("Order submitted. Check working orders and fills.");
       onChange?.();
@@ -333,10 +340,13 @@ export function OptionsPanel({
                 aria-label="Option order type"
                 value={type}
                 disabled={!contract}
-                onChange={(e) => setType(e.target.value as "limit" | "market")}
+                onChange={(e) =>
+                  setType(e.target.value as "limit" | "market" | "ioc")
+                }
               >
                 <option value="limit">Limit</option>
                 <option value="market">Market</option>
+                <option value="ioc">IOC</option>
               </Select>
               <Input
                 type="number"
@@ -347,7 +357,20 @@ export function OptionsPanel({
                 onChange={(e) => setQty(e.target.value)}
                 className="mono"
               />
-              {type === "limit" && (
+              <div className="col-span-2 grid grid-cols-4 gap-1.5">
+                {qtyPresets.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    disabled={!contract}
+                    onClick={() => setQty(String(n))}
+                    className="h-7 rounded-md border border-border bg-surface-2 text-xs text-muted transition-colors hover:border-border-strong hover:text-text disabled:opacity-40"
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              {type !== "market" && (
                 <Input
                   aria-label="Option limit price"
                   type="number"
@@ -356,15 +379,20 @@ export function OptionsPanel({
                   value={price}
                   disabled={!contract}
                   onChange={(e) => setPrice(e.target.value)}
-                  placeholder="Limit price"
+                  placeholder={type === "ioc" ? "IOC price" : "Limit price"}
                   className="mono col-span-2"
                 />
+              )}
+              {buysBlocked && (
+                <p className="col-span-2 text-[11px] text-down">
+                  Cash below limit — sells only.
+                </p>
               )}
               <Button
                 variant="buy"
                 size="sm"
                 loading={busy}
-                disabled={!canTrade}
+                disabled={!canTrade || buysBlocked}
                 onClick={() => selected && trade(selected, "buy")}
               >
                 Buy
@@ -438,6 +466,7 @@ function errText(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
     const code = (err.body as { error?: string })?.error;
     if (code === "market_frozen") return "Market frozen — cancellations only.";
+    if (code === "buys_blocked") return "Cash below limit — sells only.";
     return code ?? fallback;
   }
   return fallback;

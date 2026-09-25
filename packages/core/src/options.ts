@@ -51,6 +51,20 @@ export function parseOptionSymbol(symbol: string): ParsedOption | null {
   };
 }
 
+/**
+ * Listed option strikes: current mid ±5% and ATM, snapped to the
+ * underlying tick. Duplicates (tiny ticks / already-round mids) collapse.
+ */
+export function optionWindowStrikes(mid: number, tickSize = 0.01): number[] {
+  if (!Number.isFinite(mid) || mid <= 0) return [];
+  const tick = Number.isFinite(tickSize) && tickSize > 0 ? tickSize : 0.01;
+  const snap = (n: number) => Math.round(n / tick) * tick;
+  const raw = [snap(mid * 0.95), snap(mid), snap(mid * 1.05)];
+  return [...new Set(raw.map((k) => Math.round(k * 1e8) / 1e8))]
+    .filter((k) => k > 0)
+    .sort((a, b) => a - b);
+}
+
 /** Intrinsic (exercise) value per contract at the given underlying price. */
 export function intrinsicValue(
   type: OptionType,
@@ -128,15 +142,59 @@ export function proRataAssign<T extends { id: string; qty: number }>(
   return out.filter((r) => r.qty > 0);
 }
 
+/** Ask % at which the desk always rejects (25% → 100%). */
+export const BARGAIN_REJECT_AT = 0.25;
+
+export interface BargainAskLeg {
+  quantity: number;
+  price: number;
+  fairValue: number;
+}
+
 /**
- * Probability a bargaining counter-offer is rejected by the Deal Desk, based
- * on how far below fair value the trader is trying to underpay. Underpaying
- * 5% ≈ 10% rejection; 20% ≈ 80% rejection (comp_desc Deal Desk rules). Trying
- * to pay at or above fair value is never rejected.
+ * Linear reject odds vs trader-favorable ask:
+ * (0%, 0%) → (25%, 100%). Over 25% always rejects.
  */
-export function bargainRejectProbability(underpayPct: number): number {
-  if (underpayPct <= 0) return 0;
-  return Math.max(0, Math.min(1, underpayPct * 4));
+export function bargainRejectProbability(askPct: number): number {
+  if (!Number.isFinite(askPct) || askPct <= 0) return 0;
+  return Math.max(0, Math.min(1, askPct / BARGAIN_REJECT_AT));
+}
+
+/**
+ * How far the counter is from fair, as a fraction of FV notional.
+ * Positive = trader-favorable: underpaying a buy, or overasking a sell.
+ * Mixed packages use combined buy+sell FV as the denominator.
+ */
+export function bargainAskPct(
+  legs: BargainAskLeg[],
+  counterCash: number,
+): number {
+  if (!Number.isFinite(counterCash)) return 0;
+  let buyFv = 0;
+  let sellFv = 0;
+  let paidForBuys = 0;
+  let receivedForSells = 0;
+  for (const leg of legs) {
+    if (
+      !Number.isFinite(leg.quantity) ||
+      !Number.isFinite(leg.price) ||
+      !Number.isFinite(leg.fairValue)
+    ) {
+      continue;
+    }
+    if (leg.quantity > 0) {
+      buyFv += leg.quantity * leg.fairValue;
+      paidForBuys += leg.quantity * leg.price;
+    } else if (leg.quantity < 0) {
+      const qty = -leg.quantity;
+      sellFv += qty * leg.fairValue;
+      receivedForSells += qty * leg.price;
+    }
+  }
+  const surplus = counterCash + receivedForSells - paidForBuys + buyFv - sellFv;
+  const notional = buyFv + sellFv;
+  if (surplus <= 0 || notional <= 0) return 0;
+  return surplus / notional;
 }
 
 /** ETF net asset value from a weighted basket of underlying spot prices. */

@@ -58,7 +58,7 @@ export const zSymbolConfig = z.object({
   name: z.string().max(64).optional(),
   initialPrice: z.number().positive(),
   /** Random-walk volatility per autonomous tick, in price units. */
-  volatility: z.number().min(0).default(0.5),
+  volatility: z.number().min(0).default(0),
   /** Tick size for price increments. */
   tickSize: z.number().positive().default(0.01),
 });
@@ -250,8 +250,38 @@ export const zChallengeConfig = z.object({
   bots: zBotConfig.optional(),
   /** New Eden extended economy (only consulted for `new_eden` challenges). */
   eden: zEdenConfig.optional(),
+  /**
+   * Four hardcoded order-ticket quantity buttons. Optional so existing
+   * challenge rows and Docker tsc keep parsing; the ticket falls back to
+   * `DEFAULT_ORDER_QTY_PRESETS` when omitted.
+   */
+  orderQtyPresets: z
+    .tuple([
+      z.number().int().positive().max(10_000),
+      z.number().int().positive().max(10_000),
+      z.number().int().positive().max(10_000),
+      z.number().int().positive().max(10_000),
+    ])
+    .optional(),
 });
 export type ChallengeConfig = z.infer<typeof zChallengeConfig>;
+
+export const DEFAULT_ORDER_QTY_PRESETS: [number, number, number, number] = [
+  1, 5, 10, 25,
+];
+
+export function orderQtyPresetsOf(
+  config: Pick<ChallengeConfig, "orderQtyPresets"> | null | undefined,
+): [number, number, number, number] {
+  const presets = config?.orderQtyPresets;
+  if (
+    presets?.length === 4 &&
+    presets.every((n) => Number.isInteger(n) && n > 0)
+  ) {
+    return [presets[0], presets[1], presets[2], presets[3]];
+  }
+  return [...DEFAULT_ORDER_QTY_PRESETS];
+}
 
 export const zCreateChallengeInput = z.object({
   name: z.string().min(1).max(120),
@@ -334,6 +364,9 @@ export type Challenge = z.infer<typeof zChallenge>;
 /* ------------------------------------------------------------------ *
  * Orders
  * ------------------------------------------------------------------ */
+export const zTimeInForce = z.enum(["IOC"]);
+export type TimeInForce = z.infer<typeof zTimeInForce>;
+
 export const zPlaceOrderInput = z.object({
   challengeId: z.string().uuid(),
   symbol: z.string(),
@@ -342,6 +375,8 @@ export const zPlaceOrderInput = z.object({
   quantity: z.number().int().positive(),
   /** Required for limit orders. */
   price: z.number().positive().optional(),
+  /** Immediate-or-cancel: fill what is available and cancel the rest. */
+  timeInForce: zTimeInForce.optional(),
 });
 export type PlaceOrderInput = z.infer<typeof zPlaceOrderInput>;
 
@@ -466,6 +501,15 @@ export const zPortfolio = z.object({
 });
 export type Portfolio = z.infer<typeof zPortfolio>;
 
+/** One held instrument in a close settlement: mid × quantity. */
+export const zSettlementAsset = z.object({
+  symbol: z.string(),
+  quantity: z.number(),
+  mid: z.number(),
+  value: z.number(),
+});
+export type SettlementAsset = z.infer<typeof zSettlementAsset>;
+
 export const zLeaderboardEntry = z.object({
   rank: z.number().int(),
   userId: z.string().uuid(),
@@ -474,6 +518,10 @@ export const zLeaderboardEntry = z.object({
   pnl: z.number(),
   score: z.number(),
   metrics: zTraderMetrics.optional(),
+  /** Close-event wealth: free cash + Σ(mid × position). */
+  settlement: z.number().optional(),
+  cash: z.number().optional(),
+  assets: z.array(zSettlementAsset).optional(),
 });
 export type LeaderboardEntry = z.infer<typeof zLeaderboardEntry>;
 
@@ -611,7 +659,7 @@ export type ExerciseOptionInput = z.infer<typeof zExerciseOptionInput>;
 export const zPurchaseBondInput = z.object({
   challengeId: z.string().uuid(),
   bondId: z.string(),
-  /** Principal the trader pays now; must exceed free cash at the engine. */
+  /** Principal the trader pays now; cannot exceed free cash. */
   price: z.number().positive().max(1_000_000),
 });
 export type PurchaseBondInput = z.infer<typeof zPurchaseBondInput>;
@@ -661,10 +709,12 @@ export const zOtcRespondInput = z.object({
 export type OtcRespondInput = z.infer<typeof zOtcRespondInput>;
 
 /** Host-authored OTC offer (Deal Desk). */
-export const zCreateOtcInput = z.object({
+const zCreateOtcFields = z.object({
   challengeId: z.string().uuid(),
-  /** Target trader. */
-  userId: z.string().uuid(),
+  /** Target trader. Omit when `sendToAll` is true. */
+  userId: z.string().uuid().optional(),
+  /** Fan the same offer out to every enrolled trader. */
+  sendToAll: z.boolean().optional(),
   description: z.string().min(1).max(280),
   legs: z.array(zOtcLeg).min(1).max(6),
   /** Net cash to the trader on settlement (positive = trader is paid). */
@@ -672,6 +722,14 @@ export const zCreateOtcInput = z.object({
   /** Seconds the trader has to respond before the offer expires. */
   expiresSec: z.number().int().min(5).max(300).default(40),
 });
+export const zCreateOtcInput = zCreateOtcFields.refine(
+  (v) => v.sendToAll === true || v.userId !== undefined,
+  { message: "choose a trader or send to all" },
+);
+export const zCreateOtcBody = zCreateOtcFields.omit({ challengeId: true }).refine(
+  (v) => v.sendToAll === true || v.userId !== undefined,
+  { message: "choose a trader or send to all" },
+);
 export type CreateOtcInput = z.infer<typeof zCreateOtcInput>;
 
 /* ---- Host account override ---- */
@@ -727,6 +785,23 @@ export const zAdminEnrollInput = z
     "pick traders to enroll",
   );
 export type AdminEnrollInput = z.infer<typeof zAdminEnrollInput>;
+
+/** Host override: set every enrolled trader's cash to the same absolute value. */
+export const zAdminCashAllInput = z.object({
+  cash: z.number().finite().min(-1e12).max(1e12),
+});
+export type AdminCashAllInput = z.infer<typeof zAdminCashAllInput>;
+
+/** Live bot counts — applied without pausing or rewriting the event script. */
+export const zAdminBotsInput = z
+  .object({
+    bots: zBotConfig.optional(),
+    edenBots: zEdenBotConfig.optional(),
+  })
+  .refine((v) => v.bots !== undefined || v.edenBots !== undefined, {
+    message: "nothing to change",
+  });
+export type AdminBotsInput = z.infer<typeof zAdminBotsInput>;
 
 export interface AdminAccountView {
   userId: string;

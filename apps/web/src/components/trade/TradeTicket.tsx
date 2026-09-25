@@ -2,13 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Order, OrderSide, OrderType } from "@qtp/shared";
+import {
+  DEFAULT_ORDER_QTY_PRESETS,
+  formatInstrumentLabel,
+  type Order,
+  type OrderSide,
+  type OrderType,
+} from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
 import { ApiError, get, post } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+
+type TicketKind = "limit" | "market" | "ioc";
 
 export function TradeTicket({
   challengeId,
@@ -21,7 +29,9 @@ export function TradeTicket({
   price,
   onPriceChange,
   frozen = false,
+  buysBlocked = false,
   positionQty = 0,
+  qtyPresets = DEFAULT_ORDER_QTY_PRESETS,
 }: {
   challengeId: string;
   symbol: string;
@@ -34,13 +44,16 @@ export function TradeTicket({
   onPriceChange: (v: string) => void;
   refPrice?: number;
   frozen?: boolean;
+  /** Cash at or below the margin floor: sells only. */
+  buysBlocked?: boolean;
   positionQty?: number;
+  qtyPresets?: [number, number, number, number];
 }) {
   const router = useRouter();
   const user = useAuth((s) => s.user);
   const isAdmin = user?.role === "admin";
   const [side, setSide] = useState<OrderSide>("buy");
-  const [type, setType] = useState<OrderType>("limit");
+  const [type, setType] = useState<TicketKind>("limit");
   const [quantity, setQuantity] = useState("10");
   const [status, setStatus] = useState<{
     kind: "ok" | "err";
@@ -62,6 +75,10 @@ export function TradeTicket({
   useEffect(() => {
     loadOpen();
   }, [loadOpen, refreshKey]);
+
+  useEffect(() => {
+    if (buysBlocked && side === "buy") setSide("sell");
+  }, [buysBlocked, side]);
 
   const openBuyQty = openOrders
     .filter((o) => o.symbol === symbol && o.side === "buy")
@@ -93,6 +110,13 @@ export function TradeTicket({
       });
       return;
     }
+    if (buysBlocked && side === "buy") {
+      setStatus({
+        kind: "err",
+        msg: "Cash below limit — sells only.",
+      });
+      return;
+    }
     const qty = Number(quantity);
     if (!Number.isInteger(qty) || qty <= 0 || (!isAdmin && qty > qtyCap)) {
       setStatus({
@@ -121,13 +145,16 @@ export function TradeTicket({
     setStatus(null);
     setSubmitting(true);
     try {
+      const orderType: OrderType = type === "ioc" ? "limit" : type;
+      const limitPrice = parseFloat(price);
       const body = {
         challengeId,
         symbol,
         side,
-        type,
+        type: orderType,
         quantity: qty,
-        ...(type === "limit" ? { price: parseFloat(price) } : {}),
+        ...(orderType === "limit" ? { price: limitPrice } : {}),
+        ...(type === "ioc" ? { timeInForce: "IOC" as const } : {}),
       };
       const ack = await post<{
         orderId: string;
@@ -143,10 +170,10 @@ export function TradeTicket({
           userId: user.id,
           symbol,
           side,
-          type,
+          type: orderType,
           quantity: accepted,
           remainingQuantity: accepted,
-          price: type === "limit" ? parseFloat(price) : null,
+          price: orderType === "limit" ? limitPrice : null,
           status: "open",
           createdAt: new Date().toISOString(),
         },
@@ -155,9 +182,9 @@ export function TradeTicket({
       const capped = accepted < qty;
       setStatus({
         kind: "ok",
-        msg: `${side === "buy" ? "Buy" : "Sell"} ${accepted} ${symbol} submitted.${
+        msg: `${side === "buy" ? "Buy" : "Sell"} ${accepted} ${formatInstrumentLabel(symbol)} submitted.${
           capped ? ` (capped from ${qty})` : ""
-        }`,
+        }${type === "ioc" ? " IOC." : ""}`,
       });
     } catch (err) {
       const code =
@@ -171,6 +198,8 @@ export function TradeTicket({
             ? "Challenge is not live."
             : code === "market_frozen"
               ? "Market frozen — cancellations only."
+              : code === "buys_blocked"
+                ? "Cash below limit — sells only."
               : code === "no_capacity"
                 ? side === "buy"
                   ? "No buy room at the current inventory and working orders."
@@ -197,13 +226,20 @@ export function TradeTicket({
   return (
     <Panel className="flex min-w-0 flex-col overflow-hidden">
       <PanelHeader title="Order entry">
-        <span className="mono truncate text-xs text-text">{symbol}</span>
+        <span className="mono truncate text-xs text-text">
+          {formatInstrumentLabel(symbol)}
+        </span>
       </PanelHeader>
       <div className="flex flex-1 flex-col gap-3 p-4">
         <p className="text-xs text-muted">
           Inventory {minPosition} to +{maxPosition}; {maxQuantity} units per
           order.
         </p>
+        {buysBlocked && (
+          <p className="text-xs text-down">
+            Cash below limit — working buys cancelled. Sells only.
+          </p>
+        )}
         <div
           role="group"
           aria-label="Order side"
@@ -213,11 +249,14 @@ export function TradeTicket({
             type="button"
             onClick={() => setSide("buy")}
             aria-pressed={side === "buy"}
+            disabled={buysBlocked}
             className={cn(
               "h-9 rounded-sm text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-accent",
-              side === "buy"
-                ? "bg-up-subtle text-up ring-1 ring-up/40"
-                : "text-muted hover:text-text",
+              buysBlocked
+                ? "cursor-not-allowed text-faint"
+                : side === "buy"
+                  ? "bg-up-subtle text-up ring-1 ring-up/40"
+                  : "text-muted hover:text-text",
             )}
           >
             Buy
@@ -240,10 +279,11 @@ export function TradeTicket({
         <Field label="Order type">
           <Select
             value={type}
-            onChange={(e) => setType(e.target.value as OrderType)}
+            onChange={(e) => setType(e.target.value as TicketKind)}
           >
             <option value="limit">Limit</option>
             <option value="market">Market</option>
+            <option value="ioc">IOC</option>
           </Select>
         </Field>
 
@@ -259,22 +299,20 @@ export function TradeTicket({
         </Field>
 
         <div className="grid grid-cols-4 gap-1.5">
-          {[25, 50, 75, 100].map((p) => (
+          {qtyPresets.map((n) => (
             <button
-              key={p}
+              key={n}
               type="button"
-              aria-label={`Set quantity to ${p}% of the ${qtyCap} unit order limit`}
-              onClick={() =>
-                setQuantity(String(Math.max(1, Math.floor((qtyCap * p) / 100))))
-              }
+              aria-label={`Set quantity to ${n}`}
+              onClick={() => setQuantity(String(n))}
               className="h-7 rounded-md border border-border bg-surface-2 text-xs text-muted transition-colors hover:border-border-strong hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
             >
-              {p}%
+              {n}
             </button>
           ))}
         </div>
 
-        {type === "limit" && (
+        {(type === "limit" || type === "ioc") && (
           <Field label="Limit price">
             <Input
               type="number"
@@ -293,12 +331,23 @@ export function TradeTicket({
           </p>
         )}
 
+        {type === "ioc" && (
+          <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs leading-relaxed text-muted">
+            Immediate-or-cancel: fill what is available at this price and
+            cancel the rest.
+          </p>
+        )}
+
         <Button
           variant={side === "buy" ? "buy" : "sell"}
           className="mt-auto w-full"
           size="lg"
           loading={submitting}
-          disabled={frozen || (Boolean(user) && (atCountCap || atSizeCap))}
+          disabled={
+            frozen ||
+            (buysBlocked && side === "buy") ||
+            (Boolean(user) && (atCountCap || atSizeCap))
+          }
           onClick={submit}
         >
           {frozen
@@ -310,7 +359,7 @@ export function TradeTicket({
                   ? side === "buy"
                     ? "No buy room"
                     : "No sell room"
-                  : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`
+                  : `${side === "buy" ? "Buy" : "Sell"} ${formatInstrumentLabel(symbol)}`
               : "Sign in to trade"}
         </Button>
 

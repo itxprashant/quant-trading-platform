@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import {
   optionSymbol,
+  optionWindowStrikes,
   theoreticalOption,
   type ChallengeEngine,
   type OptionType,
@@ -23,6 +24,7 @@ import {
   type Database,
 } from "@qtp/db";
 import {
+  midFromBook,
   redisKeys,
   type EdenOptionsConfig,
   type EdenRules,
@@ -52,7 +54,8 @@ interface CycleState {
  * call/put series around spot, runs the 15-second exercise window, settles
  * exercises physically against pro-rata assigned sellers, and enforces the
  * assignment-breach rule (over the inventory cap ⇒ high alert, then forced
- * "border price" liquidation if not cured within the grace window).
+ * "border price" liquidation of the excess only if not cured within the grace
+ * window).
  */
 export class OptionsManager {
   private readonly cycles = new Map<string, CycleState>();
@@ -259,13 +262,12 @@ export class OptionsManager {
       )
     )
       return;
-    const spot =
-      this.engine.getFairValue(underlying) ?? this.engine.getPrice(underlying);
+    const spot = this.listingMid(underlying);
     if (spot === undefined) return;
     this.opening.add(underlying);
     try {
       const cycleId = randomUUID();
-      const strikes = this.strikes(spot);
+      const strikes = this.strikes(spot, underlying);
       const contracts: CycleContract[] = [];
       const marks = new Map<string, number>();
 
@@ -531,7 +533,7 @@ export class OptionsManager {
       challengeId: this.challenge.id,
       userId,
       level: "urgent",
-      message: `🚨 ASSIGNMENT BREACH: ${pos} ${underlying} exceeds the ${this.rules.positionCap} cap. Trade back under in 30s or face border-price liquidation.`,
+      message: `🚨 ASSIGNMENT BREACH: ${pos} ${underlying} exceeds the ${this.rules.positionCap} cap. Trade the excess back under in 30s or the excess is liquidated at border price.`,
       ts,
     });
     this.schedule(
@@ -554,7 +556,9 @@ export class OptionsManager {
     const breach = this.breaches.get(key);
     if (!breach || Date.now() < breach.deadline) return;
     const pos = this.engine.positionOf(userId, underlying);
-    if (Math.abs(pos) <= this.rules.positionCap) {
+    const cap = this.rules.positionCap;
+    const excess = Math.abs(pos) - cap;
+    if (excess <= 0) {
       this.breaches.delete(key);
       await this.redis.hdel(this.breachKey(), key);
       return;
@@ -562,8 +566,10 @@ export class OptionsManager {
     const now = Date.now();
     const fillEvents = this.engine.cancelUserOrders(userId, now);
     const price = pos > 0 ? breach.sellPrice : breach.buyPrice;
-    this.engine.settleFill(userId, underlying, -pos, price);
-    this.engine.settleFill("bot:clearing", underlying, pos, price);
+    // Only the over-cap remainder: sell excess longs, buy excess shorts.
+    const delta = pos > 0 ? -excess : excess;
+    this.engine.settleFill(userId, underlying, delta, price);
+    this.engine.settleFill("bot:clearing", underlying, -delta, price);
     this.persistence?.markUsers([userId, "bot:clearing"]);
     await this.emit([
       ...fillEvents,
@@ -572,7 +578,7 @@ export class OptionsManager {
         challengeId: this.challenge.id,
         userId,
         level: "urgent",
-        message: `Border-price liquidation executed on ${underlying} at ${price.toFixed(2)}.`,
+        message: `Border-price liquidation of ${excess} ${underlying} at ${price.toFixed(2)}.`,
         ts: now,
       },
     ]);
@@ -768,16 +774,23 @@ export class OptionsManager {
     ];
   }
 
-  private strikes(spot: number): number[] {
-    const step = niceStep(spot);
-    const atm = Math.max(step, Math.round(spot / step) * step);
-    const steps = this.opts.strikeSteps;
-    const out: number[] = [];
-    for (let i = -steps; i <= steps; i++) {
-      const k = atm + i * step;
-      if (k > 0) out.push(round2(k));
-    }
-    return out;
+  /** Book mid, then last, then FV — strikes track the live market, not the scripted FV. */
+  private listingMid(underlying: string): number | undefined {
+    const snap = this.engine.snapshot(underlying);
+    const mid = midFromBook(snap.bids, snap.asks);
+    if (mid != null && Number.isFinite(mid) && mid > 0) return mid;
+    const last = this.engine.getPrice(underlying);
+    if (last != null && Number.isFinite(last) && last > 0) return last;
+    const fv = this.engine.getFairValue(underlying);
+    if (fv != null && Number.isFinite(fv) && fv > 0) return fv;
+    return undefined;
+  }
+
+  private strikes(spot: number, underlying: string): number[] {
+    const tick =
+      this.challenge.config.symbols.find((s) => s.symbol === underlying)
+        ?.tickSize ?? 0.01;
+    return optionWindowStrikes(spot, tick);
   }
 
   private symbolVol(underlying: string): number {
@@ -800,17 +813,4 @@ export class OptionsManager {
     );
     this.timers.add(t);
   }
-}
-
-/** A "nice" strike increment ≈ 5% of spot, snapped to 1/2/5 × 10ⁿ. */
-function niceStep(spot: number): number {
-  const raw = Math.max(0.5, spot * 0.05);
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-  const norm = raw / mag;
-  const snapped = norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10;
-  return snapped * mag;
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }

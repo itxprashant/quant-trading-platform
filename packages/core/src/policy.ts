@@ -88,15 +88,29 @@ export interface GrantHolder {
 }
 
 /**
- * Pick the grant winner: the largest holder of the target symbol. Ties break by
- * the first id encountered. Returns null when nobody holds a positive position.
+ * Grant leaders: every holder of the maximum positive quantity. Empty when
+ * nobody is long the target symbol. Order is input order (settlement sorts
+ * humans by user id so ties stay stable).
  */
-export function grantWinner(holders: GrantHolder[]): string | null {
-  let best: GrantHolder | null = null;
+export function grantWinners(holders: GrantHolder[]): string[] {
+  let bestQty = 0;
+  const ids: string[] = [];
   for (const h of holders) {
-    if (h.qty > 0 && (best === null || h.qty > best.qty)) best = h;
+    if (!Number.isFinite(h.qty) || h.qty <= 0) continue;
+    if (h.qty > bestQty) {
+      bestQty = h.qty;
+      ids.length = 0;
+      ids.push(h.id);
+    } else if (h.qty === bestQty) {
+      ids.push(h.id);
+    }
   }
-  return best?.id ?? null;
+  return ids;
+}
+
+/** First grant leader, or null when the cohort is empty. */
+export function grantWinner(holders: GrantHolder[]): string | null {
+  return grantWinners(holders)[0] ?? null;
 }
 
 function clamp01(x: number): number {

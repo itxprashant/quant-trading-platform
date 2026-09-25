@@ -1,4 +1,5 @@
 import {
+  midFromBook,
   type EngineEvent,
   type OrderSide,
   type OrderStatus,
@@ -203,6 +204,27 @@ export class ChallengeEngine {
       this.symbolCfg.set(s.symbol, s);
       this.autonomousSet.add(s.symbol);
     }
+  }
+
+  /**
+   * When set, human buys are rejected once cash is at or below this floor.
+   * Not checkpointed — the runner reapplies it from challenge rules.
+   */
+  private buyCashFloor?: number;
+
+  setBuyCashFloor(threshold: number | undefined): void {
+    this.buyCashFloor =
+      threshold !== undefined && Number.isFinite(threshold)
+        ? threshold
+        : undefined;
+  }
+
+  /** Cash at or below the buy floor: humans may sell, not buy. */
+  buysBlocked(userId: string): boolean {
+    return (
+      this.buyCashFloor !== undefined &&
+      this.cashOf(userId) <= this.buyCashFloor
+    );
   }
 
   setFrozen(frozen: boolean): void {
@@ -628,6 +650,20 @@ export class ChallengeEngine {
 
   setPrice(symbol: string, price: number): void {
     this.prices.set(symbol, price);
+  }
+
+  /**
+   * Stamp each listed book with its current mid so close settlement uses
+   * bid/ask, not the last print. Empty books keep the existing mark.
+   */
+  markBooksToMid(): void {
+    for (const symbol of this.books.keys()) {
+      const snap = this.snapshot(symbol);
+      const mid = midFromBook(snap.bids, snap.asks);
+      if (mid != null && Number.isFinite(mid) && mid >= 0) {
+        this.prices.set(symbol, mid);
+      }
+    }
   }
 
   /* ----------------------------------------------------------------- *
@@ -1284,6 +1320,15 @@ export class ChallengeEngine {
     if (this.frozen && !cmd.force) {
       return [this.rejected(cmd, "market frozen")];
     }
+    if (
+      cmd.side === "buy" &&
+      !cmd.force &&
+      !cmd.admin &&
+      !cmd.userId.startsWith("bot:") &&
+      this.buysBlocked(cmd.userId)
+    ) {
+      return [this.rejected(cmd, "buys blocked")];
+    }
     const maxOpen = this.cfg.maxOpenOrders ?? 25;
     const human = !cmd.force && !cmd.userId.startsWith("bot:");
     if (human && this.openOrderCount(cmd.userId) >= maxOpen) {
@@ -1479,10 +1524,16 @@ export class ChallengeEngine {
     return [this.offBookCancelUpdate(cmd)];
   }
 
-  cancelUserOrders(userId: string, ts: number): EngineEvent[] {
+  cancelUserOrders(
+    userId: string,
+    ts: number,
+    side?: OrderSide,
+  ): EngineEvent[] {
     const events: EngineEvent[] = [];
     for (const [symbol, book] of this.books) {
-      const orders = book.orders().filter((o) => o.userId === userId);
+      const orders = book
+        .orders()
+        .filter((o) => o.userId === userId && (side === undefined || o.side === side));
       for (const order of orders) {
         book.remove(order.id);
         events.push(this.orderUpdate(order, symbol, "cancelled", ts));
@@ -1681,11 +1732,17 @@ export class ChallengeEngine {
   ): EngineEvent {
     const cfg = this.symbolCfg.get(symbol)!;
     const cur = this.prices.get(symbol) ?? tradePrice;
-    const delta = (tradePrice - cur) * PRICE_TRADE_IMPACT * 50;
-    const next = this.roundTick(
-      Math.max(cfg.tickSize, cur + delta),
-      cfg.tickSize,
-    );
+    // Option last is the print. Spot last still blends toward the trade so
+    // autonomous walk does not jump the full distance on one fill.
+    const next = this.getOption(symbol)
+      ? this.roundTick(Math.max(cfg.tickSize, tradePrice), cfg.tickSize)
+      : this.roundTick(
+          Math.max(
+            cfg.tickSize,
+            cur + (tradePrice - cur) * PRICE_TRADE_IMPACT * 50,
+          ),
+          cfg.tickSize,
+        );
     this.prices.set(symbol, next);
     return {
       type: "price_update",

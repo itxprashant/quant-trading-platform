@@ -34,6 +34,7 @@ import {
 import {
   midFromBook,
   redisKeys,
+  zEdenConfig,
   zEdenOptionsConfig,
   zEdenRules,
   edenEventFlow,
@@ -43,6 +44,9 @@ import {
   EDEN_EVENT_VERSION,
   type BroadcastEnvelope,
   type BondTemplate,
+  type BotConfig,
+  type ChallengeConfig,
+  type EdenBotConfig,
   type EdenConfig,
   type EdenEventAction,
   type EngineCommand,
@@ -68,6 +72,9 @@ import {
 import { EventExecutor } from "./event-executor.js";
 import { finalizeScores } from "./final-scoring.js";
 
+/** After a margin warning, traders may borrow before forced flatten. */
+export const MARGIN_BORROW_GRACE_MS = 30_000;
+
 /**
  * Owns the in-memory matching engine for one challenge: consumes its command
  * stream, mutates state, persists asynchronously, and publishes events.
@@ -90,8 +97,10 @@ export class ChallengeRunner {
   private readonly scriptedNews = new Set<string>();
   private newsBusy = false;
   private readonly marginNotices = new Map<string, number>();
+  /** Flatten alert already sent for the current breach; later ticks stay silent. */
+  private readonly marginFlattenNotified = new Set<string>();
   private readonly bots: BotEngine;
-  private readonly edenBots?: EdenBotEngine;
+  private edenBots?: EdenBotEngine;
   private options?: OptionsManager;
   private markets?: MarketsManager;
   private minuteCount = 0;
@@ -134,6 +143,7 @@ export class ChallengeRunner {
       maxOpenOrders: challenge.config.maxOpenOrders ?? 25,
       allowMargin: challenge.config.allowMargin,
     });
+    this.applyBuyCashFloor();
     this.engine.setFrozen(this.frozen);
     this.persistence = new Persistence(db, challenge.id, this.engine);
     this.persistence.setCommitGuard(() => {
@@ -286,6 +296,7 @@ export class ChallengeRunner {
     });
     if (checkpoint) {
       this.engine.restoreState(checkpoint.state);
+      this.applyBuyCashFloor();
       this.lastId = checkpoint.cursor;
       this.minuteCount = checkpoint.minuteCount;
     } else {
@@ -742,6 +753,8 @@ export class ChallengeRunner {
       .where(eq(challenges.id, this.challenge.id));
     this.markets?.stop();
     await this.options?.expireAll(ts);
+    // Capture mids while resting quotes are still on the book.
+    this.engine.markBooksToMid();
     const events: EngineEvent[] = [];
     for (const id of this.engine.accountIds())
       events.push(...this.engine.cancelUserOrders(id, ts));
@@ -768,7 +781,7 @@ export class ChallengeRunner {
           data: {
             level: "info",
             message:
-              "Trading halted. Final mark-to-market and rankings are complete.",
+              "Trading halted. Final settlement and rankings are complete.",
             ts,
           },
         },
@@ -793,6 +806,7 @@ export class ChallengeRunner {
           price: cmd.price,
           ts: cmd.ts,
           admin: cmd.admin,
+          ...(cmd.timeInForce === "IOC" ? { timeInForce: "IOC" } : {}),
         });
       case "cancel_order":
         return this.engine.cancelOrder({
@@ -913,6 +927,8 @@ export class ChallengeRunner {
         await this.cues?.tick(now);
         return [];
       }
+      case "set_bots":
+        return this.applyBotConfig(cmd.bots, cmd.edenBots, cmd.ts);
       default:
         return [];
     }
@@ -1125,6 +1141,47 @@ export class ChallengeRunner {
     ]);
   }
 
+  /** Swap live bot counts without tearing down the runner. */
+  private async applyBotConfig(
+    bots: BotConfig | undefined,
+    edenBots: EdenBotConfig | undefined,
+    ts: number,
+  ): Promise<EngineEvent[]> {
+    const events: EngineEvent[] = [];
+    const next: ChallengeConfig = { ...this.challenge.config };
+    if (bots) {
+      next.bots = bots;
+      this.bots.setConfig(bots);
+    }
+    if (edenBots) {
+      const eden = zEdenConfig.parse({
+        ...this.challenge.config.eden,
+        bots: edenBots,
+      });
+      next.eden = eden;
+      this.eden = { ...this.eden, ...eden };
+      if (this.edenEnabled) {
+        if (!this.edenBots) {
+          this.edenBots = new EdenBotEngine(
+            this.engine,
+            edenBots,
+            this.challenge.config.symbols,
+          );
+        } else {
+          for (const c of this.edenBots.setConfig(edenBots, ts)) {
+            events.push(...this.engine.cancelOrder(c));
+          }
+        }
+      }
+    }
+    this.challenge.config = next;
+    await this.db
+      .update(challenges)
+      .set({ config: next })
+      .where(eq(challenges.id, this.challenge.id));
+    return events;
+  }
+
   /** Introduce an ETF into the live challenge and announce it to clients. */
   private async addEtf(cfg: EtfConfig, ts: number): Promise<void> {
     const mgr = await this.ensureMarkets();
@@ -1149,7 +1206,7 @@ export class ChallengeRunner {
   /** Tell every trader a government bond series is now for sale. */
   private async announceBond(template: BondTemplate, ts: number): Promise<void> {
     const multiplier = template.payoutMultiplier ?? 2;
-    const message = `${template.name} is listed. Choose a principal above your free cash; ${multiplier}× is paid through the close.`;
+    const message = `${template.name} is listed. Choose a principal up to your free cash; ${multiplier}× is paid through the close.`;
     const item: NewsItem = {
       id: eventActionUuid(this.challenge.id, `bond-listed/${template.id}`),
       challengeId: this.challenge.id,
@@ -1231,11 +1288,17 @@ export class ChallengeRunner {
   }
 
   /** Flatten a trader's positions at market and emit a margin-call notice. */
-  private liquidate(userId: string, reason: string, ts: number): EngineEvent[] {
+  private liquidate(
+    userId: string,
+    _reason: string,
+    ts: number,
+    notify = true,
+  ): EngineEvent[] {
     const freeBefore = this.engine.freeCashOf(userId);
     const events = this.engine.cancelUserOrders(userId, ts);
     const cmds = this.engine.liquidationCommands(userId, ts);
     for (const c of cmds) events.push(...this.engine.placeOrder(c));
+    if (!notify) return events;
     const liquidated = this.engine.absInventoryOf(userId) === 0;
     events.push({
       type: "margin_call",
@@ -1243,14 +1306,6 @@ export class ChallengeRunner {
       userId,
       freeCash: freeBefore,
       liquidated,
-      ts,
-    });
-    events.push({
-      type: "alert",
-      challengeId: this.challenge.id,
-      userId,
-      level: "urgent",
-      message: `Margin call: ${reason}. ${liquidated ? "Inventory liquidated at market." : "IOC liquidation attempted; remaining inventory awaits liquidity."}`,
       ts,
     });
     return events;
@@ -1396,31 +1451,43 @@ export class ChallengeRunner {
     await this.settlements.repayLoans(now);
   }
 
+  private applyBuyCashFloor(): void {
+    this.engine.setBuyCashFloor(
+      this.edenEnabled ? this.eden?.rules.marginCallThreshold : undefined,
+    );
+  }
+
   private enforceMargins(now: number): EngineEvent[] {
     if (!this.edenEnabled || !this.eden) return [];
     const events: EngineEvent[] = [];
+    const threshold = this.eden.rules.marginCallThreshold;
     // Revisit counterparties once after liquidation trades; bound work if liquidity is absent.
     for (let pass = 0; pass < 2; pass++) {
       for (const id of this.engine.accountIds()) {
         if (!UUID_RE.test(id)) continue;
         const free = this.engine.freeCashOf(id);
-        if (free > this.eden.rules.marginCallThreshold) {
+        if (free > threshold) {
           this.marginNotices.delete(id);
+          this.marginFlattenNotified.delete(id);
           continue;
         }
-        const first = !this.marginNotices.has(id);
-        const canFlatten =
-          !this.frozen &&
-          this.eden.rules.forcedLiquidation &&
-          this.engine.absInventoryOf(id) > 0;
-        if (canFlatten && first) {
-          events.push(...this.liquidate(id, "cash exhausted", now));
-        } else if (canFlatten) {
-          events.push(...this.engine.cancelUserOrders(id, now));
-          for (const c of this.engine.liquidationCommands(id, now)) {
-            events.push(...this.engine.placeOrder(c));
+        const cancelledBuys = this.engine.cancelUserOrders(id, now, "buy");
+        events.push(...cancelledBuys);
+        const noticedAt = this.marginNotices.get(id);
+        const first = noticedAt === undefined;
+        if (first) {
+          this.marginNotices.set(id, now);
+          if (cancelledBuys.some((e) => e.type === "order_update")) {
+            events.push({
+              type: "alert",
+              challengeId: this.challenge.id,
+              userId: id,
+              level: "warning",
+              message:
+                "Cash below limit — working buys cancelled. Sells only until cash is restored.",
+              ts: now,
+            });
           }
-        } else if (first) {
           events.push({
             type: "margin_call",
             challengeId: this.challenge.id,
@@ -1429,8 +1496,18 @@ export class ChallengeRunner {
             liquidated: false,
             ts: now,
           });
+          continue;
         }
-        this.marginNotices.set(id, now);
+        const canFlatten =
+          !this.frozen &&
+          this.eden.rules.forcedLiquidation &&
+          this.engine.absInventoryOf(id) > 0 &&
+          now - noticedAt >= MARGIN_BORROW_GRACE_MS;
+        if (canFlatten) {
+          const notify = !this.marginFlattenNotified.has(id);
+          if (notify) this.marginFlattenNotified.add(id);
+          events.push(...this.liquidate(id, "cash exhausted", now, notify));
+        }
       }
     }
     return events;
@@ -1454,16 +1531,26 @@ export class ChallengeRunner {
       string,
       Extract<EngineEvent, { type: "book_update" }>
     >();
+    const lastTrade = new Set<string>();
 
     for (const e of events) {
       switch (e.type) {
         case "price_update":
-          lastPrice.set(e.symbol, e);
+          if (!lastTrade.has(e.symbol)) lastPrice.set(e.symbol, e);
           break;
         case "book_update":
           lastBook.set(e.symbol, e);
           break;
         case "trade":
+          lastTrade.add(e.symbol);
+          lastPrice.set(e.symbol, {
+            type: "price_update",
+            challengeId: this.challenge.id,
+            symbol: e.symbol,
+            price: e.price,
+            change: 0,
+            ts: e.ts,
+          });
           affectedUsers.add(e.buyerId);
           affectedUsers.add(e.sellerId);
           envelopes.push({
@@ -1665,6 +1752,10 @@ export class ChallengeRunner {
     // Bond principal is an illiquid mark: it lifts net worth (PnL) but not
     // free cash, so locking cash into bonds still shrinks margin headroom.
     const bondValue = this.markets?.bondValueOf(userId) ?? 0;
+    const bonds = this.edenEnabled
+      ? (this.markets?.bondsOf?.(userId) ?? [])
+      : undefined;
+    const marketValue = pf.marketValue + bondValue;
     const pnl = pf.pnl + bondValue;
     const score = computeScore(
       {
@@ -1688,12 +1779,12 @@ export class ChallengeRunner {
       challengeId: this.challenge.id,
       cash: pf.cash,
       positions: pf.positions,
-      marketValue: pf.marketValue,
+      marketValue,
       pnl,
       score,
       metrics,
       ...(this.edenEnabled
-        ? { loanDebt: pf.loanDebt, freeCash: pf.freeCash }
+        ? { loanDebt: pf.loanDebt, freeCash: pf.freeCash, bonds }
         : {}),
     };
   }

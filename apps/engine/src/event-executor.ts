@@ -238,17 +238,7 @@ export class EventExecutor {
         const expiresAt = new Date(
           context.timestampAtSecond(action.closesAtSecond),
         );
-        const traders = await this.humanTraders(ts);
-        traders.sort(
-          (a, b) =>
-            d.engine.cashOf(b.userId) - d.engine.cashOf(a.userId) ||
-            a.userId.localeCompare(b.userId),
-        );
-        const rich = traders.slice(
-          0,
-          Math.ceil(traders.length * action.topFraction),
-        );
-        const description = `${action.taxRate * 100}% of free cash from the top ${action.topFraction * 100}% is shared equally among the bottom ${action.bottomFraction * 100}%. Rankings are recomputed at closing. Current top cohort: ${rich.map((r) => `${r.displayName} (${r.userId})`).join(", ") || "none"}.`;
+        const description = `${action.taxRate * 100}% of free cash from the top ${action.topFraction * 100}% is shared equally among the bottom ${action.bottomFraction * 100}%. Rankings are recomputed at closing.`;
         await d.db
           .insert(voteProposals)
           .values({
@@ -311,7 +301,7 @@ export class EventExecutor {
             symbol: action.symbol,
             prize: action.prize,
             description:
-              "Strategic Reserves Critical. In exactly 5 minutes, the single player holding the highest inventory of Aerium will receive a massive $10,000 Government Grant.",
+              "Strategic Reserves Critical. In exactly 5 minutes, the highest Aerium inventory wins a $10,000 Government Grant. Tied leaders split the prize equally.",
             status: "open",
             expiresAt,
             createdAt: new Date(ts),

@@ -401,7 +401,9 @@ export async function suitePostAudit(t, ctx) {
   await t.test("bond purchase marks remaining principal and does not mint PnL", async () => {
     if (!pid()) return t.skip("bond pnl", "probe missing");
     const before = await http.get(`/api/portfolio/${pid()}`, { token: ctx.t3.token });
-    const price = (before.freeCash ?? before.cash) + 1;
+    const available = before.freeCash ?? before.cash;
+    if (!(available > 0)) return t.skip("bond pnl", "no free cash");
+    const price = available;
     await http.post(
       "/api/markets/bonds/purchase",
       { challengeId: pid(), bondId: "discount", price },
@@ -423,14 +425,18 @@ export async function suitePostAudit(t, ctx) {
     );
   });
 
-  await t.test("bond purchase is refused when price does not exceed free cash", async () => {
+  await t.test("bond purchase is refused when price exceeds free cash", async () => {
     if (!pid()) return t.skip("bond cash", "probe missing");
     const before = await http.get(`/api/portfolio/${pid()}`, { token: ctx.t2.token });
     const r = await http.request("POST", "/api/markets/bonds/purchase", {
       token: ctx.t2.token,
-      body: { challengeId: pid(), bondId: "whale", price: before.freeCash ?? before.cash },
+      body: {
+        challengeId: pid(),
+        bondId: "whale",
+        price: (before.freeCash ?? before.cash) + 1,
+      },
     });
-    if (r.status === 409) return;
+    if (r.status === 409) return t.eq(r.body?.error, "insufficient_cash");
     t.eq(r.status, 202);
     const held = await poll(
       async () => {
@@ -441,7 +447,7 @@ export async function suitePostAudit(t, ctx) {
     ).catch(() => null);
     t.ok(
       !held,
-      `bond at free cash settled; cash is now ${held?.cash}`,
+      `bond above free cash settled; cash is now ${held?.cash}`,
     );
   });
 

@@ -611,7 +611,9 @@ describe("script executor", () => {
     await run(f, "vote/open");
     const message = (bus.publishBroadcast.mock.lastCall as any)[2][0].msg;
     expect(message.data.yes).toBe(1);
-    expect(message.data.description).toContain("alice");
+    expect(message.data.description).toMatch(/free cash from the top/);
+    expect(message.data.description).not.toMatch(/top cohort/i);
+    expect(message.data.description).not.toContain("alice");
     expect(f.tables.votes).toHaveLength(1);
   });
 

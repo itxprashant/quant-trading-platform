@@ -410,7 +410,7 @@ Source of truth: `packages/shared/src/eden-event.ts` (`EDEN_EVENT_VERSION = "ede
 
 - **Cost of carry:** $1/unit/minute on absolute inventory
 - **Predatory loans:** 2× repay amortized over remaining game minutes; halftime rescue loans at minute 60
-- **Government bonds:** each series once; trader-chosen principal must exceed free cash; 2× that amount is paid uniformly until `endsAt`
+- **Government bonds:** each series once; trader-chosen principal cannot exceed free cash; 2× that amount is paid uniformly until `endsAt`
 - **Margin calls:** at `marginCallThreshold` (default $0 free cash); forced liquidation when enabled
 - **Position cap:** 100 units per symbol (default)
 

@@ -105,6 +105,9 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
       if ((existing[0]?.quantity ?? 0) > 0) {
         return reply.code(409).send({ error: "bond_limit" });
       }
+      if (input.price > participant.cash) {
+        return reply.code(409).send({ error: "insufficient_cash" });
+      }
       const cmd: EngineCommand = {
         type: "purchase_bond",
         challengeId: input.challengeId,

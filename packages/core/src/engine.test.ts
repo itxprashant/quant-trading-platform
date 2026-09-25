@@ -131,6 +131,78 @@ describe("ChallengeEngine matching", () => {
     expect(e.snapshot("X1").asks[0]).toMatchObject({ price: 101, quantity: 4 });
   });
 
+  it("sets an option last price to the trade print, not the theoretical mark", () => {
+    const e = makeEngine();
+    e.addSymbol(
+      { symbol: "AERIUM-C-1050", initialPrice: 90.2, volatility: 0, tickSize: 0.1 },
+      { autonomous: false },
+    );
+    e.registerOption({
+      symbol: "AERIUM-C-1050",
+      underlying: "X1",
+      optionType: "call",
+      strike: 1050,
+      cycleId: "cycle",
+      openedAt: 1,
+      expiresAt: 60_000,
+    });
+    e.placeOrder({
+      orderId: "ask",
+      userId: "alice",
+      symbol: "AERIUM-C-1050",
+      side: "sell",
+      orderType: "limit",
+      quantity: 1,
+      price: 90,
+      ts: 1,
+    });
+    e.placeOrder({
+      orderId: "bid",
+      userId: "bob",
+      symbol: "AERIUM-C-1050",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 90,
+      ts: 2,
+    });
+    expect(e.getPrice("AERIUM-C-1050")).toBe(90);
+  });
+
+  it("marks listed books to the bid/ask mid for close settlement", () => {
+    const e = makeEngine();
+    e.setPrice("X1", 90);
+    e.placeOrder({
+      orderId: "bid",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 4,
+      price: 99,
+      ts: 1,
+    });
+    e.placeOrder({
+      orderId: "ask",
+      userId: "bob",
+      symbol: "X1",
+      side: "sell",
+      orderType: "limit",
+      quantity: 4,
+      price: 101,
+      ts: 2,
+    });
+    e.markBooksToMid();
+    expect(e.getPrice("X1")).toBe(100);
+  });
+
+  it("keeps the last mark when a book has no quotes", () => {
+    const e = makeEngine();
+    e.setPrice("X1", 90);
+    e.markBooksToMid();
+    expect(e.getPrice("X1")).toBe(90);
+  });
+
   it("respects FIFO across two makers at the same price", () => {
     const e = makeEngine();
     e.placeOrder({ orderId: "a", userId: "m1", symbol: "X1", side: "sell", orderType: "limit", quantity: 5, price: 100, ts: 1 });
@@ -633,5 +705,119 @@ describe("allowMargin: false", () => {
     const evts = e.placeOrder({ orderId: "b", userId: "bot:mm", symbol: "X1", side: "buy", orderType: "market", quantity: 30, ts: 2 });
     expect(trades(evts).reduce((sum, t) => sum + t.quantity, 0)).toBe(30);
     expect(e.portfolioOf("alice").cash).toBe(4_000);
+  });
+});
+
+describe("buy cash floor", () => {
+  function floorEngine() {
+    const e = makeEngine({ startingCash: 10_000, allowMargin: true });
+    e.setBuyCashFloor(0);
+    return e;
+  }
+
+  it("cancels only working buys and leaves sells up", () => {
+    const e = floorEngine();
+    e.placeOrder({
+      orderId: "bid",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 90,
+      ts: 1,
+    });
+    e.placeOrder({
+      orderId: "ask",
+      userId: "alice",
+      symbol: "X1",
+      side: "sell",
+      orderType: "limit",
+      quantity: 1,
+      price: 110,
+      ts: 2,
+    });
+    const evts = e.cancelUserOrders("alice", 3, "buy");
+    expect(evts).toContainEqual(
+      expect.objectContaining({
+        type: "order_update",
+        orderId: "bid",
+        status: "cancelled",
+      }),
+    );
+    expect(e.snapshot("X1").bids).toEqual([]);
+    expect(e.snapshot("X1").asks).toHaveLength(1);
+  });
+
+  it("rejects human buys at the floor and still accepts sells", () => {
+    const e = floorEngine();
+    e.setAccount("alice", { cash: 0 });
+    const buy = e.placeOrder({
+      orderId: "bid",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 90,
+      ts: 1,
+    });
+    expect(buy).toMatchObject([{ type: "order_update", status: "rejected" }]);
+    const sell = e.placeOrder({
+      orderId: "ask",
+      userId: "alice",
+      symbol: "X1",
+      side: "sell",
+      orderType: "limit",
+      quantity: 1,
+      price: 110,
+      ts: 2,
+    });
+    expect(
+      sell.some((evt) => evt.type === "order_update" && evt.status === "rejected"),
+    ).toBe(false);
+    expect(e.snapshot("X1").asks).toHaveLength(1);
+  });
+
+  it("still lets forced, admin, and bot buys through at the floor", () => {
+    const e = floorEngine();
+    e.setAccount("alice", { cash: 0 });
+    const force = e.placeOrder({
+      orderId: "force",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 90,
+      ts: 1,
+      force: true,
+    });
+    const admin = e.placeOrder({
+      orderId: "admin",
+      userId: "alice",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 89,
+      ts: 2,
+      admin: true,
+    });
+    const bot = e.placeOrder({
+      orderId: "bot",
+      userId: "bot:mm",
+      symbol: "X1",
+      side: "buy",
+      orderType: "limit",
+      quantity: 1,
+      price: 88,
+      ts: 3,
+    });
+    expect(
+      [...force, ...admin, ...bot].some(
+        (evt) => evt.type === "order_update" && evt.status === "rejected",
+      ),
+    ).toBe(false);
   });
 });

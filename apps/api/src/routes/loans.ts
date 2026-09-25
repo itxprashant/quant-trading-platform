@@ -3,7 +3,13 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import { challenges, loans, participants } from "@qtp/db";
-import { zRequestLoanInput, type EngineCommand, type Loan } from "@qtp/shared";
+import {
+  edenEventFlow,
+  edenLoansClosed,
+  zRequestLoanInput,
+  type EngineCommand,
+  type Loan,
+} from "@qtp/shared";
 import { publishCommand } from "@qtp/bus";
 import { rateLimit } from "../ratelimit.js";
 import { validate } from "../util.js";
@@ -27,6 +33,16 @@ export async function loanRoutes(app: FastifyInstance): Promise<void> {
     const now = Date.now();
     if (!challenge.endsAt || challenge.endsAt.getTime() <= now) {
       throw new HttpError(409, "invalid_loan_deadline");
+    }
+    if (
+      edenLoansClosed(
+        now,
+        challenge.endsAt,
+        challenge.startsAt,
+        edenEventFlow(challenge.config?.eden) !== "host",
+      )
+    ) {
+      throw new HttpError(409, "loan_window_closed");
     }
     if (
       !Number.isFinite(principal) ||

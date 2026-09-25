@@ -12,7 +12,7 @@ import {
   publishBroadcast,
   publishCommand,
 } from "@qtp/bus";
-import { bargainRejectProbability } from "@qtp/core";
+import { bargainAskPct, bargainRejectProbability } from "@qtp/core";
 import {
   zOtcRespondInput,
   type EngineCommand,
@@ -176,23 +176,23 @@ export async function otcRoutes(app: FastifyInstance): Promise<void> {
         const counter = input.counterCash ?? offer.cashToTrader;
         if (!Number.isFinite(counter))
           return reply.code(400).send({ error: "invalid_counter" });
-        // Fair cash-to-trader makes the legs net-zero at fair value.
+        // Buy underpay and sell overask share one FV-notional edge.
         const fvs = await getFairValues(app.redis, challengeId);
-        let unitsValue = 0;
-        let legCash = 0;
+        const askLegs = [];
         for (const leg of legs) {
-          const fv =
+          const fairValue =
             fvs[leg.symbol] ??
             (await getPrice(app.redis, challengeId, leg.symbol)) ??
             leg.price;
-          unitsValue += leg.quantity * fv;
-          legCash += leg.price * leg.quantity;
+          askLegs.push({
+            quantity: leg.quantity,
+            price: leg.price,
+            fairValue,
+          });
         }
-        const fairCash = legCash - unitsValue;
-        const surplus = counter - fairCash; // extra the trader is demanding
-        const notional = Math.max(Math.abs(unitsValue), Math.abs(legCash), 1);
-        const underpayPct = surplus > 0 ? surplus / notional : 0;
-        const rejectProb = bargainRejectProbability(underpayPct);
+        const rejectProb = bargainRejectProbability(
+          bargainAskPct(askLegs, counter),
+        );
         if (Math.random() < rejectProb) {
           const [claimed] = await app.db
             .update(otcOffers)

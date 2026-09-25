@@ -1,6 +1,11 @@
 import { eq } from "drizzle-orm";
 import { type Redis } from "@qtp/bus";
-import { computeScore, profitPnl, type EngineState } from "@qtp/core";
+import {
+  computeScore,
+  endingSettlement,
+  profitPnl,
+  type EngineState,
+} from "@qtp/core";
 import {
   challenges,
   engineCheckpoints,
@@ -9,8 +14,10 @@ import {
   type Database,
 } from "@qtp/db";
 import {
+  bondMarkValue,
   redisKeys,
   type LeaderboardEntry,
+  type SettlementAsset,
   type TraderMetrics,
 } from "@qtp/shared";
 
@@ -69,12 +76,43 @@ export async function finalizeScores(
     const entries: LeaderboardEntry[] = valuation.accounts
       .filter((account) => account.role !== "admin")
       .map((account) => {
-        const pnl = profitPnl(
+        const settlement = endingSettlement(
           account.cash,
           account.marketValue,
-          account.startingCash,
-          account.loanDebt,
         );
+        const pnl =
+          valuation.challenge.type === "new_eden"
+            ? settlement
+            : profitPnl(
+                account.cash,
+                account.marketValue,
+                account.startingCash,
+                account.loanDebt,
+              );
+        const assets: SettlementAsset[] = [
+          ...account.positions
+            .filter((position) => position.quantity !== 0)
+            .map((position) => {
+              const mid = valuation.prices.get(position.symbol) ?? 0;
+              return {
+                symbol: position.symbol,
+                quantity: position.quantity,
+                mid,
+                value: position.quantity * mid,
+              };
+            }),
+          ...account.bonds
+            .map((bond) => {
+              const value = bondMarkValue(bond);
+              return {
+                symbol: bond.name,
+                quantity: bond.quantity,
+                mid: bond.quantity !== 0 ? value / bond.quantity : 0,
+                value,
+              };
+            })
+            .filter((asset) => asset.quantity !== 0 || asset.value !== 0),
+        ];
         const saved = savedAccounts.get(account.userId);
         const metrics: TraderMetrics | undefined = saved
           ? {
@@ -112,6 +150,9 @@ export async function finalizeScores(
           pnl,
           score,
           ...(metrics ? { metrics } : {}),
+          settlement,
+          cash: account.cash,
+          assets,
         };
       });
     entries.sort(

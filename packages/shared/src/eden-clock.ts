@@ -22,6 +22,8 @@ export const EDEN_EVENT_NEWS_MINUTES = [
 export const EDEN_EVENT_HALFTIME_START_MINUTE = 60;
 export const EDEN_EVENT_HALFTIME_END_MINUTE = 70;
 export const EDEN_EVENT_OPTIONS_OPEN_MINUTE = 70;
+/** New bank loans are refused in the last this many game minutes. */
+export const EDEN_LOAN_LOCKOUT_MINUTES = 10;
 export const EDEN_EVENT_ETF_LIST_MINUTE = 45;
 export const EDEN_EVENT_ETF_WINDOW_SEC = 30;
 /** Create/redeem windows every 10 minutes from the ETF listing, skipping halftime. */
@@ -81,4 +83,49 @@ export function edenEventStateAt(elapsedSeconds: number) {
         EDEN_EVENT_ETF_WINDOW_SEC,
     botVolatilityMultiplier: minute >= 120 ? 3 : 1,
   } as const;
+}
+
+function epochMs(value: Date | string | number | null | undefined): number {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return value;
+  if (typeof value === "string") return Date.parse(value);
+  return Number.NaN;
+}
+
+/**
+ * Wall milliseconds of remaining session that still allow a new loan.
+ * Scripted / cue events scale from `startsAt`→`endsAt` so accelerated dry
+ * runs lock out the last 10 game minutes, not 10 wall minutes.
+ */
+export function edenLoanLockoutMs(
+  startsAt: Date | string | number | null | undefined,
+  endsAt: Date | string | number | null | undefined,
+  scheduledClock: boolean,
+): number {
+  const start = epochMs(startsAt);
+  const end = epochMs(endsAt);
+  if (
+    scheduledClock &&
+    Number.isFinite(start) &&
+    Number.isFinite(end) &&
+    end > start
+  ) {
+    return (
+      EDEN_LOAN_LOCKOUT_MINUTES *
+      ((end - start) / EDEN_EVENT_DURATION_MINUTES)
+    );
+  }
+  return EDEN_LOAN_LOCKOUT_MINUTES * 60_000;
+}
+
+/** True when a live session is inside the last-10-minute loan lockout. */
+export function edenLoansClosed(
+  now: number,
+  endsAt: Date | string | number | null | undefined,
+  startsAt?: Date | string | number | null,
+  scheduledClock = false,
+): boolean {
+  const end = epochMs(endsAt);
+  if (!Number.isFinite(end) || end <= now) return false;
+  return end - now <= edenLoanLockoutMs(startsAt, endsAt, scheduledClock);
 }

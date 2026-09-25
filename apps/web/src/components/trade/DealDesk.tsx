@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Handshake, X } from "lucide-react";
-import type { OtcLeg, OtcOffer } from "@qtp/shared";
+import { formatInstrumentLabel, type OtcLeg, type OtcOffer, type VoteProposal } from "@qtp/shared";
+import { VotePanel } from "./VotePanel";
 import { Button } from "@/components/ui/Button";
 import { Field, Input, Select } from "@/components/ui/Input";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
@@ -24,13 +25,17 @@ function secsLeft(expiresAt: string): number {
  * counter cash figure. Settlement is binding and atomic on the engine.
  */
 export function DealDesk({
+  challengeId,
   offers,
   result,
+  vote = null,
   docked = false,
   className,
 }: {
+  challengeId: string;
   offers: OtcOffer[];
   result: { offerId: string; status: OtcOffer["status"]; ts: number } | null;
+  vote?: VoteProposal | null;
   /** Sit in the right sidebar instead of a floating card. */
   docked?: boolean;
   className?: string;
@@ -103,12 +108,21 @@ export function DealDesk({
       : []
     : (offer?.legs ?? []);
   const validChoice = !hasChoices || selectedLeg !== null;
+  const voteBlock = vote ? (
+    <VotePanel
+      challengeId={challengeId}
+      liveVote={vote}
+      className="shrink-0"
+    />
+  ) : null;
 
   if (!offer) {
     if (docked) {
       return (
-        <Panel
-          className={cn("flex min-h-0 min-w-0 flex-col overflow-hidden", className)}
+        <div className={cn("flex min-h-0 min-w-0 flex-col gap-3", className)}>
+          {voteBlock}
+          <Panel
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
         >
           <PanelHeader
             title={
@@ -139,9 +153,13 @@ export function DealDesk({
             </p>
           )}
         </Panel>
+        </div>
       );
     }
-    return feedback ? (
+    return (
+      <>
+        {voteBlock}
+        {feedback ? (
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center p-4">
         <section
           aria-label="Deal desk result"
@@ -162,7 +180,9 @@ export function DealDesk({
           </button>
         </section>
       </div>
-    ) : null;
+        ) : null}
+      </>
+    );
   }
 
   async function respond(
@@ -227,10 +247,11 @@ export function DealDesk({
     <div
       className={
         docked
-          ? cn("flex min-h-0 min-w-0 flex-col", className)
+          ? cn("flex min-h-0 min-w-0 flex-col gap-3", className)
           : "pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center p-4 sm:bottom-4"
       }
     >
+      {docked ? voteBlock : null}
       <section
         aria-label="OTC deal desk"
         className={
@@ -343,7 +364,9 @@ export function DealDesk({
                         {leg.quantity >= 0 ? "Recv" : "Give"}
                       </span>
                       <span className="mono">{Math.abs(leg.quantity)}</span>{" "}
-                      <span className="text-muted">{leg.symbol}</span>
+                      <span className="text-muted">
+                        {formatInstrumentLabel(leg.symbol)}
+                      </span>
                     </td>
                     <td className="py-1 text-right mono text-faint">
                       @ {money(leg.price)}
@@ -369,7 +392,8 @@ export function DealDesk({
             <div className="space-y-2">
               <p className="text-xs text-muted">
                 Counter the cash adjustment, not the total. Leg prices stay
-                fixed. The desk may reject your bargain.
+                fixed. Underpaying a buy or overasking a sell is rejected
+                linearly: 0% at fair value, always at 25%.
               </p>
               <div className="flex gap-2">
                 <Input

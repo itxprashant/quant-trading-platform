@@ -208,8 +208,9 @@ Traders trade and exercise options from the **Options** panel on the terminal.
 | Open / close an ETF create-redeem window | Eden console → **Open/Close window** | `POST /etf-window` `{ etfSymbol, open }` |
 
 Bonds are bought by traders directly (each series once; they pick a principal
-above free cash and receive that amount × the payout multiplier uniformly until
-the session ends). ETF **create / redeem** against NAV is only allowed while the
+that cannot exceed free cash and receive that amount × the payout multiplier
+uniformly until the session ends). ETF **create / redeem** against NAV is only
+allowed while the
 window is open — open it briefly to let arbitrage close the NAV gap, then close
 it. Traders buy bonds from the **Government bonds** panel and create/redeem from
 the ETF ticket.

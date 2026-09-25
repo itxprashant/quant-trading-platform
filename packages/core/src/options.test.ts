@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { formatInstrumentLabel } from "@qtp/shared";
 import {
+  bargainAskPct,
   bargainRejectProbability,
   etfNav,
   intrinsicValue,
   optionSymbol,
+  optionWindowStrikes,
   parityResidual,
   parseOptionSymbol,
   peggedCoupon,
@@ -34,6 +37,23 @@ describe("option symbols", () => {
 
   it("rejects non-option symbols", () => {
     expect(parseOptionSymbol("AERIUM")).toBeNull();
+  });
+
+  it("formats option symbols without the cycle id", () => {
+    expect(
+      formatInstrumentLabel(
+        "AERIUM-C-1050@6a0672af-9b47-41ed-b7aa-c9e9838e9d99",
+      ),
+    ).toBe("C AERIUM 1050");
+    expect(formatInstrumentLabel("AERIUM")).toBe("AERIUM");
+  });
+});
+
+describe("option window strikes", () => {
+  it("lists current mid plus or minus 5% and ATM, snapped to tick", () => {
+    expect(optionWindowStrikes(100, 1)).toEqual([95, 100, 105]);
+    expect(optionWindowStrikes(120, 1)).toEqual([114, 120, 126]);
+    expect(optionWindowStrikes(1000, 0.5)).toEqual([950, 1000, 1050]);
   });
 });
 
@@ -97,9 +117,32 @@ describe("bargain reject probability", () => {
     expect(bargainRejectProbability(0)).toBe(0);
     expect(bargainRejectProbability(-0.1)).toBe(0);
   });
-  it("scales with underpayment and clamps to 1", () => {
+  it("is linear from (0%, 0%) to (25%, 100%)", () => {
     expect(bargainRejectProbability(0.05)).toBeCloseTo(0.2);
+    expect(bargainRejectProbability(0.125)).toBeCloseTo(0.5);
+    expect(bargainRejectProbability(0.25)).toBe(1);
     expect(bargainRejectProbability(0.5)).toBe(1);
+  });
+});
+
+describe("bargain ask pct", () => {
+  it("measures buy-side underpay vs FV", () => {
+    expect(
+      bargainAskPct([{ quantity: 3, price: 450, fairValue: 500 }], 0),
+    ).toBeCloseTo(0.1);
+  });
+  it("measures sell-side overask vs FV", () => {
+    expect(
+      bargainAskPct([{ quantity: -3, price: 450, fairValue: 500 }], 300),
+    ).toBeCloseTo(0.1);
+  });
+  it("is zero when the trader pays or asks at or better than FV", () => {
+    expect(
+      bargainAskPct([{ quantity: 3, price: 500, fairValue: 500 }], 0),
+    ).toBe(0);
+    expect(
+      bargainAskPct([{ quantity: -3, price: 450, fairValue: 500 }], 0),
+    ).toBe(0);
   });
 });
 

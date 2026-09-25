@@ -18,6 +18,7 @@ import {
 } from "@qtp/db";
 import {
   bondMarkValue,
+  type BondHolding,
   type BondTemplate,
   type EngineEvent,
   type EtfConfig,
@@ -29,7 +30,7 @@ import type { DbTransaction, Persistence } from "./persistence.js";
  * Bonds + ETFs for New Eden (comp_desc Session 1):
  *
  *  - Bonds: each series once per trader. The trader picks a principal that
- *    must exceed free cash, pays it now, and receives that amount × the
+ *    cannot exceed free cash, pays it now, and receives that amount × the
  *    payout multiplier in equal game-minute credits through endsAt (the
  *    inverse cashflow of a predatory loan). Outstanding principal is marked
  *    at cost × remaining payout fraction — illiquid, so it lifts net worth
@@ -42,6 +43,7 @@ export class MarketsManager {
   private readonly bonds: BondTemplate[];
   private readonly etfs: EtfConfig[];
   private readonly bondValue = new Map<string, number>();
+  private readonly holdingsByUser = new Map<string, Map<string, BondHolding>>();
   private readonly timers = new Set<NodeJS.Timeout>();
   private running = false;
   private windowLoopStarted = false;
@@ -81,6 +83,31 @@ export class MarketsManager {
     return this.bondValue.get(userId) ?? 0;
   }
 
+  bondsOf(userId: string): BondHolding[] {
+    return [...(this.holdingsByUser.get(userId)?.values() ?? [])].filter(
+      (holding) => holding.quantity > 0,
+    );
+  }
+
+  private setBondHolding(userId: string, holding: BondHolding): void {
+    let byBond = this.holdingsByUser.get(userId);
+    if (!byBond) {
+      byBond = new Map();
+      this.holdingsByUser.set(userId, byBond);
+    }
+    if (holding.quantity > 0) byBond.set(holding.bondId, holding);
+    else byBond.delete(holding.bondId);
+    const mark = [...byBond.values()].reduce(
+      (sum, row) => sum + bondMarkValue(row),
+      0,
+    );
+    if (mark > 0) this.bondValue.set(userId, mark);
+    else {
+      this.bondValue.delete(userId);
+      if (byBond.size === 0) this.holdingsByUser.delete(userId);
+    }
+  }
+
   setDispatcher(dispatch: (task: () => Promise<void>) => void): void {
     this.dispatch = dispatch;
   }
@@ -109,17 +136,22 @@ export class MarketsManager {
     if (this.running) return;
     this.running = true;
     this.bondValue.clear();
-    // Restore aggregate bond principal so net worth survives restarts.
+    this.holdingsByUser.clear();
+    // Restore holdings so net worth and the portfolio list survive restarts.
     const rows = await this.db
       .select()
       .from(bondHoldingsT)
       .where(eq(bondHoldingsT.challengeId, this.challenge.id));
     for (const r of rows) {
       if (r.quantity > 0) {
-        this.bondValue.set(
-          r.userId,
-          (this.bondValue.get(r.userId) ?? 0) + bondMarkValue(r),
-        );
+        this.setBondHolding(r.userId, {
+          bondId: r.bondId,
+          name: r.name,
+          quantity: r.quantity,
+          price: r.price,
+          faceValue: r.faceValue,
+          couponsPaid: r.couponsPaid,
+        });
       }
     }
 
@@ -274,10 +306,13 @@ export class MarketsManager {
     const payments: Array<{
       id: string;
       userId: string;
+      bondId: string;
+      name: string;
+      quantity: number;
+      price: number;
+      faceValue: number;
       coupon: number;
       couponsPaid: number;
-      markBefore: number;
-      markAfter: number;
     }> = [];
     for (const r of rows) {
       if (r.quantity <= 0) continue;
@@ -293,10 +328,13 @@ export class MarketsManager {
       payments.push({
         id: r.id,
         userId: r.userId,
+        bondId: r.bondId,
+        name: r.name,
+        quantity: r.quantity,
+        price: r.price,
+        faceValue: r.faceValue,
         coupon,
         couponsPaid,
-        markBefore: bondMarkValue(r),
-        markAfter: bondMarkValue({ ...r, couponsPaid }),
       });
       touched.add(r.userId);
       events.push({
@@ -319,14 +357,14 @@ export class MarketsManager {
     });
     for (const payment of payments) {
       this.engine.adjustCash(payment.userId, payment.coupon);
-      this.bondValue.set(
-        payment.userId,
-        Math.max(
-          0,
-          (this.bondValue.get(payment.userId) ?? 0) -
-            (payment.markBefore - payment.markAfter),
-        ),
-      );
+      this.setBondHolding(payment.userId, {
+        bondId: payment.bondId,
+        name: payment.name,
+        quantity: payment.quantity,
+        price: payment.price,
+        faceValue: payment.faceValue,
+        couponsPaid: payment.couponsPaid,
+      });
     }
     this.persistence?.markUsers([...touched]);
     if (events.length > 0) await this.emit(events);
@@ -394,10 +432,10 @@ export class MarketsManager {
       return;
     }
     const free = this.engine.freeCashOf(userId);
-    if (!Number.isFinite(free) || !(price > free)) {
+    if (!Number.isFinite(free) || price > free) {
       await this.alert(
         userId,
-        `Price must exceed free cash ($${free.toFixed(2)}).`,
+        `Purchase cannot exceed free cash ($${free.toFixed(2)}).`,
         "warning",
         ts,
       );
@@ -421,11 +459,14 @@ export class MarketsManager {
       });
     });
     this.engine.adjustCash(userId, -price);
-    this.bondValue.set(
-      userId,
-      (this.bondValue.get(userId) ?? 0) +
-        bondMarkValue({ quantity: 1, price, faceValue, couponsPaid: 0 }),
-    );
+    this.setBondHolding(userId, {
+      bondId,
+      name: tpl.name,
+      quantity: 1,
+      price,
+      faceValue,
+      couponsPaid: 0,
+    });
     this.persistence?.markUsers([userId]);
     await this.alert(
       userId,

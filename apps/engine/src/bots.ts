@@ -26,7 +26,7 @@ export class BotEngine {
 
   constructor(
     private readonly engine: ChallengeEngine,
-    private readonly cfg: BotConfig,
+    private cfg: BotConfig,
     symbols: SymbolConfig[],
   ) {
     for (const s of symbols) this.symbolCfg.set(s.symbol, s);
@@ -34,6 +34,10 @@ export class BotEngine {
 
   get enabled(): boolean {
     return this.cfg.marketMakers > 0 || this.cfg.noiseTraders > 0;
+  }
+
+  setConfig(cfg: BotConfig): void {
+    this.cfg = cfg;
   }
 
   /** Register a symbol introduced after startup so MM bots quote it too. */

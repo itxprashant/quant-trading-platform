@@ -338,7 +338,7 @@ export function edenConfig(overrides = {}) {
 export function scriptedEdenConfig() {
   return {
     symbols: [
-      { symbol: "AERIUM", name: "Aerium", initialPrice: 1000, volatility: 4, tickSize: 0.5 },
+      { symbol: "AERIUM", name: "Aerium", initialPrice: 1000, volatility: 0, tickSize: 0.5 },
     ],
     startingCash: 10_000,
     minPosition: -100,

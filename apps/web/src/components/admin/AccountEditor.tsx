@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { AdminAccountView, Challenge } from "@qtp/shared";
+import {
+  formatInstrumentLabel,
+  type AdminAccountView,
+  type Challenge,
+} from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
@@ -54,9 +58,11 @@ export function AccountEditor({
   const [userId, setUserId] = useState("");
   const [mode, setMode] = useState<EditMode>("set");
   const [cash, setCash] = useState("");
+  const [cashAll, setCashAll] = useState("");
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [cashAllBusy, setCashAllBusy] = useState(false);
   const [enrolling, setEnrolling] = useState<"one" | "all" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -203,6 +209,28 @@ export function AccountEditor({
       setError(editError(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function applyCashAll() {
+    const next = Number(cashAll);
+    if (!Number.isFinite(next) || cashAllBusy || seated.length === 0) return;
+    setCashAllBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await post<{ count?: number }>(
+        `/api/admin/${challengeId}/accounts/cash-all`,
+        { cash: next },
+      );
+      setMsg(
+        `Set cash to ${money(next)} for ${res.count ?? seated.length} traders.`,
+      );
+      setTimeout(load, 800);
+    } catch (err) {
+      setError(editError(err));
+    } finally {
+      setCashAllBusy(false);
     }
   }
 
@@ -364,6 +392,31 @@ export function AccountEditor({
           )}
         </div>
 
+        {live && seated.length > 0 && (
+          <div className="flex flex-wrap items-end gap-3 rounded-md border border-border bg-surface-2 px-3 py-2">
+            <Field
+              label="Set cash for all"
+              hint={`Applies the same cash balance to ${seated.length} enrolled trader${seated.length === 1 ? "" : "s"}.`}
+            >
+              <Input
+                type="number"
+                step="0.01"
+                value={cashAll}
+                onChange={(e) => setCashAll(e.target.value)}
+                className="mono"
+              />
+            </Field>
+            <Button
+              size="sm"
+              onClick={applyCashAll}
+              loading={cashAllBusy}
+              disabled={!cashAll.trim() || !Number.isFinite(Number(cashAll))}
+            >
+              Set cash for all
+            </Button>
+          </div>
+        )}
+
         {waiting.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface-2 px-3 py-2">
             <p className="min-w-0 text-xs text-muted">
@@ -429,7 +482,9 @@ export function AccountEditor({
                       key={symbol}
                       className="border-b border-border last:border-0"
                     >
-                      <td className="py-1.5 pr-3 font-medium">{symbol}</td>
+                      <td className="py-1.5 pr-3 font-medium">
+                        {formatInstrumentLabel(symbol)}
+                      </td>
                       <td className="mono py-1.5 pr-3 text-right tabular-nums">
                         {pos?.quantity ?? 0}
                       </td>

@@ -347,7 +347,7 @@ test("non-Eden balances do not subtract Eden loan debt; missing challenges retur
   );
 });
 
-test("worker and finalizer rank identical balances, exclude admins, and use durable inventory", async () => {
+test("worker ranks live PnL and the finalizer ranks close settlement, excluding admins", async () => {
   const f = fixture();
   f.rows.set(getTableName(participants), [
     f.part,
@@ -384,13 +384,16 @@ test("worker and finalizer rank identical balances, exclude admins, and use dura
     quoteUptimeMs: 5000,
   });
   await finalizeScores(f.db, f.redis, "challenge");
-  assert.deepEqual(
-    f.leaderboard(),
-    live.map((entry) => ({
-      ...entry,
-      metrics: { ...entry.metrics, inventory: 2 },
-    })),
-  );
+  const closed = f.leaderboard();
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0]!.settlement, 800);
+  assert.equal(closed[0]!.pnl, 800);
+  assert.equal(closed[0]!.score, 819);
+  assert.equal(closed[0]!.cash, 1000);
+  assert.deepEqual(closed[0]!.assets, [
+    { symbol: "SPOT", quantity: -2, mid: 100, value: -200 },
+  ]);
+  assert.equal(closed[0]!.metrics!.inventory, 2);
   assert.equal(f.snapshots.length, 2);
   assert.equal(f.cache.get("qtp:final:challenge"), "1");
   assert.deepEqual(f.events.slice(-6), [
@@ -442,10 +445,11 @@ test("finalizer uses balances at call time and retains results unchanged on retr
   f.part.cash = 1700;
   f.challenge.status = "ended";
   await finalizeScores(f.db, f.redis, "challenge");
-  assert.equal(f.leaderboard()[0]!.pnl, 500);
+  assert.equal(f.leaderboard()[0]!.pnl, 1700);
+  assert.equal(f.leaderboard()[0]!.settlement, 1700);
   f.rows.set(getTableName(participants), []);
   await finalizeScores(f.db, f.redis, "challenge");
-  assert.equal(f.leaderboard()[0]!.pnl, 500);
+  assert.equal(f.leaderboard()[0]!.pnl, 1700);
   assert.equal(f.snapshots.length, 1);
   assert.equal(f.broadcasts.length, 2);
 });
@@ -483,7 +487,8 @@ test("finalizer propagates publish failures after committing snapshots; retry re
   f.checkpoint.state.prices.SPOT = 999999;
   f.rows.set(getTableName(engineCheckpoints), []);
   await finalizeScores(f.db, f.redis, "challenge");
-  assert.equal(f.leaderboard()[0]!.pnl, -200);
+  assert.equal(f.leaderboard()[0]!.pnl, 1000);
+  assert.equal(f.leaderboard()[0]!.settlement, 1000);
   assert.equal(f.snapshots.length, 1);
 });
 
@@ -526,10 +531,31 @@ test("finalization uses checkpoint prices and metrics without Redis reads", asyn
     { userId: "trader", symbol: "SPOT", quantity: 2 },
   ]);
   await finalizeScores(f.db, f.redis, "challenge");
-  assert.equal(f.challenge.finalResults![0]!.pnl, 150);
-  assert.equal(f.challenge.finalResults![0]!.metrics!.quoteUptime, 7.5);
+  const row = f.challenge.finalResults![0]!;
+  assert.equal(row.pnl, 1350);
+  assert.equal(row.settlement, 1350);
+  assert.equal(row.cash, 1000);
+  assert.deepEqual(row.assets, [
+    { symbol: "SPOT", quantity: 2, mid: 175, value: 350 },
+  ]);
+  assert.equal(row.metrics!.quoteUptime, 7.5);
   assert.deepEqual(f.challenge.finalResults, f.leaderboard());
   assert.equal(f.priceReads.length, 0);
+});
+
+test("directional finals keep profit versus starting cash", async () => {
+  const f = fixture();
+  f.challenge.type = "directional";
+  f.challenge.frozen = true;
+  f.checkpoint.state.prices.SPOT = 175;
+  f.rows.set(getTableName(positions), [
+    { userId: "trader", symbol: "SPOT", quantity: 2 },
+  ]);
+  await finalizeScores(f.db, f.redis, "challenge");
+  const row = f.challenge.finalResults![0]!;
+  assert.equal(row.pnl, 350);
+  assert.equal(row.settlement, 1350);
+  assert.equal(row.score, 350);
 });
 
 test("missing or unsupported checkpoints and missing marks cannot produce final results", async () => {
@@ -680,8 +706,8 @@ test("final portfolio uses checkpoint balances and marks plus stored results, no
   assert.equal(portfolio.cash, 1000);
   assert.equal(portfolio.loanDebt, 200);
   assert.equal(portfolio.marketValue, 350);
-  assert.equal(portfolio.pnl, 150);
-  assert.equal(portfolio.score, 150);
+  assert.equal(portfolio.pnl, 1350);
+  assert.equal(portfolio.score, 1350);
   assert.equal(portfolio.premium, false);
 });
 
