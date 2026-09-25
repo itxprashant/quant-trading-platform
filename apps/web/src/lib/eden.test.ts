@@ -163,6 +163,29 @@ test("unscripted challenges only show the session clock", () => {
     eventTimers(base).map((t) => [t.id, t.label]),
     [["event", "Ends in"]],
   );
+  const openAt = START + 10 * 60_000;
+  const live = eventTimers({
+    ...base,
+    etfWindow: {
+      open: true,
+      closesAt: new Date(openAt + 30_000).toISOString(),
+      nextOpensAt: new Date(openAt + 600_000).toISOString(),
+    },
+  }).find((t) => t.id === "etf");
+  assert.equal(live?.label, "ETF window");
+  assert.equal(live?.target, openAt + 30_000);
+  assert.equal(live?.tone, "active");
+  const next = eventTimers({
+    ...base,
+    now: openAt + 40_000,
+    etfWindow: {
+      open: false,
+      closesAt: null,
+      nextOpensAt: new Date(openAt + 600_000).toISOString(),
+    },
+  }).find((t) => t.id === "etf");
+  assert.equal(next?.label, "Next ETF window");
+  assert.equal(next?.target, openAt + 600_000);
   assert.deepEqual(
     eventTimers({ ...base, endsAt: null }).map((t) => [t.id, t.text]),
     [["event", "Live"]],

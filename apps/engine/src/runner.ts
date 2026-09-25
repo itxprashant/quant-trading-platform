@@ -25,6 +25,7 @@ import {
   engineCheckpoints,
   eventActions,
   fairValues,
+  loans,
   orders,
   participants,
   positions,
@@ -832,6 +833,8 @@ export class ChallengeRunner {
         return this.liquidate(cmd.userId, cmd.reason, cmd.ts);
       case "admin_set_account":
         return this.setAccount(cmd);
+      case "admin_restore_backup":
+        return this.restoreBackup(cmd);
       case "set_fair_value": {
         const fv = this.engine.setFairValue(cmd.symbol, cmd.fairValue);
         return [
@@ -1285,6 +1288,112 @@ export class ChallengeRunner {
         ts: cmd.ts,
       },
     ];
+  }
+
+  /**
+   * Replace cash, inventory, loan debt, and bonds from a host CSV backup.
+   * Working orders are cancelled first so restored inventory is not then filled.
+   */
+  private async restoreBackup(
+    cmd: Extract<EngineCommand, { type: "admin_restore_backup" }>,
+  ): Promise<EngineEvent[]> {
+    const events: EngineEvent[] = [];
+    const metricsByUser = new Map(
+      this.engine.exportState().accounts.map((a) => [a.userId, a.metrics]),
+    );
+    for (const row of cmd.accounts) {
+      events.push(...this.engine.cancelUserOrders(row.userId, cmd.ts));
+    }
+    this.persistence.collect(events);
+    for (const row of cmd.accounts) {
+      // Restore listed symbols, and also keep a held symbol even if delisted.
+      const allowed = row.positions.filter(
+        (p) =>
+          this.engine.hasSymbol(p.symbol) ||
+          this.engine
+            .portfolioOf(row.userId)
+            .positions.some((held) => held.symbol === p.symbol),
+      );
+      this.engine.restoreAccount(row.userId, {
+        cash: row.cash,
+        loanDebt: row.loanDebt,
+        positions: allowed,
+        metrics: metricsByUser.get(row.userId),
+      });
+      this.markets?.replaceUserBonds?.(row.userId, row.bonds);
+    }
+    await this.syncLoanRemaining(cmd.accounts);
+    await this.markets?.persistUserBonds?.(cmd.accounts.map((a) => a.userId));
+    await this.refreshPortfolios(
+      cmd.accounts.map((a) => a.userId),
+      cmd.ts,
+    );
+    await publishBroadcast(this.redis, this.challenge.id, [
+      {
+        target: "all",
+        msg: {
+          type: "alert",
+          challengeId: this.challenge.id,
+          data: {
+            level: "warning",
+            message: `The host restored ${cmd.accounts.length} trader account${cmd.accounts.length === 1 ? "" : "s"} from a CSV backup.`,
+            ts: cmd.ts,
+          },
+        },
+      },
+    ]);
+    return events;
+  }
+
+  /** Keep amortized loan rows aligned with restored engine debt. */
+  private async syncLoanRemaining(
+    accounts: Extract<EngineCommand, { type: "admin_restore_backup" }>["accounts"],
+  ): Promise<void> {
+    const ids = accounts.map((a) => a.userId);
+    if (ids.length === 0) return;
+    const active = await this.db
+      .select()
+      .from(loans)
+      .where(
+        and(
+          eq(loans.challengeId, this.challenge.id),
+          inArray(loans.userId, ids),
+          eq(loans.status, "active"),
+        ),
+      );
+    const byUser = new Map<string, (typeof active)[number][]>();
+    for (const loan of active) {
+      const rows = byUser.get(loan.userId) ?? [];
+      rows.push(loan);
+      byUser.set(loan.userId, rows);
+    }
+    this.persistence.queueWrite(async (tx) => {
+      for (const row of accounts) {
+        const loansForUser = byUser.get(row.userId) ?? [];
+        if (row.loanDebt <= 0) {
+          for (const loan of loansForUser) {
+            await tx
+              .update(loans)
+              .set({ remaining: 0, status: "repaid", nextPaymentAt: null })
+              .where(eq(loans.id, loan.id));
+          }
+          continue;
+        }
+        const first = loansForUser[0];
+        if (!first) continue;
+        const rest = loansForUser.slice(1);
+        await tx
+          .update(loans)
+          .set({ remaining: row.loanDebt, status: "active" })
+          .where(eq(loans.id, first.id));
+        for (const loan of rest) {
+          await tx
+            .update(loans)
+            .set({ remaining: 0, status: "repaid", nextPaymentAt: null })
+            .where(eq(loans.id, loan.id));
+        }
+      }
+    });
   }
 
   /** Flatten a trader's positions at market and emit a margin-call notice. */

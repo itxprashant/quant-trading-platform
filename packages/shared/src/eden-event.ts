@@ -507,7 +507,8 @@ export function dueEdenEventActions(
 /**
  * A host-fired beat of the playbook (`config.eden.playbookCues`). Firing runs
  * its actions with their scripted offsets from the first one. ETF windows and
- * the halftime OTC slot have no cue; ETF windows cycle on their own.
+ * the halftime OTC slot have no cue; listing starts the first window and
+ * later windows cycle every 10 game minutes.
  */
 export type EdenEventCue = Readonly<{
   /** Stable key stored in fire receipts; never rename for an event in flight. */

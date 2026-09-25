@@ -9,3 +9,4 @@ export * from "./options.js";
 export * from "./eden-clock.js";
 export * from "./eden-presets.js";
 export * from "./eden-event.js";
+export * from "./backup.js";

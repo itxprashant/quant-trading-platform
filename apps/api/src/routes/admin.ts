@@ -34,7 +34,10 @@ import {
   edenEventCue,
   edenEventFlow,
   edenEventStateAt,
+  formatBackupCsv,
+  parseBackupCsv,
   zAdminAccountEditInput,
+  zAdminBackupImportInput,
   zAdminBotsInput,
   zAdminCashAllInput,
   zAdminEnrollInput,
@@ -966,6 +969,202 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(202).send({ ok: true, count: seated.length });
   });
 
+  // Snapshot every enrolled trader so the host can download and later restore.
+  app.get("/:challengeId/backup.csv", async (req, reply) => {
+    const params = validate(
+      z.object({ challengeId: z.string().uuid() }),
+      req.params,
+      reply,
+    );
+    if (!params) return;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, params.challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+    const [rows, held, bonds] = await Promise.all([
+      app.db
+        .select({
+          userId: participants.userId,
+          username: users.username,
+          cash: participants.cash,
+          loanDebt: participants.loanDebt,
+        })
+        .from(participants)
+        .innerJoin(users, eq(users.id, participants.userId))
+        .where(eq(participants.challengeId, params.challengeId)),
+      app.db
+        .select({
+          userId: positions.userId,
+          symbol: positions.symbol,
+          quantity: positions.quantity,
+          avgPrice: positions.avgPrice,
+        })
+        .from(positions)
+        .where(eq(positions.challengeId, params.challengeId)),
+      app.db
+        .select()
+        .from(bondHoldings)
+        .where(eq(bondHoldings.challengeId, params.challengeId)),
+    ]);
+    const csv = formatBackupCsv({
+      version: 1,
+      challengeId: challenge.id,
+      challengeSlug: challenge.slug,
+      exportedAt: new Date().toISOString(),
+      accounts: rows
+        .sort((a, b) => a.username.localeCompare(b.username))
+        .map((row) => ({
+          username: row.username,
+          userId: row.userId,
+          cash: row.cash,
+          loanDebt: row.loanDebt,
+          positions: held
+            .filter((p) => p.userId === row.userId && p.quantity !== 0)
+            .map(({ symbol, quantity, avgPrice }) => ({
+              symbol,
+              quantity,
+              avgPrice,
+            })),
+          bonds: bonds
+            .filter((b) => b.userId === row.userId && b.quantity > 0)
+            .map((b) => ({
+              bondId: b.bondId,
+              name: b.name,
+              quantity: b.quantity,
+              price: b.price,
+              faceValue: b.faceValue,
+              couponsPaid: b.couponsPaid,
+            })),
+        })),
+    });
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "");
+    const slug = challenge.slug.replace(/[^a-zA-Z0-9._-]+/g, "-");
+    return reply
+      .header("content-type", "text/csv; charset=utf-8")
+      .header(
+        "content-disposition",
+        `attachment; filename="quantstorm-${slug}-backup-${stamp}.csv"`,
+      )
+      .send(csv);
+  });
+
+  // Restore the snapshot through the live engine (not a direct Postgres write).
+  app.post(
+    "/:challengeId/backup/import",
+    { bodyLimit: 2_000_000 },
+    async (req, reply) => {
+      const params = validate(
+        z.object({ challengeId: z.string().uuid() }),
+        req.params,
+        reply,
+      );
+      if (!params) return;
+      const body = validate(zAdminBackupImportInput, req.body, reply);
+      if (!body) return;
+      const challenge = await app.db.query.challenges.findFirst({
+        where: eq(challenges.id, params.challengeId),
+      });
+      if (!challenge) return reply.code(404).send({ error: "not_found" });
+      if (challenge.status !== "live" || challenge.finalizedAt) {
+        return reply.code(409).send({ error: "challenge_not_live" });
+      }
+      let parsed;
+      try {
+        parsed = parseBackupCsv(body.csv);
+      } catch {
+        return reply.code(400).send({ error: "invalid_backup" });
+      }
+      if (parsed.challengeId && parsed.challengeId !== challenge.id) {
+        return reply.code(409).send({ error: "wrong_challenge" });
+      }
+      if (
+        !parsed.challengeId &&
+        parsed.challengeSlug &&
+        parsed.challengeSlug !== challenge.slug
+      ) {
+        return reply.code(409).send({ error: "wrong_challenge" });
+      }
+      if (parsed.accounts.length === 0) {
+        return reply.code(400).send({ error: "empty_backup" });
+      }
+      const [roster, seated, listed, held] = await Promise.all([
+        app.db
+          .select({ userId: users.id, username: users.username })
+          .from(users),
+        app.db
+          .select({ userId: participants.userId })
+          .from(participants)
+          .where(eq(participants.challengeId, params.challengeId)),
+        getListedSymbols(app.redis, params.challengeId),
+        app.db
+          .select({ userId: positions.userId, symbol: positions.symbol })
+          .from(positions)
+          .where(eq(positions.challengeId, params.challengeId)),
+      ]);
+      const enrolled = new Set(seated.map((r) => r.userId));
+      const byId = new Map(roster.map((u) => [u.userId, u]));
+      const byName = new Map(
+        roster.map((u) => [u.username.toLowerCase(), u]),
+      );
+      const known = new Set([
+        ...challenge.config.symbols.map((s) => s.symbol),
+        ...(challenge.config.eden?.etfs ?? []).map((e) => e.symbol),
+        ...listed,
+        ...held.map((p) => p.symbol),
+      ]);
+      const skipped: string[] = [];
+      const accounts: Extract<
+        EngineCommand,
+        { type: "admin_restore_backup" }
+      >["accounts"] = [];
+      for (const row of parsed.accounts) {
+        const match =
+          (row.userId && byId.get(row.userId)) ||
+          byName.get(row.username.toLowerCase());
+        const label = row.username || row.userId || "unknown";
+        if (!match) {
+          skipped.push(label);
+          continue;
+        }
+        if (!enrolled.has(match.userId)) {
+          skipped.push(label);
+          continue;
+        }
+        accounts.push({
+          userId: match.userId,
+          cash: row.cash,
+          loanDebt: row.loanDebt,
+          positions: row.positions.filter((p) => known.has(p.symbol)),
+          bonds: row.bonds,
+        });
+      }
+      if (accounts.length === 0) {
+        return reply.code(400).send({ error: "no_matching_traders", skipped });
+      }
+      const cmd: EngineCommand = {
+        type: "admin_restore_backup",
+        challengeId: params.challengeId,
+        accounts,
+        ts: Date.now(),
+      };
+      await publishCommand(app.redis, params.challengeId, cmd);
+      req.log.info(
+        {
+          adminId: req.user.sub,
+          challengeId: params.challengeId,
+          traders: accounts.length,
+          skipped,
+        },
+        "admin backup import",
+      );
+      return reply.code(202).send({
+        ok: true,
+        count: accounts.length,
+        skipped,
+      });
+    },
+  );
+
   // Replace live bot counts without pausing the event.
   app.post("/:challengeId/bots", async (req, reply) => {
     const params = validate(
@@ -1488,6 +1687,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           redisKeys.marketFrozen(challengeId),
           redisKeys.listedSymbols(challengeId),
           redisKeys.etfWindows(challengeId),
+          redisKeys.etfWindowClock(challengeId),
           redisKeys.optionContracts(challengeId),
           redisKeys.commandStream(challengeId),
           redisKeys.commandCursor(challengeId),

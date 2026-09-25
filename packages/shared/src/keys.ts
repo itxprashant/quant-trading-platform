@@ -63,6 +63,8 @@ export const redisKeys = {
   listedSymbols: (challengeId: string) => `qtp:listed:${challengeId}`,
   /** Open ETF create/redeem windows (set of ETF symbols). */
   etfWindows: (challengeId: string) => `qtp:etfwin:${challengeId}`,
+  /** Live ETF window clock (open / close / next-open timestamps). */
+  etfWindowClock: (challengeId: string) => `qtp:etfclk:${challengeId}`,
   /** Latest option contracts JSON for a challenge (host + trader UI). */
   optionContracts: (challengeId: string) => `qtp:opts:${challengeId}`,
 } as const;

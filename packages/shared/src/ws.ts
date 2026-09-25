@@ -125,6 +125,16 @@ export type ServerMessage =
       data: { contracts: OptionContract[]; ts: number };
     }
   | {
+      /** Live ETF create/redeem window countdown for the trader navbar. */
+      type: "etf_window";
+      challengeId: string;
+      data: {
+        open: boolean;
+        closesAt: string | null;
+        nextOpensAt: string | null;
+      };
+    }
+  | {
       /** A new tradable instrument was introduced into a live challenge. */
       type: "symbol_listed";
       challengeId: string;

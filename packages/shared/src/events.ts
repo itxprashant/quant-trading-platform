@@ -140,6 +140,33 @@ export type EngineCommand =
       ts: number;
     }
   | {
+      /**
+       * Host restore: cancel working orders, then replace cash, loan debt,
+       * inventory, and bond holdings for each listed trader.
+       */
+      type: "admin_restore_backup";
+      challengeId: string;
+      accounts: Array<{
+        userId: string;
+        cash: number;
+        loanDebt: number;
+        positions: Array<{
+          symbol: string;
+          quantity: number;
+          avgPrice: number;
+        }>;
+        bonds: Array<{
+          bondId: string;
+          name: string;
+          quantity: number;
+          price: number;
+          faceValue: number;
+          couponsPaid: number;
+        }>;
+      }>;
+      ts: number;
+    }
+  | {
       /** Settle a binding OTC deal (multi-leg atomic transfer). */
       type: "execute_otc";
       challengeId: string;

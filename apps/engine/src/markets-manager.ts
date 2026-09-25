@@ -2,11 +2,13 @@ import { and, eq } from "drizzle-orm";
 import { etfNav, type ChallengeEngine } from "@qtp/core";
 import {
   addListedSymbol,
+  getEtfWindowClock,
   getEtfWindows,
   isEtfWindowOpen,
   publishBroadcast,
   setBookSnapshot,
   setEtfWindow,
+  setEtfWindowClock,
   setFairValue,
   setPrice,
   type Redis,
@@ -18,10 +20,13 @@ import {
 } from "@qtp/db";
 import {
   bondMarkValue,
+  edenEtfWindowIntervalMs,
+  edenEtfWindowMs,
   type BondHolding,
   type BondTemplate,
   type EngineEvent,
   type EtfConfig,
+  type EtfWindowClock,
   type SymbolConfig,
 } from "@qtp/shared";
 import type { DbTransaction, Persistence } from "./persistence.js";
@@ -87,6 +92,53 @@ export class MarketsManager {
     return [...(this.holdingsByUser.get(userId)?.values() ?? [])].filter(
       (holding) => holding.quantity > 0,
     );
+  }
+
+  /** Replace one trader's bond book. Empty list clears every series they hold. */
+  replaceUserBonds(userId: string, holdings: BondHolding[]): void {
+    const current = [...(this.holdingsByUser.get(userId)?.keys() ?? [])];
+    for (const bondId of current) {
+      const prev = this.holdingsByUser.get(userId)?.get(bondId);
+      if (!prev) continue;
+      this.setBondHolding(userId, { ...prev, quantity: 0 });
+    }
+    for (const holding of holdings) {
+      if (holding.quantity > 0) this.setBondHolding(userId, holding);
+    }
+  }
+
+  /** Persist restored bond books so a restart does not revive the old series. */
+  async persistUserBonds(userIds: string[]): Promise<void> {
+    const unique = [...new Set(userIds)];
+    if (unique.length === 0) return;
+    const challengeId = this.challenge.id;
+    await this.write(async (tx) => {
+      for (const userId of unique) {
+        await tx
+          .delete(bondHoldingsT)
+          .where(
+            and(
+              eq(bondHoldingsT.challengeId, challengeId),
+              eq(bondHoldingsT.userId, userId),
+            ),
+          );
+        const rows = this.bondsOf(userId);
+        if (rows.length === 0) continue;
+        await tx.insert(bondHoldingsT).values(
+          rows.map((holding) => ({
+            challengeId,
+            userId,
+            bondId: holding.bondId,
+            name: holding.name,
+            quantity: holding.quantity,
+            price: holding.price,
+            faceValue: holding.faceValue,
+            couponsPaid: holding.couponsPaid,
+          })),
+        );
+      }
+    });
+    this.persistence?.markUsers(unique);
   }
 
   private setBondHolding(userId: string, holding: BondHolding): void {
@@ -197,7 +249,7 @@ export class MarketsManager {
       await addListedSymbol(this.redis, this.challenge.id, etf.symbol);
     }
 
-    // Periodic create/redeem windows: open every 10 game-minutes for 30s.
+    // Periodic create/redeem windows: open now, then every 10 game minutes.
     if (this.etfs.length > 0) this.ensureWindowLoop();
   }
 
@@ -241,23 +293,25 @@ export class MarketsManager {
     return symbolCfg;
   }
 
-  /** Start the periodic create/redeem window loop once. */
+  /** Open a window now, then every 10 game minutes. Scripted events use the timeline. */
   private ensureWindowLoop(): void {
     if (this.windowLoopStarted || !this.running) return;
-    const eden = this.challenge.config.eden;
-    if (eden && "eventScript" in eden && eden.eventScript === true) return;
+    if (this.challenge.config.eden?.eventScript === true) return;
     this.windowLoopStarted = true;
+    const windowMs = edenEtfWindowMs(this.minuteMs);
+    const intervalMs = edenEtfWindowIntervalMs(this.minuteMs);
     const open = () => {
-      if (!this.running || this.etfs.length === 0) return;
+      if (!this.running || this.etfs.length === 0 || this.challenge.frozen)
+        return;
       this.dispatch(() => this.openWindows());
       const close = setTimeout(() => {
         this.timers.delete(close);
         if (this.running) this.dispatch(() => this.closeWindows());
-      }, 30_000);
+      }, windowMs);
       this.timers.add(close);
     };
-    const loop = setInterval(open, this.minuteMs * 10);
-    this.timers.add(loop as unknown as NodeJS.Timeout);
+    open();
+    this.timers.add(setInterval(open, intervalMs) as unknown as NodeJS.Timeout);
   }
 
   stop(): void {
@@ -532,9 +586,17 @@ export class MarketsManager {
     for (const etf of this.etfs) {
       await setEtfWindow(this.redis, this.challenge.id, etf.symbol, true);
     }
+    await this.publishClock({
+      open: true,
+      closesAt: new Date(now + edenEtfWindowMs(this.minuteMs)).toISOString(),
+      nextOpensAt: new Date(
+        now + edenEtfWindowIntervalMs(this.minuteMs),
+      ).toISOString(),
+    });
+    const openSec = Math.max(1, Math.round(edenEtfWindowMs(this.minuteMs) / 1000));
     await this.broadcast(
       "info",
-      `ETF create/redeem window OPEN for 30s: ${this.etfs.map((e) => e.symbol).join(", ")}.`,
+      `ETF create/redeem window OPEN for ${openSec}s: ${this.etfs.map((e) => e.symbol).join(", ")}.`,
       now,
     );
   }
@@ -544,16 +606,60 @@ export class MarketsManager {
     for (const etf of this.etfs) {
       await setEtfWindow(this.redis, this.challenge.id, etf.symbol, false);
     }
+    const prev = await getEtfWindowClock(this.redis, this.challenge.id);
+    const next =
+      prev?.nextOpensAt && Date.parse(prev.nextOpensAt) > now
+        ? prev.nextOpensAt
+        : new Date(now + edenEtfWindowIntervalMs(this.minuteMs)).toISOString();
+    await this.publishClock({
+      open: false,
+      closesAt: null,
+      nextOpensAt: next,
+    });
     await this.broadcast("info", "ETF create/redeem window closed.", now);
   }
 
   async setWindow(etfSymbol: string, open: boolean, ts: number): Promise<void> {
     await setEtfWindow(this.redis, this.challenge.id, etfSymbol, open);
+    if (open) {
+      await this.publishClock({
+        open: true,
+        closesAt: new Date(ts + edenEtfWindowMs(this.minuteMs)).toISOString(),
+        nextOpensAt: new Date(
+          ts + edenEtfWindowIntervalMs(this.minuteMs),
+        ).toISOString(),
+      });
+    } else {
+      const prev = await getEtfWindowClock(this.redis, this.challenge.id);
+      const next =
+        prev?.nextOpensAt && Date.parse(prev.nextOpensAt) > ts
+          ? prev.nextOpensAt
+          : new Date(ts + edenEtfWindowIntervalMs(this.minuteMs)).toISOString();
+      await this.publishClock({
+        open: false,
+        closesAt: null,
+        nextOpensAt: next,
+      });
+    }
     await this.broadcast(
       "info",
       `${etfSymbol} create/redeem window ${open ? "OPEN" : "closed"}.`,
       ts,
     );
+  }
+
+  private async publishClock(clock: EtfWindowClock): Promise<void> {
+    await setEtfWindowClock(this.redis, this.challenge.id, clock);
+    await publishBroadcast(this.redis, this.challenge.id, [
+      {
+        target: "all",
+        msg: {
+          type: "etf_window",
+          challengeId: this.challenge.id,
+          data: clock,
+        },
+      },
+    ]);
   }
 
   async openWindowSymbols(): Promise<string[]> {

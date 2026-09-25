@@ -26,19 +26,40 @@ export const EDEN_EVENT_OPTIONS_OPEN_MINUTE = 70;
 export const EDEN_LOAN_LOCKOUT_MINUTES = 10;
 export const EDEN_EVENT_ETF_LIST_MINUTE = 45;
 export const EDEN_EVENT_ETF_WINDOW_SEC = 30;
+/** Create/redeem windows every 10 game minutes from the ETF listing, skipping halftime. */
+export const EDEN_EVENT_ETF_WINDOW_INTERVAL_MINUTES = 10;
 /** Create/redeem windows every 10 minutes from the ETF listing, skipping halftime. */
 export const EDEN_EVENT_ETF_WINDOW_MINUTES: readonly number[] = Array.from(
   {
     length: Math.ceil(
-      (EDEN_EVENT_DURATION_MINUTES - EDEN_EVENT_ETF_LIST_MINUTE) / 10,
+      (EDEN_EVENT_DURATION_MINUTES - EDEN_EVENT_ETF_LIST_MINUTE) /
+        EDEN_EVENT_ETF_WINDOW_INTERVAL_MINUTES,
     ),
   },
-  (_, i) => EDEN_EVENT_ETF_LIST_MINUTE + i * 10,
+  (_, i) =>
+    EDEN_EVENT_ETF_LIST_MINUTE + i * EDEN_EVENT_ETF_WINDOW_INTERVAL_MINUTES,
 ).filter(
   (minute) =>
     minute < EDEN_EVENT_HALFTIME_START_MINUTE ||
     minute >= EDEN_EVENT_HALFTIME_END_MINUTE,
 );
+
+/** Wall ms a create/redeem window stays open (scales with the game minute). */
+export function edenEtfWindowMs(minuteMs: number): number {
+  return (EDEN_EVENT_ETF_WINDOW_SEC * minuteMs) / 60;
+}
+
+/** Wall ms between create/redeem windows (10 game minutes). */
+export function edenEtfWindowIntervalMs(minuteMs: number): number {
+  return minuteMs * EDEN_EVENT_ETF_WINDOW_INTERVAL_MINUTES;
+}
+
+/** Live window clock the engine publishes for cue/host navbar timers. */
+export type EtfWindowClock = {
+  open: boolean;
+  closesAt: string | null;
+  nextOpensAt: string | null;
+};
 
 /** Rehydrate structural state without replaying already-receipted financial effects. */
 export function edenEventStateAt(elapsedSeconds: number) {

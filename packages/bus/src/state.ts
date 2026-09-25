@@ -255,6 +255,46 @@ export async function getEtfWindows(
   return redis.smembers(redisKeys.etfWindows(challengeId));
 }
 
+export async function setEtfWindowClock(
+  redis: Redis,
+  challengeId: string,
+  clock: {
+    open: boolean;
+    closesAt: string | null;
+    nextOpensAt: string | null;
+  },
+): Promise<void> {
+  await redis.set(redisKeys.etfWindowClock(challengeId), JSON.stringify(clock));
+}
+
+export async function getEtfWindowClock(
+  redis: Redis,
+  challengeId: string,
+): Promise<{
+  open: boolean;
+  closesAt: string | null;
+  nextOpensAt: string | null;
+} | null> {
+  const raw = await redis.get(redisKeys.etfWindowClock(challengeId));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      open?: unknown;
+      closesAt?: unknown;
+      nextOpensAt?: unknown;
+    };
+    if (typeof parsed.open !== "boolean") return null;
+    return {
+      open: parsed.open,
+      closesAt: typeof parsed.closesAt === "string" ? parsed.closesAt : null,
+      nextOpensAt:
+        typeof parsed.nextOpensAt === "string" ? parsed.nextOpensAt : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /* ---- New Eden: premium news access (blind auction winners) ---- */
 export async function grantPremiumAccess(
   redis: Redis,

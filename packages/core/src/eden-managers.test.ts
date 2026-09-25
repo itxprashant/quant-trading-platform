@@ -18,8 +18,10 @@ vi.mock("../../bus/dist/index.js", () => ({
   setOptionContracts: vi.fn(),
   setPrice: vi.fn(),
   getEtfWindows: vi.fn(),
+  getEtfWindowClock: vi.fn(async () => null),
   isEtfWindowOpen: vi.fn(async () => true),
   setEtfWindow: vi.fn(),
+  setEtfWindowClock: vi.fn(),
 }));
 vi.mock("../../db/dist/index.js", () => ({
   optionCycles: {
@@ -1003,8 +1005,12 @@ describe("bond holdings", () => {
         ...f.engine.snapshot("ETF"),
         sequence: state.bookSequence,
       });
-      await vi.advanceTimersByTimeAsync(600_000);
+      await Promise.resolve();
       expect(setEtfWindow).toHaveBeenCalledTimes(eventScript ? 0 : 1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(setEtfWindow).toHaveBeenCalledTimes(eventScript ? 0 : 2);
+      await vi.advanceTimersByTimeAsync(570_000);
+      expect(setEtfWindow).toHaveBeenCalledTimes(eventScript ? 0 : 3);
       manager.stop();
     },
   );

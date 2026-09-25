@@ -7,6 +7,7 @@ import {
   getBookSnapshot,
   getFairValues,
   getListedSymbols,
+  getEtfWindowClock,
   getNewsFeed,
   getOptionContracts,
   getPrice,
@@ -197,6 +198,14 @@ async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
       type: "option_cycle",
       challengeId,
       data: { contracts, ts: Date.now() },
+    });
+  }
+  const etfWindow = await getEtfWindowClock(redis, challengeId);
+  if (etfWindow) {
+    send(conn, {
+      type: "etf_window",
+      challengeId,
+      data: etfWindow,
     });
   }
   let news = await getNewsFeed(redis, challengeId, 50);

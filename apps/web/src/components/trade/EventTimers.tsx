@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Auction, Challenge, OptionContract } from "@qtp/shared";
+import type {
+  Auction,
+  Challenge,
+  EtfWindowClock,
+  OptionContract,
+} from "@qtp/shared";
 import { eventTimers, type EventTimer } from "@/lib/eden";
 import { clock } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -21,12 +26,14 @@ export function EventTimers({
   auction,
   contracts,
   premium,
+  etfWindow,
   onAuctionClick,
 }: {
   challenge: Challenge;
   auction: Auction | null;
   contracts: OptionContract[];
   premium: boolean;
+  etfWindow?: EtfWindowClock | null;
   onAuctionClick?: () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -46,6 +53,7 @@ export function EventTimers({
     contracts,
     exerciseWindowSec: challenge.config.eden?.options?.exerciseWindowSec ?? 15,
     premium,
+    etfWindow,
   });
   if (timers.length === 0) return null;
 

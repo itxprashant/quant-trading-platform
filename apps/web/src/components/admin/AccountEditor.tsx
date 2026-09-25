@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Download, RefreshCw, Upload } from "lucide-react";
 import {
   formatInstrumentLabel,
   type AdminAccountView,
@@ -11,6 +11,7 @@ import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
 import { ApiError, get, post } from "@/lib/api";
+import { API_URL, TOKEN_KEY } from "@/lib/config";
 import { cn } from "@/lib/cn";
 import { money, signed } from "@/lib/format";
 
@@ -35,6 +36,14 @@ function editError(err: unknown): string {
       return `${body.symbol ?? "That symbol"} is not listed in this challenge.`;
     case "validation_error":
       return "Check the values: cash must be a number and quantities whole numbers.";
+    case "invalid_backup":
+      return "That file is not a Quantstorm backup CSV.";
+    case "wrong_challenge":
+      return "That CSV was exported from a different challenge.";
+    case "empty_backup":
+      return "That CSV has no trader rows to restore.";
+    case "no_matching_traders":
+      return "None of the traders in that CSV are enrolled in this challenge.";
     default:
       return "Could not update the account. Try again.";
   }
@@ -64,8 +73,11 @@ export function AccountEditor({
   const [busy, setBusy] = useState(false);
   const [cashAllBusy, setCashAllBusy] = useState(false);
   const [enrolling, setEnrolling] = useState<"one" | "all" | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -274,6 +286,86 @@ export function AccountEditor({
     }
   }
 
+  async function exportBackup() {
+    if (exporting) return;
+    setExporting(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const token =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(TOKEN_KEY)
+          : null;
+      const res = await fetch(
+        `${API_URL}/api/admin/${challengeId}/backup.csv`,
+        {
+          headers: token ? { authorization: `Bearer ${token}` } : {},
+        },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new ApiError(res.status, body);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const match = /filename="([^"]+)"/.exec(
+        res.headers.get("content-disposition") ?? "",
+      );
+      link.href = url;
+      link.download = match?.[1] ?? `quantstorm-${challengeId}-backup.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setMsg(
+        "Backup downloaded. Freeze the market before exporting if you need the file to match live engine state.",
+      );
+    } catch (err) {
+      setError(editError(err));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function pickImport() {
+    if (!live || importing) return;
+    fileRef.current?.click();
+  }
+
+  async function importBackup(file: File | undefined) {
+    if (!file || !live || importing) return;
+    if (
+      !window.confirm(
+        "This replaces cash, inventory, loan debt, and bonds for every trader in the file, and cancels their working orders. Continue?",
+      )
+    ) {
+      return;
+    }
+    setImporting(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const csv = await file.text();
+      const res = await post<{ count?: number; skipped?: string[] }>(
+        `/api/admin/${challengeId}/backup/import`,
+        { csv },
+      );
+      const skipped = res.skipped?.length
+        ? ` Skipped ${res.skipped.length}: ${res.skipped.slice(0, 8).join(", ")}${res.skipped.length > 8 ? "…" : ""}.`
+        : "";
+      setMsg(
+        `Restore sent for ${res.count ?? 0} trader${res.count === 1 ? "" : "s"}.${skipped} They are notified when the engine applies it.`,
+      );
+      setTimeout(load, 800);
+    } catch (err) {
+      setError(editError(err));
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
   return (
     <Panel className="min-w-0 rounded-md backdrop-blur-none">
       <PanelHeader title="Trader accounts">
@@ -336,6 +428,45 @@ export function AccountEditor({
             give starting cash and include them on the Deal Desk and leaderboard.
           </p>
         )}
+        <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-border bg-surface-2 px-3 py-2">
+          <div className="min-w-0 max-w-prose">
+            <p className="text-xs font-medium text-text">Backup</p>
+            <p className="text-[11px] leading-relaxed text-muted">
+              Download every enrolled trader's cash, inventory, loan debt, and
+              bonds as CSV. Freeze first so the file matches the live engine.
+              Import replaces those balances and cancels their working orders.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              aria-hidden
+              onChange={(e) => void importBackup(e.target.files?.[0])}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void exportBackup()}
+              loading={exporting}
+            >
+              {!exporting && <Download className="size-3.5" />}
+              Export CSV
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={pickImport}
+              loading={importing}
+              disabled={!live}
+            >
+              {!importing && <Upload className="size-3.5" />}
+              Import CSV
+            </Button>
+          </div>
+        </div>
         <div
           className={cn(
             "grid gap-3",

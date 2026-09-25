@@ -1,6 +1,7 @@
 import type {
   Auction,
   ChallengeStatus,
+  EtfWindowClock,
   OptionContract,
   OtcLeg,
 } from "@qtp/shared";
@@ -78,6 +79,8 @@ export interface EventTimerInput {
   contracts: OptionContract[];
   exerciseWindowSec: number;
   premium: boolean;
+  /** Live window from the engine; used when the event is not scripted. */
+  etfWindow?: EtfWindowClock | null;
 }
 
 const URGENT_MS = 10_000;
@@ -92,7 +95,7 @@ export function eventTimers(input: EventTimerInput): EventTimer[] {
     eventTimer(input, scripted, start, secondMs, at),
     auctionTimer(input, scripted, at),
     optionsTimer(input, scripted, at),
-    scripted ? etfTimer(input.now, at) : null,
+    scripted ? etfTimer(input.now, at) : liveEtfTimer(input),
     scripted ? newsTimer(input.now, input.premium, at) : null,
   ].filter((t): t is EventTimer => t !== null);
   if (input.status === "ended") {
@@ -256,6 +259,31 @@ function optionsTimer(
       id: "options",
       label: "Options open",
       target: opensAt,
+      tone: "neutral",
+    };
+  }
+  return null;
+}
+
+function liveEtfTimer(input: EventTimerInput): EventTimer | null {
+  const clock = input.etfWindow;
+  if (!clock) return null;
+  const closes = clock.closesAt ? Date.parse(clock.closesAt) : NaN;
+  if (clock.open && Number.isFinite(closes) && input.now < closes) {
+    return {
+      id: "etf",
+      label: "ETF window",
+      target: closes,
+      suffix: "to close",
+      tone: "active",
+    };
+  }
+  const next = clock.nextOpensAt ? Date.parse(clock.nextOpensAt) : NaN;
+  if (Number.isFinite(next) && input.now < next) {
+    return {
+      id: "etf",
+      label: "Next ETF window",
+      target: next,
       tone: "neutral",
     };
   }

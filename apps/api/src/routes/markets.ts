@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { bondHoldings, challenges, participants } from "@qtp/db";
 import {
+  getEtfWindowClock,
   getEtfWindows,
   getPrice,
   isEtfWindowOpen,
@@ -129,7 +130,11 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!challenge) return reply.code(404).send({ error: "not_found" });
     const etfs = challenge.config.eden?.etfs ?? [];
-    const openWindows = new Set(await getEtfWindows(app.redis, challengeId));
+    const [openList, clock] = await Promise.all([
+      getEtfWindows(app.redis, challengeId),
+      getEtfWindowClock(app.redis, challengeId),
+    ]);
+    const openWindows = new Set(openList);
     const out = [];
     for (const etf of etfs) {
       const prices: Record<string, number> = {};
@@ -144,9 +149,11 @@ export async function bondEtfRoutes(app: FastifyInstance): Promise<void> {
         nav: etfNav(etf.basket, prices),
         marketPrice: marketPrice ?? null,
         windowOpen: openWindows.has(etf.symbol),
+        closesAt: clock?.open ? (clock.closesAt ?? null) : null,
+        nextOpensAt: clock?.nextOpensAt ?? null,
       });
     }
-    return { etfs: out };
+    return { etfs: out, window: clock };
   });
 
   app.post(

@@ -3,6 +3,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import type {
   Auction,
+  EtfWindowClock,
   GrantMission,
   LeaderboardEntry,
   NewsItem,
@@ -81,6 +82,8 @@ export interface RealtimeState {
   grant: GrantMission | null;
   /** Instruments introduced live (spot/ETF/option) after the initial config. */
   listedSymbols: Array<SymbolConfig & { kind: "spot" | "etf" | "option" }>;
+  /** Live ETF create/redeem window clock for the navbar timer. */
+  etfWindow: EtfWindowClock | null;
   /** null until the gateway snapshot or a freeze toggle arrives. */
   frozen: boolean | null;
 }
@@ -207,6 +210,8 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, vote: msg.data };
     case "grant":
       return { ...state, grant: msg.data };
+    case "etf_window":
+      return { ...state, etfWindow: msg.data };
     case "market_status":
       return { ...state, frozen: msg.data.frozen };
     case "symbol_listed": {
@@ -246,6 +251,7 @@ const initial: RealtimeState = {
   vote: null,
   grant: null,
   listedSymbols: [],
+  etfWindow: null,
   frozen: null,
 };
 

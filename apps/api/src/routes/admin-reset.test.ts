@@ -164,6 +164,7 @@ async function fixture(status = "paused") {
     redisKeys.marketFrozen(ID),
     redisKeys.listedSymbols(ID),
     redisKeys.etfWindows(ID),
+    redisKeys.etfWindowClock(ID),
     redisKeys.optionContracts(ID),
     `qtp:final:${ID}`,
     `qtp:assignment-breaches:${ID}`,

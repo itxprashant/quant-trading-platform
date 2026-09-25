@@ -40,6 +40,7 @@ vi.mock("@qtp/db", () =>
       "eventActions",
       "fairValues",
       "grantMissions",
+      "loans",
       "orders",
       "participants",
       "positions",
@@ -136,6 +137,8 @@ type Runtime = {
       faceValue: number;
       couponsPaid: number;
     }>;
+    replaceUserBonds?: ReturnType<typeof vi.fn>;
+    persistUserBonds?: ReturnType<typeof vi.fn>;
   };
   timeline?: Pick<EventTimeline, "tick">;
   enqueue(task: () => Promise<void>): Promise<void>;
@@ -168,6 +171,7 @@ function fixture(eden = false, frozen = false) {
       "fairValues",
       "eventActions",
       "engineCheckpoints",
+      "loans",
     ].map((name) => [name, []]),
   );
   const commits: Checkpoint[] = [];
@@ -956,6 +960,63 @@ describe("ChallengeRunner integration boundaries", () => {
         userId: USER,
         message: "The host adjusted your account: cash 2500.00, A 7.",
       }),
+    ]);
+  });
+
+  it("restores cash, inventory, and loan debt from a host backup and cancels working orders", async () => {
+    const f = fixture();
+    await f.runtime.enqueue(async () => {
+      await f.runtime.process(order());
+    });
+    expect(f.engine.snapshot("A").bids).toHaveLength(1);
+    const replaceUserBonds = vi.fn();
+    const persistUserBonds = vi.fn(async () => {});
+    f.runtime.markets = {
+      stop: vi.fn(),
+      payCoupons: vi.fn(),
+      bondValueOf: () => 0,
+      bondsOf: () => [],
+      replaceUserBonds,
+      persistUserBonds,
+    };
+    await f.runtime.enqueue(async () => {
+      await f.runtime.process({
+        type: "admin_restore_backup",
+        challengeId: "challenge",
+        accounts: [
+          {
+            userId: USER,
+            cash: 333,
+            loanDebt: 40,
+            positions: [{ symbol: "A", quantity: 3, avgPrice: 110 }],
+            bonds: [
+              {
+                bondId: "standard",
+                name: "Standard Bond",
+                quantity: 1,
+                price: 1000,
+                faceValue: 2000,
+                couponsPaid: 0,
+              },
+            ],
+          },
+        ],
+        ts: START,
+      });
+    });
+    expect(f.engine.portfolioOf(USER)).toMatchObject({
+      cash: 333,
+      loanDebt: 40,
+      positions: [{ symbol: "A", quantity: 3, avgPrice: 110 }],
+    });
+    expect(f.engine.snapshot("A").bids).toEqual([]);
+    expect(replaceUserBonds).toHaveBeenCalledWith(
+      USER,
+      expect.arrayContaining([expect.objectContaining({ bondId: "standard" })]),
+    );
+    expect(persistUserBonds).toHaveBeenCalledWith([USER]);
+    expect(f.tables.participants).toEqual([
+      expect.objectContaining({ userId: USER, cash: 333, loanDebt: 40 }),
     ]);
   });
 

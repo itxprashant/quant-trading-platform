@@ -509,6 +509,7 @@ export default function TradePage() {
             auction={auction.auction}
             contracts={rt.optionContracts}
             premium={auction.premium}
+            etfWindow={rt.etfWindow}
             onAuctionClick={() => setAuctionMinimized(false)}
           />
         }

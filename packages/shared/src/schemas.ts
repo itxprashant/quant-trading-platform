@@ -792,6 +792,12 @@ export const zAdminCashAllInput = z.object({
 });
 export type AdminCashAllInput = z.infer<typeof zAdminCashAllInput>;
 
+/** Host mid-event restore: raw CSV produced by GET /api/admin/:id/backup.csv. */
+export const zAdminBackupImportInput = z.object({
+  csv: z.string().min(1).max(1_500_000),
+});
+export type AdminBackupImportInput = z.infer<typeof zAdminBackupImportInput>;
+
 /** Live bot counts — applied without pausing or rewriting the event script. */
 export const zAdminBotsInput = z
   .object({
