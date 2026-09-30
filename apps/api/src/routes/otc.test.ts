@@ -43,6 +43,24 @@ const mocks = {
     },
   ),
   bargainRejectProbability: vi.fn(() => 0),
+  applyOtcBargain: (
+    legs: Array<{ symbol: string; quantity: number; price: number }>,
+    counterCash: number,
+  ) => {
+    const absQty = legs.reduce((sum, leg) => sum + Math.abs(leg.quantity), 0);
+    const priced = legs.map((leg) => {
+      if (!leg.quantity) return { ...leg };
+      const raw = leg.price - (counterCash * Math.abs(leg.quantity)) / absQty / leg.quantity;
+      return { ...leg, price: Math.max(0, raw) };
+    });
+    const oldNet =
+      counterCash - legs.reduce((sum, leg) => sum + leg.price * leg.quantity, 0);
+    const newNotional = priced.reduce(
+      (sum, leg) => sum + leg.price * leg.quantity,
+      0,
+    );
+    return { legs: priced, cashToTrader: oldNet + newNotional };
+  },
   computeScore: vi.fn(() => 0),
   profitPnl: vi.fn(() => 0),
   theoreticalOption: vi.fn(() => 0),
@@ -384,8 +402,9 @@ describe("bailout choice responses", () => {
     // Sell 3 NEURO at 450 vs FV 500, counter 300: overask 150 / 1500.
     expect(mocks.bargainRejectProbability).toHaveBeenCalledWith(0.1);
     expect(f.offer.legs).toEqual([
-      { symbol: "NEURO", quantity: -3, price: 450 },
+      { symbol: "NEURO", quantity: -3, price: 550 },
     ]);
+    expect(f.offer.cashToTrader).toBe(0);
     expect(f.offer.settleAt.getTime()).toBe(mocks.now + 5000);
     expect(mocks.scheduleEdenResolver).toHaveBeenCalledWith(
       5000,
@@ -398,7 +417,7 @@ describe("bailout choice responses", () => {
     expect(mocks.publishCommand).toHaveBeenCalledWith(
       expect.anything(),
       challengeId,
-      expect.objectContaining({ legs: f.offer.legs, cashToTrader: 300 }),
+      expect.objectContaining({ legs: f.offer.legs, cashToTrader: 0 }),
     );
   });
 

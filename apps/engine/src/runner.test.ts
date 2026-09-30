@@ -81,6 +81,7 @@ vi.mock("./env.js", () => ({
     botMs: 1200,
     flushMs: 250,
     metricsMs: 1000,
+    checkpointMs: 120_000,
   },
 }));
 vi.mock("./bots.js", () => ({
@@ -242,6 +243,7 @@ function fixture(eden = false, frozen = false) {
   } as unknown as Database;
   const redis = {
     get: vi.fn(async () => null),
+    getdel: vi.fn(async () => null),
     xlen: vi.fn(async () => 0),
     set: vi.fn(async () => "OK"),
   };
@@ -621,7 +623,7 @@ describe("ChallengeRunner integration boundaries", () => {
 
   it("replays pending news before auctions without using later prices or charging later carry first", async () => {
     const f = fixture(true);
-    f.runtime.minuteCount = 5;
+    f.runtime.minuteCount = 8;
     f.engine.restoreAccount(USER, {
       cash: 1000,
       positions: [{ symbol: "A", quantity: 2, avgPrice: 100 }],
@@ -638,15 +640,15 @@ describe("ChallengeRunner integration boundaries", () => {
       startsAt: START,
       // The minute checkpoint can precede the action receipt at that boundary.
       loadCompletedActionIds: async () =>
-        EDEN_EVENT_ACTIONS.filter((action) => action.atSecond < 5 * 60).map(
+        EDEN_EVENT_ACTIONS.filter((action) => action.atSecond < 8 * 60).map(
           (action) => action.id,
         ),
       execute: async (action, context) => {
         expect(context.now).toBe(now);
         expect(context.lateByMs).toBe(now - context.scheduledAt);
-        if (action.id === "eden-v1/news/5/public")
+        if (action.id === "eden-v1/news/8/public")
           f.engine.restorePrice("A", 110);
-        if (action.id === "eden-v1/auction/15/resolve") {
+        if (action.id === "eden-v1/auction/13/resolve") {
           observed.push({
             kind: "auction",
             price: f.engine.getPrice("A"),
@@ -670,8 +672,8 @@ describe("ChallengeRunner integration boundaries", () => {
     });
     await f.runtime.advanceClock(now);
     expect(observed).toEqual([
-      { kind: "auction", price: 110, cash: 982 },
-      { kind: "boundary", price: 110, cash: 980 },
+      { kind: "auction", price: 110, cash: 990 },
+      { kind: "boundary", price: 110, cash: 986 },
     ]);
     expect(f.engine.getPrice("A")).toBe(120);
     expect(f.runtime.minuteCount).toBe(15);

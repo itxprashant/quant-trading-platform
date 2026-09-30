@@ -12,7 +12,11 @@ import {
   publishBroadcast,
   publishCommand,
 } from "@qtp/bus";
-import { bargainAskPct, bargainRejectProbability } from "@qtp/core";
+import {
+  applyOtcBargain,
+  bargainAskPct,
+  bargainRejectProbability,
+} from "@qtp/core";
 import {
   zOtcRespondInput,
   type EngineCommand,
@@ -41,7 +45,9 @@ function serializeOffer(row: typeof otcOffers.$inferSelect): OtcOffer {
  * The Deal Desk (comp_desc OTC bargaining). Traders see their pending offers
  * and reply ACCEPT / REJECT / BARGAIN. Bargaining runs a fair-value distance
  * probability check: the further below fair value the counter sits, the more
- * likely the desk walks. Accepted deals are binding and settle atomically.
+ * likely the desk walks. An accepted bargain is folded into unit prices so
+ * settlement and average cost use the agreed price. Accepted deals are binding
+ * and settle atomically.
  */
 export async function otcRoutes(app: FastifyInstance): Promise<void> {
   app.get("/:challengeId", { preHandler: [app.authenticate] }, async (req) => {
@@ -204,7 +210,9 @@ export async function otcRoutes(app: FastifyInstance): Promise<void> {
           await broadcastResult("rejected");
           return reply.send({ result: "rejected", rejectProb });
         }
-        cashToTrader = counter;
+        const bargained = applyOtcBargain(legs, counter);
+        legs = bargained.legs;
+        cashToTrader = bargained.cashToTrader;
       }
 
       // Preliminary cap check only; the engine rechecks after the bargaining delay.

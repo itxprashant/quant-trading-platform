@@ -8,7 +8,12 @@ import {
   type ReactNode,
 } from "react";
 import { Check } from "lucide-react";
-import type { AdminCueSheet, AdminCueView, Challenge } from "@qtp/shared";
+import {
+  edenEventFlow,
+  type AdminCueSheet,
+  type AdminCueView,
+  type Challenge,
+} from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -67,6 +72,7 @@ export function PlaybookCues({
   const [hideDone, setHideDone] = useState(false);
   const doneCount = useRef<number | null>(null);
   const live = challenge.status === "live";
+  const practice = edenEventFlow(challenge.config.eden) === "demo";
 
   const refresh = useCallback(async () => {
     try {
@@ -137,7 +143,7 @@ export function PlaybookCues({
 
   return (
     <Panel className="min-w-0 rounded-md backdrop-blur-none">
-      <PanelHeader title="Playbook cues">
+      <PanelHeader title={practice ? "Practice cues" : "Playbook cues"}>
         {sheet && (
           <span className="mono text-xs text-muted">
             {done}/{sheet.cues.length} done

@@ -4,7 +4,10 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import { challenges, loans, participants } from "@qtp/db";
 import {
+  EDEN_LOAN_LIMIT,
   edenEventFlow,
+  edenLoanOutstanding,
+  edenLoanTotalRepay,
   edenLoansClosed,
   zRequestLoanInput,
   type EngineCommand,
@@ -14,7 +17,7 @@ import { publishCommand } from "@qtp/bus";
 import { rateLimit } from "../ratelimit.js";
 import { validate } from "../util.js";
 
-const MAX_PRINCIPAL = 1_000_000;
+const MAX_PRINCIPAL = EDEN_LOAN_LIMIT;
 
 /** Eden loans: traders borrow from the bank; admins can lend on their behalf. */
 export async function loanRoutes(app: FastifyInstance): Promise<void> {
@@ -51,35 +54,57 @@ export async function loanRoutes(app: FastifyInstance): Promise<void> {
     ) {
       throw new HttpError(400, "invalid_principal");
     }
-    const participant = await app.db.query.participants.findFirst({
-      where: and(
-        eq(participants.challengeId, challengeId),
-        eq(participants.userId, userId),
-      ),
-    });
-    if (!participant) throw new HttpError(403, "not_enrolled");
-    const totalRepay = principal * 2;
-    const installment =
-      totalRepay / Math.ceil((challenge.endsAt.getTime() - now) / 60_000);
+    const totalRepay = edenLoanTotalRepay(principal, challenge.config?.eden);
+    const endsAt = challenge.endsAt.getTime();
+    const installment = totalRepay / Math.ceil((endsAt - now) / 60_000);
 
     const loanId = randomUUID();
-    const [row] = await app.db
-      .insert(loans)
-      .values({
-        id: loanId,
-        challengeId,
-        userId,
-        principal,
-        totalRepay,
-        remaining: totalRepay,
-        installment,
-        nextPaymentAt: new Date(
-          Math.min(now + 60_000, challenge.endsAt.getTime()),
-        ),
-        fundedAt: null,
-        status: "active",
-      })
-      .returning();
+    const row = await app.db.transaction(async (tx) => {
+      const [participant] = await tx
+        .select({ id: participants.id })
+        .from(participants)
+        .where(
+          and(
+            eq(participants.challengeId, challengeId),
+            eq(participants.userId, userId),
+          ),
+        )
+        .for("update");
+      if (!participant) throw new HttpError(403, "not_enrolled");
+      const open = await tx
+        .select({
+          principal: loans.principal,
+          totalRepay: loans.totalRepay,
+          remaining: loans.remaining,
+        })
+        .from(loans)
+        .where(
+          and(
+            eq(loans.challengeId, challengeId),
+            eq(loans.userId, userId),
+            eq(loans.status, "active"),
+          ),
+        );
+      if (edenLoanOutstanding(open) + principal > EDEN_LOAN_LIMIT + 1e-6) {
+        throw new HttpError(409, "loan_limit");
+      }
+      const [inserted] = await tx
+        .insert(loans)
+        .values({
+          id: loanId,
+          challengeId,
+          userId,
+          principal,
+          totalRepay,
+          remaining: totalRepay,
+          installment,
+          nextPaymentAt: new Date(Math.min(now + 60_000, endsAt)),
+          fundedAt: null,
+          status: "active",
+        })
+        .returning();
+      return inserted;
+    });
 
     const cmd: EngineCommand = {
       type: "issue_loan",

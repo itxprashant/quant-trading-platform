@@ -8,7 +8,12 @@ import {
 import {
   EDEN_EVENT_AERIUM,
   EDEN_EVENT_CUES,
+  EDEN_EVENT_DURATION_MINUTES,
+  EDEN_EVENT_GRANT_AWARD_MINUTE,
+  EDEN_EVENT_GRANT_OPEN_MINUTE,
   EDEN_EVENT_OPTIONS,
+  EDEN_EVENT_STARTING_CASH,
+  newEdenExchangeChallengeConfig,
   edenCueReceiptId,
   edenEventCue,
   redisKeys,
@@ -142,6 +147,7 @@ async function fixture(status = "paused") {
     "price",
     "phist",
     "phist-mid",
+    "phist-mid-5m",
     "book",
     "fv",
     "premium",
@@ -347,7 +353,7 @@ describe("admin option opening", () => {
     });
     expect(f.tables.challenges![0].config.eden.options).toMatchObject({
       enabled: true,
-      underlyings: ["AERIUM"],
+      underlyings: ["AERIUM", "NEURO"],
     });
     expect(publishCommand).toHaveBeenCalledWith(
       f.redis,
@@ -389,14 +395,14 @@ describe("admin freeze during a scripted event", () => {
       type: "new_eden",
       finalizedAt: null,
       startsAt: new Date(start),
-      endsAt: new Date(start + 130 * MINUTE),
+      endsAt: new Date(start + EDEN_EVENT_DURATION_MINUTES * MINUTE),
     });
     return f;
   }
 
   it.each([
     ["before the scripted open", -5],
-    ["during halftime", 65],
+    ["during halftime", 95],
   ])("refuses a manual unfreeze %s", async (_label: string, elapsed: number) => {
     const f = await scripted(elapsed);
     expect(await f.freeze(false)).toEqual({
@@ -467,34 +473,37 @@ describe("admin playbook cues", () => {
       status: "ready",
       firedAt: null,
     });
-    expect(cueOf(body, "news-5")).toMatchObject({
+    expect(cueOf(body, "news-1")).toMatchObject({
       status: "blocked",
       blockedBy: ["open"],
     });
     const grant = cueOf(body, "grant");
     expect(grant.steps.map((s: any) => s.offsetSec)).toEqual([
-      0, 10, 10, 300, 310, 310,
+      0, 10, 10, 600, 610, 610,
     ]);
-    expect(grant.headlines.map((h: any) => h.minute)).toEqual([100, 105]);
+    expect(grant.headlines.map((h: any) => h.minute)).toEqual([
+      EDEN_EVENT_GRANT_OPEN_MINUTE,
+      EDEN_EVENT_GRANT_AWARD_MINUTE,
+    ]);
   });
 
   it("reports done and running cues from receipts", async () => {
     const f = await cueMode();
     f.tables.eventActions!.push(
       ...done("open"),
-      receipt(edenCueReceiptId("auction-15")),
-      receipt("eden-v1/auction/15/open"),
+      receipt(edenCueReceiptId("auction-13")),
+      receipt("eden-v1/auction/13/open"),
     );
     const body = await sheet(f);
     expect(cueOf(body, "open")).toMatchObject({
       status: "done",
       firedAt: new Date(START).toISOString(),
     });
-    expect(cueOf(body, "auction-15")).toMatchObject({
+    expect(cueOf(body, "auction-13")).toMatchObject({
       status: "running",
       steps: [{ done: true }, { done: false }],
     });
-    expect(body.next).toBe("otc-2.5");
+    expect(body.next).toBe("news-1");
   });
 
   it("queues a ready cue for the engine", async () => {
@@ -512,7 +521,7 @@ describe("admin playbook cues", () => {
 
   it("rejects blocked, unknown, repeated, and frozen-OTC cues", async () => {
     const f = await cueMode();
-    expect(await run(f, "news-5")).toEqual({
+    expect(await run(f, "news-1")).toEqual({
       statusCode: 409,
       body: { error: "cue_blocked", blockedBy: ["open"] },
     });
@@ -526,12 +535,12 @@ describe("admin playbook cues", () => {
       body: { error: "cue_already_run" },
     });
     f.tables.challenges![0].frozen = true;
-    expect(await run(f, "otc-2.5")).toEqual({
+    expect(await run(f, "otc-5")).toEqual({
       statusCode: 409,
       body: { error: "market_frozen" },
     });
     // Headlines still publish during a freeze.
-    expect((await run(f, "news-5")).statusCode).toBe(202);
+    expect((await run(f, "news-1")).statusCode).toBe(202);
     expect(publishCommand).toHaveBeenCalledTimes(1);
   });
 
@@ -732,18 +741,15 @@ describe("admin reset coordination", () => {
       finalizedAt: null,
       startsAt: null,
       endsAt: null,
-      config: {
-        symbols: [EDEN_EVENT_AERIUM],
-        eden: {
-          eventScript: true,
-          bonds: [],
-          etfs: [],
-          options: EDEN_EVENT_OPTIONS,
-        },
-      },
+      config: newEdenExchangeChallengeConfig("scripted"),
     });
     expect(f.tables.participants).toEqual([
-      { challengeId: ID, cash: 10000, startingCash: 10000, loanDebt: 0 },
+      {
+        challengeId: ID,
+        cash: EDEN_EVENT_STARTING_CASH,
+        startingCash: EDEN_EVENT_STARTING_CASH,
+        loanDebt: 0,
+      },
       { challengeId: OTHER, cash: 9, startingCash: 9, loanDebt: 1 },
     ]);
     expect([...f.cache.keys()].some((key) => key.includes(ID))).toBe(false);
@@ -802,15 +808,9 @@ describe("admin reset coordination", () => {
       playbookCues: true,
     });
     await f.call();
-    expect(f.tables.challenges![0].config).toMatchObject({
-      symbols: [EDEN_EVENT_AERIUM],
-      eden: {
-        playbookCues: true,
-        bonds: [],
-        etfs: [],
-        options: EDEN_EVENT_OPTIONS,
-      },
-    });
+    expect(f.tables.challenges![0].config).toEqual(
+      newEdenExchangeChallengeConfig("cues"),
+    );
   });
 
   it("preserves custom symbols and instruments when eventScript is disabled", async () => {

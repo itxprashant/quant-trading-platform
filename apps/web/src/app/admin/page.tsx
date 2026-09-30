@@ -5,6 +5,8 @@ import Link from "next/link";
 import {
   ArrowUpRight,
   CalendarClock,
+  Eye,
+  EyeOff,
   Pause,
   Play,
   Plus,
@@ -53,6 +55,28 @@ function AdminInner() {
     } catch {
       setError(
         "Could not change challenge status. Refresh to check its current state, then try again.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setEventVisible(id: string, visible: boolean) {
+    if (
+      !visible &&
+      !confirm(
+        "Hide this event from traders? They will lose access until you show it again.",
+      )
+    )
+      return;
+    setBusy(id + (visible ? "show" : "hide"));
+    setError(null);
+    try {
+      await post(`/api/admin/${id}/event-visibility`, { hidden: !visible });
+      await load();
+    } catch {
+      setError(
+        "Could not update event visibility. Refresh to check its current state, then try again.",
       );
     } finally {
       setBusy(null);
@@ -281,6 +305,9 @@ function AdminInner() {
                         {c.frozen && c.status === "live" && (
                           <Badge tone="warning">Frozen</Badge>
                         )}
+                        {c.hiddenFromTraders && (
+                          <Badge tone="warning">Hidden</Badge>
+                        )}
                       </div>
                     </td>
                     <td className="mono px-4 py-4 text-right">
@@ -304,6 +331,29 @@ function AdminInner() {
 
                     <td className="px-4 py-4">
                       <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy !== null}
+                          loading={
+                            busy === c.id + (c.hiddenFromTraders ? "show" : "hide")
+                          }
+                          onClick={() =>
+                            setEventVisible(c.id, !!c.hiddenFromTraders)
+                          }
+                          aria-label={
+                            c.hiddenFromTraders
+                              ? `Show ${c.name} to traders`
+                              : `Hide ${c.name} from traders`
+                          }
+                        >
+                          {c.hiddenFromTraders ? (
+                            <Eye className="size-3.5" />
+                          ) : (
+                            <EyeOff className="size-3.5" />
+                          )}
+                          {c.hiddenFromTraders ? "Show" : "Hide"}
+                        </Button>
                         <Link
                           href={`/admin/${c.id}`}
                           className="mr-2 inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-text hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"

@@ -26,6 +26,7 @@ export function serializeChallenge(
     participantCount,
     frozen: c.frozen ?? false,
     leaderboardHidden: c.leaderboardHidden ?? false,
+    hiddenFromTraders: c.hiddenFromTraders ?? false,
     traderVisibility: traderVisibilityOf(c.traderVisibility),
   };
 }

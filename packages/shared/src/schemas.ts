@@ -210,6 +210,8 @@ export const zEdenConfig = z.object({
   eventScript: z.boolean().optional(),
   /** The host fires each playbook beat from the admin cue sheet. Ignored when eventScript is set. */
   playbookCues: z.boolean().optional(),
+  /** Run the 30-minute practice timeline. Ignored when eventScript is set. */
+  demoScript: z.boolean().optional(),
   rules: zEdenRules.default({}),
   bots: zEdenBotConfig.optional(),
   options: zEdenOptionsConfig.optional(),
@@ -356,6 +358,8 @@ export const zChallenge = z.object({
   frozen: z.boolean().default(false),
   /** Host switch: rankings are withheld from non-admins while true. */
   leaderboardHidden: z.boolean().default(false),
+  /** Host switch: the whole event is withheld from non-admins while true. */
+  hiddenFromTraders: z.boolean().default(false),
   /** Host switches for trader-facing Eden panels. Missing keys default visible. */
   traderVisibility: zTraderVisibility.default(DEFAULT_TRADER_VISIBILITY),
 });
@@ -701,7 +705,7 @@ export type OtcOffer = z.infer<typeof zOtcOffer>;
 
 export const zOtcRespondInput = z.object({
   action: z.enum(["accept", "reject", "bargain"]),
-  /** New cash-to-trader proposed when bargaining. */
+  /** Cash-to-trader counter for a bargain; the API folds it into unit prices. */
   counterCash: z.number().optional(),
   choiceSymbol: z.string().min(1).optional(),
   choiceQuantity: z.number().int().positive().max(50).optional(),
@@ -819,6 +823,40 @@ export interface AdminAccountView {
   positions: Array<{ symbol: string; quantity: number; avgPrice: number }>;
 }
 
+/** One inventory column on the admin statistics table. */
+export interface AdminStatisticsColumn {
+  /** Symbol, or `bond:<bondId>` for a government bond series. */
+  id: string;
+  label: string;
+  kind: "symbol" | "bond";
+  /** Last price for a symbol, or the series price for a bond. */
+  mark: number;
+}
+
+/** One enrolled trader on the admin statistics table. */
+export interface AdminStatisticsRow {
+  userId: string;
+  username: string;
+  displayName: string;
+  cash: number;
+  loanDebt: number;
+  /** Non-zero quantities keyed by column id. */
+  holdings: Record<string, number>;
+  /** Marked inventory plus remaining bond principal. */
+  assets: number;
+  /** Cash plus assets, minus loan debt. */
+  equity: number;
+  /** Equity versus the cash this trader started with. */
+  pnl: number;
+}
+
+/** Live balances for every enrolled trader in one challenge. */
+export interface AdminStatistics {
+  asOf: string;
+  columns: AdminStatisticsColumn[];
+  rows: AdminStatisticsRow[];
+}
+
 export type EdenCueKind = "market" | "news" | "otc" | "auction" | "scene";
 export type EdenCueStatus = "ready" | "blocked" | "running" | "done";
 
@@ -842,10 +880,26 @@ export interface AdminCueView {
 }
 
 export interface AdminCueSheet {
-  flow: "host" | "cues" | "scripted";
+  flow: "host" | "cues" | "scripted" | "demo";
   /** First cue that has not fired, in playbook order. */
   next: string | null;
   cues: AdminCueView[];
+}
+
+/** Rewind point listed on the admin page (payload stays server-side). */
+export interface AdminCheckpoint {
+  id: string;
+  takenAt: string;
+  /** Game minutes since `startsAt` when it was taken. */
+  minuteCount: number;
+  reason: "auto" | "before_resume";
+}
+
+export interface AdminCheckpointResume {
+  ok: true;
+  takenAt: string;
+  startsAt: string | null;
+  endsAt: string | null;
 }
 
 /* ---- Blind auctions (premium feed) ---- */

@@ -4,7 +4,7 @@
 
 The event is implemented across engine, API, gateway, scoring, and trader/host UI. This describes the current code, not live verification. Schema and legacy backfill have **not been applied** in the reported validation environment.
 
-- `packages/shared/src/eden-event.ts` owns the versioned 130-game-minute schedule, constants, and structural recovery selector. `apps/engine/src/event-timeline.ts` dispatches ordered due actions; `event-executor.ts` implements listings, news, offers, and event operations.
+- `packages/shared/src/eden-event.ts` owns the versioned 210-game-minute schedule, constants, and structural recovery selector. `apps/engine/src/event-timeline.ts` dispatches ordered due actions; `event-executor.ts` implements listings, news, offers, and event operations. The playbook in `eden_v2.md` numbers two 90-minute halves; the engine clock is linear so the 30-minute break occupies minutes 90–120 and Half 2 is shifted +30.
 - `ChallengeRunner` owns the timeline under the existing per-challenge Redis lock and serialized mutation queue. `EdenSettlements`, `OptionsManager`, and `MarketsManager` own financial operations; API requests still reach the engine through Redis commands.
 - `packages/db/src/schema.ts` includes `event_actions`, `engine_checkpoints`, news effect markers, OTC choices/deadlines, loan funding/schedules, `challenges.finalizedAt`, and **`challenges.finalResults` (`final_results`)**. These are present, not future integration contracts.
 - `Persistence.flush` commits queued relational writes, engine checkpoint, command/minute progress, and an optional completed receipt together. Receipts have unique `(challenge_id, action_id)` and `completed_at`, not a pending/status state.
@@ -14,9 +14,9 @@ The event is implemented across engine, API, gateway, scoring, and trader/host U
 
 Use `type: "new_eden"`, `config.eden.rules.enabled: true`, and `config.eden.eventScript: true`. Seeded new Eden events opt in; reseeding does not convert existing challenges. Never enable the script on an already running legacy event.
 
-The seed/admin preset starts with **AERIUM only**, $10,000 cash, `bonds: []`, `etfs: []`, and options disabled with `autoCycle: true`. Bond templates are added at minutes 10/18, not installed at start. Bots default to 0 of each archetype; raise the counts in the challenge form to enable them. Instrument-dependent activity waits for listings.
+The seed/admin preset starts with **AERIUM only**, $100,000 cash, `bonds: []`, `etfs: []`, and options disabled with `autoCycle: true`. Bond templates are added at minutes 16/24, not installed at start. Bots default to 0 of each archetype; raise the counts in the challenge form to enable them. Instrument-dependent activity waits for listings.
 
-Persist `startsAt` before starting. If the host flips the challenge live before `startsAt`, the runner starts but holds the market frozen until the minute-0 open, and the host cannot unfreeze it early (nor during the 60–70 halftime). Scripted `endsAt = startsAt + 130 * ENGINE_MINUTE_MS`; the default game minute is 60,000 ms. All engine instances and the backfill must use the same actual clock scale. `ENGINE_TICK_MS` is not the game-minute setting. Keep start, scale, schedule version, and action IDs immutable after start; do not duplicate script-owned operations with manual host actions.
+Persist `startsAt` before starting. If the host flips the challenge live before `startsAt`, the runner starts but holds the market frozen until the minute-0 open, and the host cannot unfreeze it early (nor during the 90–120 halftime). Scripted `endsAt = startsAt + 210 * ENGINE_MINUTE_MS`; the default game minute is 60,000 ms. All engine instances and the backfill must use the same actual clock scale. `ENGINE_TICK_MS` is not the game-minute setting. Keep start, scale, schedule version, and action IDs immutable after start; do not duplicate script-owned operations with manual host actions.
 
 Timeline seconds scale by `ENGINE_MINUTE_MS / 60`: premium leads, auction bidding, OTC reply deadlines, ETF windows, and votes follow that game clock. **Option exercise is strictly 15 wall seconds after expiry; OTC bargaining delay is 5 wall seconds** (`clock_timestamp() + interval '5 seconds'`). Accelerated rehearsal therefore does not reproduce identical wall-time interaction windows or their relative overlap.
 
@@ -25,21 +25,21 @@ Timeline seconds scale by `ENGINE_MINUTE_MS / 60`: premium leads, auction biddin
 | Game Minute | Implemented Behavior |
 | --- | --- |
 | 0 | AERIUM opens at FV 1000. |
-| 10 / 18 | Standard / Aerium-Pegged bonds become available. |
-| 30 | NEURO lists at FV 500 before public news. |
-| 45 | ORBITAL lists: 1 ETF = 2 AERIUM + 1 NEURO. |
-| 45, 55, 75, 85, 95, 105, 115, 125 | ETF conversion opens for 30 game seconds; no minute-65 window. |
-| 60 / 70 | Halftime freeze / reopen, retaining books and inventory. |
-| 70 | AERIUM calls/puts open on five-game-minute cycles; manual exercise only. |
-| 15, 30, 45, 75, 90, 105, 120 | Explicit premium auction rounds; no minute-60 auction. |
-| 80 / 81 | Solidarity Tax vote opens / resolves. |
-| 89 / 90 | Vega prepares straddles / dumps after the public FV shock. |
-| 100 / 105 | AERIUM grant announced / awarded. |
-| 120 | Bot volatility multiplier becomes 3 relative to base. |
-| 130 | Final halt, option shutdown, debt closeout, durable rankings, completion announcement. |
+| 16 / 24 | Standard / Aerium-Pegged bonds become available. |
+| 36 | NEURO lists at FV 500 before public news. |
+| 60 | ORBITAL lists: 1 ETF = 2 AERIUM + 1 NEURO. |
+| 67, 77, 87, 123…203 | ETF conversion opens for 30 game seconds. |
+| 90 / 120 | Halftime freeze / reopen, retaining books and inventory. |
+| 121 | AERIUM and NEURO calls/puts open on five-game-minute cycles; manual exercise only. |
+| 13, 28, 43, 58, 70, 82, 129, 144, 159, 174, 189, 204 | Explicit premium auction rounds (30s from the minute). |
+| 154 | Solidarity Tax vote opens for 90s (15% of free cash). |
+| 166 / 167 | Vega prepares straddles / dumps after the public FV shock. |
+| 177 / 187 | AERIUM grant announced / awarded (ties split $10,000). |
+| 202 | Bot volatility multiplier becomes 3 relative to base. |
+| 210 | Final halt, option shutdown, debt closeout, durable rankings, completion announcement. |
 
 - **Auctions:** Each opens 40 game seconds before its explicit round, bids for 30 seconds, then resolves 10 seconds before public news. Resolution precedes premium delivery at the same timestamp. Access is `[round - 10s, round + 15m - 10s)`, not a fresh entitlement on late recovery. Core selects `max(1, round(n * 0.3))`, capped at `n`, for valid positive bids; zero bidders gives no winners and null cutoff. Ties are bid descending, then user ID ascending, **not submission timestamp**.
-- **News:** Exactly 24 public slots at 5..60 and 70..125 yield **12 SIGNAL / 12 NOISE**; no slot at 65 or closing ticker pair at 130. The 45/70 official introductions count as signals because preceding listing actions establish instrument FVs; their additive effects are empty. This classification and supplied introduction wording are implementation defaults. The minute-60 halt remains a headline; final completion is a separate implemented alert.
+- **News:** Headlines fire on almost every playbook minute that is not reserved for a deal, auction, ETF window, or options expiry. Official introductions (NEURO, ETF, options) count as signals with empty additive effects because the listing action establishes instrument FVs. The minute-90 halt remains a headline; final completion is a separate implemented alert. Terminal scripted FVs are AERIUM 955 / NEURO 870.
 - **Information boundaries:** Premium release is targeted to eligible humans and does not change FV or trigger bots. Public effects atomically store absolute FVs with `effectsAppliedAt` before engine/cache refresh. Classification, FV effects, and momentum/volatility metadata are not trader payloads. At 69:50 premium introduction delivery occurs while frozen; at 70 reopening/options listing precedes the public introduction.
 - **FV and correlation:** Minute 55 caps AERIUM FV at 1150, not resets it; the scripted FV is already 1110, so only bearish momentum changes there. Without overrides, final underlying FVs are AERIUM 930 / NEURO 700. Before minute 90, the runner's autonomous AERIUM/NEURO ticks each use `0.8 * commonShock + 0.2 * Math.random()`; from 90 they use independent draws. This is a common stochastic component, not a promised 0.8 realized price correlation; explicit drift overrides bypass it.
 - **Arbitrage:** Put-call parity and ETF/basket arbitrage are both implemented in `eden-bots.ts`. The runner submits their price-bounded multi-leg batches through core `placeAtomicOrders`, which rolls back batches that cannot fully execute. This is engine-state atomicity, not a cross-system messaging guarantee.

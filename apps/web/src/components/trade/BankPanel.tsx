@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { loanPayment } from "@/lib/eden";
 import { Landmark } from "lucide-react";
-import { edenLoansClosed, type Portfolio } from "@qtp/shared";
+import { EDEN_LOAN_LIMIT, edenLoansClosed, type Portfolio } from "@qtp/shared";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/cn";
 
 /**
  * The New Eden central bank: shows solvency (free cash) and lets a trader take
- * a predatory loan (borrow X now, owe 2× to the bank, bled back each minute).
+ * a predatory loan (borrow X now, repay multiplier × X over the rest of the event).
  */
 export function BankPanel({
   challengeId,
@@ -53,6 +53,9 @@ export function BankPanel({
 
   const principal = Number(amount) || 0;
   const free = portfolio?.freeCash ?? 0;
+  const drawn =
+    multiplier > 0 ? (portfolio?.loanDebt ?? 0) / multiplier : 0;
+  const room = Math.max(0, EDEN_LOAN_LIMIT - drawn);
   const breach = free <= threshold;
   const lockout = edenLoansClosed(now, endsAt, startsAt, scheduledClock);
   const payment = lockout
@@ -66,7 +69,7 @@ export function BankPanel({
       payment == null ||
       !Number.isFinite(principal) ||
       principal <= 0 ||
-      principal > 1_000_000
+      principal > room
     )
       return;
     setError(null);
@@ -75,10 +78,14 @@ export function BankPanel({
       await post(`/api/loans/request`, { challengeId, principal });
       onChange?.();
     } catch (err) {
-      setError(
+      const code =
         err instanceof ApiError
-          ? ((err.body as { error?: string })?.error ?? "Loan failed")
-          : "Loan failed",
+          ? (err.body as { error?: string })?.error
+          : undefined;
+      setError(
+        code === "loan_limit" || code === "principal_too_large"
+          ? `Loans stop at ${money(EDEN_LOAN_LIMIT)} outstanding.`
+          : (code ?? "Loan failed"),
       );
     } finally {
       setBusy(false);
@@ -144,7 +151,7 @@ export function BankPanel({
           <Input
             type="number"
             min={1}
-            max={1000000}
+            max={room}
             step={100}
             aria-label="Amount to borrow"
             value={amount}
@@ -160,7 +167,7 @@ export function BankPanel({
               payment == null ||
               !Number.isFinite(principal) ||
               principal <= 0 ||
-              principal > 1_000_000
+              principal > room
             }
           >
             Borrow
@@ -172,7 +179,8 @@ export function BankPanel({
             : payment != null
               ? `${money(payment)}/min`
               : "Needs a future session end"}{" "}
-          · {multiplier}× · carry {money(carryRate)}/unit
+          · {multiplier}× · {money(room)} of {money(EDEN_LOAN_LIMIT)} left · carry{" "}
+          {money(carryRate)}/unit
           {portfolio ? ` · ${money(carryNow)} now` : ""}
         </p>
         {error && (

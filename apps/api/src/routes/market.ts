@@ -1,7 +1,13 @@
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { challenges } from "@qtp/db";
-import { getBookSnapshot, getMidPriceHistory, getPrice, getPriceHistory } from "@qtp/bus";
+import {
+  getBookSnapshot,
+  getMidPriceHistory,
+  getMidPriceHistoryRoom,
+  getPrice,
+  getPriceHistory,
+} from "@qtp/bus";
 import type { ChartPriceSeries, PricePoint } from "@qtp/shared";
 
 export async function marketRoutes(app: FastifyInstance): Promise<void> {
@@ -45,16 +51,21 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
       challengeId: string;
       symbol: string;
     };
-    const { limit, series } = req.query as {
+    const { limit, series, resolution } = req.query as {
       limit?: string;
       series?: ChartPriceSeries;
+      resolution?: string;
     };
     const useMid = series !== "last";
-    const cap = limit ? Number(limit) : 200;
-    let history: PricePoint[] = useMid
-      ? await getMidPriceHistory(app.redis, challengeId, symbol, cap)
-      : await getPriceHistory(app.redis, challengeId, symbol, cap);
-    if (useMid && history.length === 0) {
+    const room = resolution === "5m" || resolution === "300";
+    const cap = limit ? Number(limit) : room ? 576 : 200;
+    let history: PricePoint[] =
+      useMid && room
+        ? await getMidPriceHistoryRoom(app.redis, challengeId, symbol, cap)
+        : useMid
+          ? await getMidPriceHistory(app.redis, challengeId, symbol, cap)
+          : await getPriceHistory(app.redis, challengeId, symbol, cap);
+    if (useMid && !room && history.length === 0) {
       history = await getPriceHistory(app.redis, challengeId, symbol, cap);
     }
     return history;

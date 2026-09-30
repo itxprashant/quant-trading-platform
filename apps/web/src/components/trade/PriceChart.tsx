@@ -16,7 +16,7 @@ import type {
   OrderBookSnapshot,
   PricePoint,
 } from "@qtp/shared";
-import { midFromBook } from "@qtp/shared";
+import { midFromBook, PRICE_HISTORY_ROOM_SEC } from "@qtp/shared";
 import { get } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
@@ -92,21 +92,33 @@ function ticksToCandles(points: PricePoint[], intervalSec: number): Ohlc[] {
   );
 }
 
-function ticksToLine(points: PricePoint[]): LineData<UTCTimestamp>[] {
-  const bySec = new Map<number, number>();
+function ticksToLine(
+  points: PricePoint[],
+  intervalSec: number,
+): LineData<UTCTimestamp>[] {
+  const byBucket = new Map<number, number>();
   for (const p of points) {
-    bySec.set(Math.floor(p.timestamp / 1000), p.price);
+    const bucket =
+      Math.floor(p.timestamp / 1000 / intervalSec) * intervalSec;
+    byBucket.set(bucket, p.price);
   }
-  return [...bySec.entries()]
+  return [...byBucket.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([time, value]) => ({ time: time as UTCTimestamp, value }));
 }
 
-function liveBarSec(point: PricePoint, chartMode: ChartMode): number {
-  if (chartMode === "candle") {
-    return Math.floor(point.timestamp / 1000 / CANDLE_SEC) * CANDLE_SEC;
-  }
-  return Math.floor(point.timestamp / 1000);
+function bucketSecFor(
+  chartMode: ChartMode,
+  presentation: boolean,
+  bucketSec?: number,
+): number {
+  if (bucketSec != null) return bucketSec;
+  if (presentation) return PRICE_HISTORY_ROOM_SEC;
+  return chartMode === "candle" ? CANDLE_SEC : 1;
+}
+
+function liveBarSec(point: PricePoint, intervalSec: number): number {
+  return Math.floor(point.timestamp / 1000 / intervalSec) * intervalSec;
 }
 
 export function PriceChart({
@@ -114,6 +126,8 @@ export function PriceChart({
   symbol,
   lastPrice,
   book,
+  presentation = false,
+  bucketSec: bucketSecProp,
 }: {
   challengeId: string;
   symbol: string;
@@ -121,8 +135,12 @@ export function PriceChart({
   lastPrice?: PricePoint;
   /** Order book for live mid-price updates. */
   book?: OrderBookSnapshot;
+  /** Room display: a single live line, no chart controls. */
+  presentation?: boolean;
+  /** Override bar width in seconds (e.g. 300 for admin room-scale charts). */
+  bucketSec?: number;
 }) {
-  const [mode, setMode] = useState<ChartMode>("candle");
+  const [mode, setMode] = useState<ChartMode>(presentation ? "line" : "candle");
   const [priceSeries, setPriceSeries] = useState<ChartPriceSeries>("mid");
   const [hasData, setHasData] = useState(false);
   const [historyStatus, setHistoryStatus] = useState<
@@ -158,7 +176,11 @@ export function PriceChart({
   }, [priceSeries, lastPrice, book, symbol]);
 
   const applyHistory = useCallback(
-    (points: PricePoint[], chartMode: ChartMode) => {
+    (
+      points: PricePoint[],
+      chartMode: ChartMode,
+      intervalSec: number,
+    ) => {
       const session = latestSession(points);
       historyRef.current = session;
       if (session.length > 0) setHasData(true);
@@ -167,13 +189,13 @@ export function PriceChart({
       if (!series || !chart) return;
 
       if (chartMode === "candle") {
-        const candles = ticksToCandles(session, CANDLE_SEC);
+        const candles = ticksToCandles(session, intervalSec);
         (series as ISeriesApi<"Candlestick">).setData(candles);
         const last = candles.at(-1);
         currentCandleRef.current = last ? { ...last } : null;
         focusRecentBars(chart, candles.length);
       } else {
-        const line = ticksToLine(session);
+        const line = ticksToLine(session, intervalSec);
         (series as ISeriesApi<"Line">).setData(line);
         currentCandleRef.current = null;
         focusRecentBars(chart, line.length);
@@ -208,11 +230,18 @@ export function PriceChart({
       }
 
       if (historyRef.current.length > 0) {
-        applyHistory(historyRef.current, chartMode);
+        applyHistory(
+          historyRef.current,
+          chartMode,
+          bucketSecFor(chartMode, presentation, bucketSecProp),
+        );
       }
     },
-    [applyHistory],
+    [applyHistory, bucketSecProp, presentation],
   );
+
+  const roomScale =
+    presentation || (bucketSecProp != null && bucketSecProp >= 60);
 
   // Create chart once.
   useEffect(() => {
@@ -253,7 +282,7 @@ export function PriceChart({
       timeScale: {
         borderColor: colors.border,
         timeVisible: true,
-        secondsVisible: true,
+        secondsVisible: !roomScale,
         rightOffset: 8,
         barSpacing: 8,
         minBarSpacing: 4,
@@ -283,6 +312,12 @@ export function PriceChart({
     };
   }, []);
 
+  useEffect(() => {
+    chartRef.current?.applyOptions({
+      timeScale: { secondsVisible: !roomScale },
+    });
+  }, [roomScale]);
+
   // Swap series when chart type changes.
   useEffect(() => {
     const chart = chartRef.current;
@@ -298,12 +333,18 @@ export function PriceChart({
     setHistoryStatus("loading");
     seriesRef.current?.setData([]);
     let cancelled = false;
+    const useRoomHistory = roomScale && priceSeries === "mid";
+    const limit = useRoomHistory ? 576 : 500;
     get<PricePoint[]>(
-      `/api/market/${challengeId}/${symbol}/history?limit=500&series=${priceSeries}`,
+      `/api/market/${challengeId}/${symbol}/history?limit=${limit}&series=${priceSeries}${useRoomHistory ? "&resolution=5m" : ""}`,
     )
       .then((points) => {
         if (cancelled) return;
-        applyHistory(points, modeRef.current);
+        applyHistory(
+          points,
+          modeRef.current,
+          bucketSecFor(modeRef.current, presentation, bucketSecProp),
+        );
         setHistoryStatus("ready");
       })
       .catch(() => {
@@ -312,7 +353,16 @@ export function PriceChart({
     return () => {
       cancelled = true;
     };
-  }, [challengeId, symbol, priceSeries, applyHistory, retry]);
+  }, [
+    challengeId,
+    symbol,
+    priceSeries,
+    applyHistory,
+    retry,
+    roomScale,
+    presentation,
+    bucketSecProp,
+  ]);
 
   // Append live ticks.
   useEffect(() => {
@@ -320,27 +370,40 @@ export function PriceChart({
     setHasData(true);
 
     const chartMode = modeRef.current;
-    const nextSec = liveBarSec(live, chartMode);
+    const intervalSec = bucketSecFor(
+      chartMode,
+      presentation,
+      bucketSecProp,
+    );
+    const nextSec = liveBarSec(live, intervalSec);
     const lastSec =
       chartMode === "candle"
         ? (currentCandleRef.current?.time as number | undefined)
         : historyRef.current.at(-1)
-          ? liveBarSec(historyRef.current.at(-1)!, chartMode)
+          ? liveBarSec(historyRef.current.at(-1)!, intervalSec)
           : undefined;
     if (lastSec != null && nextSec < lastSec) return;
 
     const prev = historyRef.current.at(-1);
     if (prev && live.timestamp - prev.timestamp > SESSION_GAP_MS) {
       historyRef.current = [live];
-      applyHistory([live], modeRef.current);
+      applyHistory([live], chartMode, intervalSec);
       return;
     }
 
-    historyRef.current = [...historyRef.current, live].slice(-500);
+    const historyCap = roomScale ? 576 : 500;
+    if (
+      roomScale &&
+      prev &&
+      liveBarSec(prev, intervalSec) === nextSec
+    ) {
+      historyRef.current = [...historyRef.current.slice(0, -1), live];
+    } else {
+      historyRef.current = [...historyRef.current, live].slice(-historyCap);
+    }
 
-    if (modeRef.current === "candle") {
-      const bucket =
-        Math.floor(live.timestamp / 1000 / CANDLE_SEC) * CANDLE_SEC;
+    if (chartMode === "candle") {
+      const bucket = nextSec;
       const cur = currentCandleRef.current;
 
       let candle: Ohlc;
@@ -365,19 +428,30 @@ export function PriceChart({
       currentCandleRef.current = candle;
       (seriesRef.current as ISeriesApi<"Candlestick">).update(candle);
     } else {
-      const time = Math.floor(live.timestamp / 1000) as UTCTimestamp;
       (seriesRef.current as ISeriesApi<"Line">).update({
-        time,
+        time: nextSec as UTCTimestamp,
         value: live.price,
       });
     }
-  }, [live, applyHistory, historyStatus]);
+  }, [
+    live,
+    applyHistory,
+    historyStatus,
+    presentation,
+    bucketSecProp,
+    roomScale,
+  ]);
 
   return (
     <div className="flex h-full min-w-0 flex-col">
+      {!presentation && (
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-2 py-2">
         <span className="text-[10px] uppercase tracking-wide text-faint">
-          {mode === "candle" ? "5s candles" : "Price history"}
+          {roomScale
+            ? "5m bars"
+            : mode === "candle"
+              ? "5s candles"
+              : "Price history"}
         </span>
         <div className="flex flex-wrap gap-1.5">
           <div
@@ -446,6 +520,7 @@ export function PriceChart({
           </div>
         </div>
       </div>
+      )}
       <div className="relative min-h-0 flex-1">
         <div
           ref={containerRef}

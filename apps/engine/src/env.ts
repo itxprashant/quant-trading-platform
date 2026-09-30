@@ -16,4 +16,6 @@ export const env = {
   metricsMs: Number(process.env.ENGINE_METRICS_MS ?? 1000),
   /** New Eden game-minute interval (ms) for carry/loan/margin accrual. */
   minuteMs: Number(process.env.ENGINE_MINUTE_MS ?? 60_000),
+  /** Rewind checkpoint cadence (wall ms, not scaled by ENGINE_MINUTE_MS). */
+  checkpointMs: Number(process.env.ENGINE_CHECKPOINT_MS ?? 120_000),
 };

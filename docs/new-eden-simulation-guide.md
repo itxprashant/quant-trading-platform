@@ -6,7 +6,7 @@ The host runs the event from `/admin/[id]` while the engine keeps the economy, b
 
 - **Playbook cues** (semi-automatic, §1.2): the playbook is split into 46 cues (open, headlines, Deal Desk slots, auctions, listings, halftime, vote, shock, grant, close). You press **Run** for each one; the engine runs its steps with the playbook's own timing.
 - **Host** (fully manual, §1.1): you build every beat yourself from the individual controls.
-- **Scripted** (fully automated, §1.3): the 130-minute timeline runs by itself.
+- **Scripted** (fully automated, §1.3): the 210-minute timeline runs by itself.
 
 Your job is to stand up the environment, enroll players, pick a flow, and run the event. Pick the flow before the challenge starts; it cannot change once the event has run.
 
@@ -51,7 +51,7 @@ Use the cue sheet rather than the manual controls for playbook beats. Manual con
 
 ### 1.3 Scripted (fully automated)
 
-The engine runs a fixed **130-game-minute** timeline by itself: listings at 10/18/30/45/70m, 24 headlines, 7 auctions, 13 OTC slots, halftime 60–70m, vote at 80m, shock at 90m, grant at 100m, close at 130m. The host only monitors. Full schedule: [`event.md`](../event.md) and `packages/shared/src/eden-event.ts`.
+The engine runs a fixed **210-game-minute** timeline by itself (two 90-minute halves plus a 30-minute break at 90–120). Listings at 16/24/36/60/121m, per-minute headlines, 12 auctions, 13 OTC slots, vote at 154m, shock at 167m, grant at 177m, close at 210m. The host only monitors. Full schedule: [`eden_v2.md`](../eden_v2.md) and `packages/shared/src/eden-event.ts`.
 
 In scripted mode, **do not** fire manual news, auctions, OTC offers, votes, or grants — they double the scripted beats. Sections 5–8 cover host mode and call out where playbook cues differ.
 
@@ -203,7 +203,7 @@ With playbook cues, the form locks bond templates: the two playbook bonds arrive
 ### 5.3 Set the schedule
 
 1. **Starts at** — the open. The game clock (carry, loans, bond payouts) counts from this time.
-2. **Ends at** — optional. If set, the engine closes the event at that time. If empty, the event runs until you click **End**. For a 130-minute event, set it to Starts at + 130 minutes. In host and cue modes it is not filled in automatically; with cues you can leave it empty and run **Close** instead.
+2. **Ends at** — optional. If set, the engine closes the event at that time. If empty, the event runs until you click **End**. For a scripted event, set it to Starts at + 210 minutes. In host and cue modes it is not filled in automatically; with cues you can leave it empty and run **Close** instead.
 3. Save while still `draft` or `scheduled`.
 4. Only a `scheduled` challenge goes live on its own at **Starts at**. The seeded challenge is already `scheduled`. A new or reset challenge is a `draft`: click **Schedule** in the admin list, or click **Start** yourself at the open.
 
@@ -316,7 +316,7 @@ To run the same story the script tells, fire these by hand. Minutes are game min
 | 80 | Solidarity Tax vote (60 s) | Policy vote |
 | 90 | Shock: signal headline, AERIUM −300 and NEURO +200, volatility event | News & announcements |
 | 100 | Grant mission on AERIUM (300 s) | Government grant |
-| 130 | Close | **End**, or Ends at |
+| 210 | Close | **End**, or Ends at |
 
 Two scripted beats have no host control. The halftime rescue loans do not exist in host mode, though players can still borrow from the **Bank** panel at any time. The 3× bot volatility at minute 120 has no switch either; use **Drift** / **Set** or a volatility-event headline instead. Playbook cues run both: **Halftime freeze** issues the rescue loans and **Final squeeze** triples bot volatility.
 
@@ -354,7 +354,7 @@ The **Playbook cues** panel lists all 46 cues in playbook order, each with its g
 | **Dis-correlation shock** | 90 | Vega bots prepare; 60 s later the shock headline and the vega dump | Reopen with options |
 | **Government grant** | 100 | Grant on AERIUM, awarded 5 minutes later; headlines at 100 and 105 | Open market |
 | **Final squeeze** | 120 | Bot volatility ×3, with its headline | Open market |
-| **Close event** | 130 | Halt and final rankings | — |
+| **Close event** | 210 | Halt and final rankings | — |
 
 An auction sorts just ahead of the headline on the same minute: run the auction first so its winners receive that headline early.
 

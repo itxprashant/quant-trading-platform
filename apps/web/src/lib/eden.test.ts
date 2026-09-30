@@ -2,11 +2,19 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { Auction, OptionContract } from "@qtp/shared";
 import {
+  EDEN_EVENT_DURATION_MINUTES,
+  EDEN_EVENT_ETF_WINDOW_MINUTES,
+  EDEN_EVENT_HALFTIME_END_MINUTE,
+  EDEN_EVENT_NEWS_MINUTES,
+  EDEN_EVENT_OPTIONS_OPEN_MINUTE,
+} from "@qtp/shared";
+import {
   edenSecondMs,
   eventProgress,
   eventTimers,
   loanPayment,
   optionPhase,
+  otcBargainCounterFromUnitPrice,
   otcChoiceLeg,
   otcNetCash,
   type EventTimerInput,
@@ -22,9 +30,14 @@ function scriptedAt(
 ): EventTimerInput {
   return {
     now: START + minute * minuteMs,
-    status: minute < 0 ? "scheduled" : minute >= 130 ? "ended" : "live",
+    status:
+      minute < 0
+        ? "scheduled"
+        : minute >= EDEN_EVENT_DURATION_MINUTES
+          ? "ended"
+          : "live",
     startsAt: new Date(START).toISOString(),
-    endsAt: new Date(START + 130 * minuteMs).toISOString(),
+    endsAt: new Date(START + EDEN_EVENT_DURATION_MINUTES * minuteMs).toISOString(),
     scripted: true,
     auction: null,
     contracts: [],
@@ -41,15 +54,19 @@ function timer(input: EventTimerInput, id: string) {
 test("game clock scale is derived from the scripted start and end", () => {
   const startsAt = new Date(START).toISOString();
   const end = (minuteMs: number) =>
-    new Date(START + 130 * minuteMs).toISOString();
+    new Date(START + EDEN_EVENT_DURATION_MINUTES * minuteMs).toISOString();
   assert.equal(edenSecondMs(startsAt, end(60_000), true), 1000);
   assert.equal(edenSecondMs(startsAt, end(6000), true), 100);
   assert.equal(edenSecondMs(startsAt, end(6000), false), 1000);
   assert.equal(edenSecondMs(null, end(6000), true), 1000);
   assert.equal(edenSecondMs(startsAt, startsAt, true), 1000);
-  assert.equal(eventProgress(startsAt, START + 60 * 6000, 100)?.phase, "halftime");
+  assert.equal(eventProgress(startsAt, START + 90 * 6000, 100)?.phase, "halftime");
   assert.equal(
-    eventProgress(startsAt, START + 70 * 6000, 100)?.phase,
+    eventProgress(
+      startsAt,
+      START + EDEN_EVENT_HALFTIME_END_MINUTE * 6000,
+      100,
+    )?.phase,
     "session_two",
   );
 });
@@ -62,48 +79,74 @@ test("scripted timers follow the schedule at real and accelerated clocks", () =>
       eventTimers(pending).map((t) => [t.id, t.label, t.target]),
       [
         ["event", "Opens in", at(0)],
-        ["auction", "Next auction", at(15 - 40 / 60)],
-        ["options", "Options open", at(70)],
-        ["etf", "Next ETF window", at(45)],
-        ["news", "Next news", at(5)],
+        ["auction", "Next auction", at(13)],
+        ["options", "Options open", at(EDEN_EVENT_OPTIONS_OPEN_MINUTE)],
+        ["etf", "Next ETF window", at(67)],
+        ["news", "Next news", at(1)],
       ],
     );
 
-    const session = scriptedAt(14.5, minuteMs);
+    const session = scriptedAt(13.25, minuteMs);
     assert.equal(timer(session, "event")?.label, "Session 1");
-    assert.equal(timer(session, "event")?.target, at(130));
+    assert.equal(
+      timer(session, "event")?.target,
+      at(EDEN_EVENT_DURATION_MINUTES),
+    );
     assert.equal(timer(session, "auction")?.label, "Auction");
-    assert.equal(timer(session, "auction")?.target, at(15 - 10 / 60));
+    assert.equal(timer(session, "auction")?.target, at(13.5));
     assert.equal(timer(session, "auction")?.tone, "warning");
 
-    const halftime = scriptedAt(65, minuteMs);
+    const halftime = scriptedAt(95, minuteMs);
     assert.equal(timer(halftime, "event")?.label, "Halftime");
-    assert.equal(timer(halftime, "event")?.target, at(70));
+    assert.equal(
+      timer(halftime, "event")?.target,
+      at(EDEN_EVENT_HALFTIME_END_MINUTE),
+    );
     assert.equal(timer(halftime, "event")?.tone, "warning");
-    assert.equal(timer(halftime, "news")?.target, at(70));
+    assert.equal(
+      timer(halftime, "news")?.target,
+      at(EDEN_EVENT_OPTIONS_OPEN_MINUTE),
+    );
     const early = timer({ ...halftime, premium: true }, "news");
-    assert.equal(early?.target, at(70 - 10 / 60));
+    assert.equal(
+      early?.target,
+      at(EDEN_EVENT_OPTIONS_OPEN_MINUTE - 10 / 60),
+    );
     assert.equal(early?.hint, "Early");
 
-    const etf = scriptedAt(45 + 25 / 60, minuteMs);
+    const etf = scriptedAt(67 + 25 / 60, minuteMs);
     assert.equal(timer(etf, "etf")?.label, "ETF window");
-    assert.equal(timer(etf, "etf")?.target, at(45.5));
+    assert.equal(timer(etf, "etf")?.target, at(67.5));
     assert.equal(timer(etf, "etf")?.tone, "active");
 
-    assert.equal(timer(scriptedAt(124, minuteMs), "news")?.target, at(125));
-    assert.equal(timer(scriptedAt(124, minuteMs), "etf")?.target, at(125));
-    assert.equal(timer(scriptedAt(125, minuteMs), "news"), undefined);
-    assert.equal(timer(scriptedAt(125, minuteMs), "etf")?.target, at(125.5));
-    assert.equal(timer(scriptedAt(126, minuteMs), "etf"), undefined);
+    const lastNews = EDEN_EVENT_NEWS_MINUTES.at(-1)!;
+    const lastEtf = EDEN_EVENT_ETF_WINDOW_MINUTES.at(-1)!;
+    assert.equal(
+      timer(scriptedAt(lastNews - 1, minuteMs), "news")?.target,
+      at(lastNews),
+    );
+    assert.equal(
+      timer(scriptedAt(lastEtf - 0.4, minuteMs), "etf")?.target,
+      at(lastEtf),
+    );
+    assert.equal(timer(scriptedAt(lastNews, minuteMs), "news"), undefined);
+    assert.equal(
+      timer(scriptedAt(lastEtf, minuteMs), "etf")?.target,
+      at(lastEtf + 0.5),
+    );
+    assert.equal(timer(scriptedAt(lastEtf + 1, minuteMs), "etf"), undefined);
   }
 });
 
 test("timers turn warning inside ten seconds and collapse once ended", () => {
-  const nearNews = scriptedAt(5 - 8 / 60);
+  const nearNews = scriptedAt(2 - 8 / 60);
   assert.equal(timer(nearNews, "news")?.tone, "warning");
-  assert.equal(timer(scriptedAt(4), "news")?.tone, "neutral");
+  assert.equal(timer(scriptedAt(1), "news")?.tone, "neutral");
   assert.deepEqual(
-    eventTimers(scriptedAt(131)).map((t) => [t.id, t.text]),
+    eventTimers(scriptedAt(EDEN_EVENT_DURATION_MINUTES + 1)).map((t) => [
+      t.id,
+      t.text,
+    ]),
     [["event", "Ended"]],
   );
 });
@@ -201,19 +244,22 @@ test("unscripted challenges only show the session clock", () => {
   );
 });
 
-test("event phases follow real minutes from the persisted start and end at 130", () => {
+test("event phases follow real minutes from the persisted start and end at 210", () => {
   const startsAt = new Date(1_000_000).toISOString();
   const at = (minutes: number) =>
     eventProgress(startsAt, 1_000_000 + minutes * 60000);
   assert.equal(at(-1)?.phase, "pending");
   assert.equal(at(-1)?.elapsedSeconds, 0);
   assert.equal(at(0)?.phase, "session_one");
-  assert.equal(at(59.999)?.phase, "session_one");
-  assert.equal(at(60)?.phase, "halftime");
-  assert.equal(at(70)?.phase, "session_two");
-  assert.equal(at(129.999)?.phase, "session_two");
-  assert.equal(at(130)?.phase, "ended");
-  assert.equal(at(140)?.elapsedSeconds, 130 * 60);
+  assert.equal(at(89.999)?.phase, "session_one");
+  assert.equal(at(90)?.phase, "halftime");
+  assert.equal(at(EDEN_EVENT_HALFTIME_END_MINUTE)?.phase, "session_two");
+  assert.equal(at(EDEN_EVENT_DURATION_MINUTES - 0.001)?.phase, "session_two");
+  assert.equal(at(EDEN_EVENT_DURATION_MINUTES)?.phase, "ended");
+  assert.equal(
+    at(EDEN_EVENT_DURATION_MINUTES + 10)?.elapsedSeconds,
+    EDEN_EVENT_DURATION_MINUTES * 60,
+  );
   assert.equal(eventProgress(null, 0), null);
   assert.equal(eventProgress("invalid", 0), null);
 });
@@ -233,6 +279,23 @@ test("bailout choices preserve the host price and enforce signed quantity limits
   assert.equal(otcChoiceLeg(choices, "UNKNOWN", 1), null);
   assert.equal(otcChoiceLeg([], "AERIUM", 1), null);
   assert.equal(choices[0]?.quantity, -50);
+});
+
+test("bargain unit price converts to the cash counter the API expects", () => {
+  assert.equal(
+    otcBargainCounterFromUnitPrice(
+      { symbol: "AERIUM", quantity: 50, price: 988 },
+      968,
+    ),
+    1000,
+  );
+  assert.equal(
+    otcBargainCounterFromUnitPrice(
+      { symbol: "AERIUM", quantity: -40, price: 1046.4 },
+      1096.4,
+    ),
+    2000,
+  );
 });
 
 test("OTC cash includes signed leg notional and a cash adjustment", () => {

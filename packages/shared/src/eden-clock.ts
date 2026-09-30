@@ -2,47 +2,105 @@
  * Timing of the scripted New Eden event, in game seconds from `startsAt`.
  * Browsers import this module, so it must never reference headlines, fair-value
  * effects, or OTC terms (those live in `eden-event.ts`).
+ *
+ * The playbook (`eden_v2.md`) numbers two 90-minute halves (TM 0–90, TM 91–180)
+ * with a paused 30-minute break. The engine clock is linear, so that break is
+ * minutes 90–120 and every playbook minute after 90 is shifted +30. Wall length
+ * is therefore 210 game minutes.
  */
-export const EDEN_EVENT_DURATION_MINUTES = 130;
-export const EDEN_EVENT_AUCTION_MINUTES = [
-  15, 30, 45, 75, 90, 105, 120,
+export const EDEN_EVENT_DURATION_MINUTES = 210;
+export const EDEN_EVENT_HALFTIME_START_MINUTE = 90;
+export const EDEN_EVENT_HALFTIME_END_MINUTE = 120;
+export const EDEN_EVENT_HALFTIME_DURATION_MINUTES = 30;
+
+/** Map a playbook TM (0–180, clock paused at 90) onto the linear engine clock. */
+export function edenPlaybookToGameMinute(playbookMinute: number): number {
+  return playbookMinute <= EDEN_EVENT_HALFTIME_START_MINUTE
+    ? playbookMinute
+    : playbookMinute + EDEN_EVENT_HALFTIME_DURATION_MINUTES;
+}
+
+export const EDEN_EVENT_OPTIONS_OPEN_MINUTE = edenPlaybookToGameMinute(91);
+export const EDEN_EVENT_NEURO_LIST_MINUTE = 36;
+export const EDEN_EVENT_ETF_LIST_MINUTE = 60;
+export const EDEN_EVENT_SHOCK_MINUTE = edenPlaybookToGameMinute(137);
+export const EDEN_EVENT_VOTE_MINUTE = edenPlaybookToGameMinute(124);
+export const EDEN_EVENT_GRANT_OPEN_MINUTE = edenPlaybookToGameMinute(147);
+export const EDEN_EVENT_GRANT_AWARD_MINUTE = edenPlaybookToGameMinute(157);
+export const EDEN_EVENT_SQUEEZE_MINUTE = edenPlaybookToGameMinute(172);
+export const EDEN_EVENT_BOND_MINUTES = [16, 24] as const;
+const EDEN_EVENT_AUCTION_PLAYBOOK_MINUTES = [
+  13, 28, 43, 58, 70, 82, 99, 114, 129, 144, 159, 174,
 ] as const;
-/** Bidding opens this many seconds before the round minute. */
-export const EDEN_EVENT_AUCTION_OPEN_LEAD_SEC = 40;
-/** Bidding closes (and the round resolves) this many seconds before the round minute. */
-export const EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC = 10;
+export const EDEN_EVENT_AUCTION_MINUTES =
+  EDEN_EVENT_AUCTION_PLAYBOOK_MINUTES.map(edenPlaybookToGameMinute);
+/** Bidding opens on the auction minute. */
+export const EDEN_EVENT_AUCTION_OPEN_LEAD_SEC = 0;
+/** Sealed bidding lasts this many seconds after the auction minute. */
+export const EDEN_EVENT_AUCTION_DURATION_SEC = 30;
 /** Premium subscribers receive each scripted headline this many seconds early. */
 export const EDEN_EVENT_PREMIUM_LEAD_SEC = 10;
-/** Premium access lasts until this many minutes after the round minute. */
+/** Fallback premium-access length when no later auction exists. */
 export const EDEN_EVENT_PREMIUM_ACCESS_MINUTES = 15;
-export const EDEN_EVENT_NEWS_MINUTES = [
-  5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 70, 75, 80, 85, 90, 95, 100,
-  105, 110, 115, 120, 125,
+const EDEN_EVENT_NEWS_PLAYBOOK_MINUTES = [
+  1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 14, 15, 17, 18, 19, 21, 22, 23, 25, 26,
+  27, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39, 40, 41, 42, 44, 46, 47, 48, 49, 51,
+  52, 53, 54, 55, 56, 57, 59, 60, 61, 62, 63, 64, 66, 68, 69, 71, 72, 73, 74, 75,
+  76, 79, 80, 81, 83, 84, 85, 86, 88, 89, 90, 91, 94, 95, 97, 98, 100, 102, 104,
+  105, 108, 109, 110, 112, 115, 118, 119, 120, 122, 124, 125, 128, 130, 132, 134,
+  135, 137, 138, 140, 142, 145, 147, 148, 149, 150, 154, 155, 157, 158, 160, 162,
+  164, 165, 168, 169, 170, 172, 175, 177, 178, 179,
 ] as const;
-export const EDEN_EVENT_HALFTIME_START_MINUTE = 60;
-export const EDEN_EVENT_HALFTIME_END_MINUTE = 70;
-export const EDEN_EVENT_OPTIONS_OPEN_MINUTE = 70;
+export const EDEN_EVENT_NEWS_MINUTES = EDEN_EVENT_NEWS_PLAYBOOK_MINUTES.map(
+  edenPlaybookToGameMinute,
+);
 /** New bank loans are refused in the last this many game minutes. */
 export const EDEN_LOAN_LOCKOUT_MINUTES = 10;
-export const EDEN_EVENT_ETF_LIST_MINUTE = 45;
+/** Most principal one trader may still have outstanding, across every open loan. */
+export const EDEN_LOAN_LIMIT = 500_000;
+
+/** Challenge-configured loan repay multiple; matches `zEdenRules` default. */
+export function edenLoanRepayMultiplier(
+  eden?: { rules?: { loanRepayMultiplier?: number } } | null,
+): number {
+  const m = eden?.rules?.loanRepayMultiplier;
+  return Number.isFinite(m) && m >= 1 ? m : 2;
+}
+
+export function edenLoanTotalRepay(
+  principal: number,
+  eden?: { rules?: { loanRepayMultiplier?: number } } | null,
+): number {
+  return principal * edenLoanRepayMultiplier(eden);
+}
+
+/** Principal still drawn on open loans. Repaid fractions free the limit. */
+export function edenLoanOutstanding(
+  rows: readonly {
+    principal: number;
+    totalRepay: number;
+    remaining: number;
+  }[],
+): number {
+  return rows.reduce((sum, loan) => {
+    if (!(loan.principal > 0) || !(loan.totalRepay > 0) || !(loan.remaining > 0))
+      return sum;
+    return sum + (loan.principal * loan.remaining) / loan.totalRepay;
+  }, 0);
+}
+
 export const EDEN_EVENT_ETF_WINDOW_SEC = 30;
 /** Create/redeem windows every 10 game minutes from the ETF listing, skipping halftime. */
 export const EDEN_EVENT_ETF_WINDOW_INTERVAL_MINUTES = 10;
-/** Create/redeem windows every 10 minutes from the ETF listing, skipping halftime. */
-export const EDEN_EVENT_ETF_WINDOW_MINUTES: readonly number[] = Array.from(
-  {
-    length: Math.ceil(
-      (EDEN_EVENT_DURATION_MINUTES - EDEN_EVENT_ETF_LIST_MINUTE) /
-        EDEN_EVENT_ETF_WINDOW_INTERVAL_MINUTES,
-    ),
-  },
-  (_, i) =>
-    EDEN_EVENT_ETF_LIST_MINUTE + i * EDEN_EVENT_ETF_WINDOW_INTERVAL_MINUTES,
-).filter(
-  (minute) =>
-    minute < EDEN_EVENT_HALFTIME_START_MINUTE ||
-    minute >= EDEN_EVENT_HALFTIME_END_MINUTE,
-);
+/**
+ * Scripted create/redeem minutes. Half 1 is 67/77/87; after the break the
+ * cadence is playbook 93, 103, … 173 → game 123, 133, … 203.
+ */
+const EDEN_EVENT_ETF_WINDOW_PLAYBOOK_MINUTES = [
+  67, 77, 87, 93, 103, 113, 123, 133, 143, 153, 163, 173,
+] as const;
+export const EDEN_EVENT_ETF_WINDOW_MINUTES =
+  EDEN_EVENT_ETF_WINDOW_PLAYBOOK_MINUTES.map(edenPlaybookToGameMinute);
 
 /** Wall ms a create/redeem window stays open (scales with the game minute). */
 export function edenEtfWindowMs(minuteMs: number): number {
@@ -82,27 +140,26 @@ export function edenEventStateAt(elapsedSeconds: number) {
     symbols:
       minute < 0
         ? []
-        : minute < 30
+        : minute < EDEN_EVENT_NEURO_LIST_MINUTE
           ? ["AERIUM"]
           : minute < EDEN_EVENT_ETF_LIST_MINUTE
             ? ["AERIUM", "NEURO"]
             : ["AERIUM", "NEURO", "ORBITAL"],
     bondIds:
-      minute < 10
+      minute < EDEN_EVENT_BOND_MINUTES[0]
         ? []
-        : minute < 18
+        : minute < EDEN_EVENT_BOND_MINUTES[1]
           ? ["standard"]
           : ["standard", "aerium_pegged"],
     optionsEnabled:
       minute >= EDEN_EVENT_OPTIONS_OPEN_MINUTE &&
       minute < EDEN_EVENT_DURATION_MINUTES,
-    etfWindowOpen:
-      minute >= EDEN_EVENT_ETF_LIST_MINUTE &&
-      minute < EDEN_EVENT_DURATION_MINUTES &&
-      phase !== "halftime" &&
-      (elapsedSeconds - EDEN_EVENT_ETF_LIST_MINUTE * 60) % 600 <
-        EDEN_EVENT_ETF_WINDOW_SEC,
-    botVolatilityMultiplier: minute >= 120 ? 3 : 1,
+    etfWindowOpen: EDEN_EVENT_ETF_WINDOW_MINUTES.some(
+      (openMinute) =>
+        elapsedSeconds >= openMinute * 60 &&
+        elapsedSeconds < openMinute * 60 + EDEN_EVENT_ETF_WINDOW_SEC,
+    ),
+    botVolatilityMultiplier: minute >= EDEN_EVENT_SQUEEZE_MINUTE ? 3 : 1,
   } as const;
 }
 

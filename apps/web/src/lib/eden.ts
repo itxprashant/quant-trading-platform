@@ -6,7 +6,7 @@ import type {
   OtcLeg,
 } from "@qtp/shared";
 import {
-  EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC,
+  EDEN_EVENT_AUCTION_DURATION_SEC,
   EDEN_EVENT_AUCTION_MINUTES,
   EDEN_EVENT_AUCTION_OPEN_LEAD_SEC,
   EDEN_EVENT_DURATION_MINUTES,
@@ -21,7 +21,7 @@ import {
 
 /**
  * Wall milliseconds per game second. The engine pins a scripted event's
- * `endsAt` to `startsAt` + 130 game minutes, so the span encodes
+ * `endsAt` to `startsAt` + the scripted duration, so the span encodes
  * `ENGINE_MINUTE_MS` (accelerated dry runs included).
  */
 export function edenSecondMs(
@@ -199,7 +199,11 @@ function auctionTimer(
   if (!scripted) return null;
   for (const minute of EDEN_EVENT_AUCTION_MINUTES) {
     const opensAt = at(minute * 60 - EDEN_EVENT_AUCTION_OPEN_LEAD_SEC);
-    const closesAt = at(minute * 60 - EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC);
+    const closesAt = at(
+      minute * 60 -
+        EDEN_EVENT_AUCTION_OPEN_LEAD_SEC +
+        EDEN_EVENT_AUCTION_DURATION_SEC,
+    );
     if (now < opensAt) {
       return {
         id: "auction",
@@ -357,6 +361,21 @@ export function otcChoiceLeg(
   )
     return null;
   return { symbol: choice.symbol, quantity: -quantity, price: choice.price };
+}
+
+/** Cash-to-trader counter that reprices a single leg to `unitPrice`. */
+export function otcBargainCounterFromUnitPrice(
+  leg: OtcLeg,
+  unitPrice: number,
+): number {
+  if (
+    !Number.isFinite(unitPrice) ||
+    unitPrice < 0 ||
+    !Number.isFinite(leg.quantity) ||
+    !Number.isFinite(leg.price)
+  )
+    return Number.NaN;
+  return leg.quantity * (leg.price - unitPrice);
 }
 
 export function otcNetCash(cashAdjustment: number, legs: OtcLeg[]): number {

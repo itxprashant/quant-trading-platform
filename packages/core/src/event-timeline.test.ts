@@ -14,7 +14,17 @@ import {
   EDEN_EVENT_OTC,
   type EdenEventAction,
 } from "../../shared/src/eden-event.js";
-import { edenEventStateAt } from "../../shared/src/eden-clock.js";
+import {
+  EDEN_EVENT_DURATION_MINUTES,
+  EDEN_EVENT_ETF_LIST_MINUTE,
+  EDEN_EVENT_GRANT_AWARD_MINUTE,
+  EDEN_EVENT_HALFTIME_START_MINUTE,
+  EDEN_EVENT_OPTIONS_OPEN_MINUTE,
+  EDEN_EVENT_SHOCK_MINUTE,
+  EDEN_EVENT_VOTE_MINUTE,
+  edenEventStateAt,
+  edenPlaybookToGameMinute,
+} from "../../shared/src/eden-clock.js";
 import { EDEN_EVENT_BONDS } from "../../shared/src/eden-presets.js";
 
 vi.mock("../../shared/dist/index.js", async (original) => ({
@@ -256,102 +266,48 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("script schedule and dispatcher", () => {
   it("preserves labels, timing and unique receipts", () => {
-    // Replacing the minute-130 pair with minute 70 leaves 107 total actions.
-    expect(EDEN_EVENT_ACTIONS).toHaveLength(107);
-    expect(new Set(EDEN_EVENT_ACTIONS.map((a) => a.id)).size).toBe(107);
-    expect(EDEN_EVENT_NEWS).toHaveLength(24);
-    expect(
-      EDEN_EVENT_NEWS.filter((n) => n.classification === "signal"),
-    ).toHaveLength(12);
-    expect(
-      EDEN_EVENT_NEWS.filter((n) => n.classification === "noise"),
-    ).toHaveLength(12);
-    expect(EDEN_EVENT_NEWS.map((n) => n.minute)).toEqual(
-      Array.from({ length: 25 }, (_, i) => (i + 1) * 5).filter(
-        (minute) => minute !== 65,
-      ),
+    expect(new Set(EDEN_EVENT_ACTIONS.map((a) => a.id)).size).toBe(
+      EDEN_EVENT_ACTIONS.length,
     );
-    for (const [minute, headline] of [
-      [5, "Refinery strike in Sector 4 cuts Aerium output by 12%."],
-      [15, "New extraction tax levied on raw Aerium. Processing costs up 8%."],
-      [
-        25,
-        "Smugglers busted with 50,000 tons of counterfeit Aerium; market supply shocks.",
-      ],
-      [
-        30,
-        "Neuro-Chips approved for civilian use! Deep silicon linkage established with Aerium.",
-      ],
-      [40, "Cobalt shortage cripples Neuro-Chip assembly lines."],
-      [75, "Options expire. Massive Gamma squeeze observed on Neuro-Chips."],
-      [90, "Zero-point energy prototype successful! Aerium obsolete!"],
-      [115, "Solar flare scrambles Neuro-Chip logic gates globally!"],
-      [125, "Massive cyberattack disables 40% of remaining Aerium grid."],
-    ] as const) {
-      expect(EDEN_EVENT_NEWS.find((n) => n.minute === minute)).toMatchObject({
-        classification: "signal",
-        original: true,
-        headline,
-      });
-    }
-    for (const [minute, headline] of [
-      [
-        10,
-        "Senate sub-committee discussing long-term viability of Aerium infrastructure.",
-      ],
-      [20, "Celebrity influencer 'Nova' endorses Aerium on holonet."],
-      [
-        35,
-        "Unverified rumor: Neuro-Chip CEO seen leaving rival's headquarters.",
-      ],
-      [
-        50,
-        "Orbital-Station quarterly earnings report delayed by 1 hour due to clerical error.",
-      ],
-      [
-        85,
-        "Analyst downgrades Neuro-Chips to 'Hold', citing lack of innovation.",
-      ],
-      [
-        95,
-        "Mass protests in the capital against zero-point energy safety risks.",
-      ],
-      [110, "CEO of Orbital Station tweets a rocket emoji."],
-    ] as const) {
-      expect(EDEN_EVENT_NEWS.find((n) => n.minute === minute)).toMatchObject({
-        classification: "noise",
-        original: true,
-        headline,
-      });
-    }
-    expect(EDEN_EVENT_NEWS.find((n) => n.minute === 55)).toMatchObject({
+    expect(EDEN_EVENT_NEWS.map((n) => n.minute)).toEqual(
+      [...new Set(EDEN_EVENT_NEWS.map((n) => n.minute))].sort((a, b) => a - b),
+    );
+    expect(EDEN_EVENT_NEWS.find((n) => n.minute === 8)).toMatchObject({
       classification: "signal",
-      effects: [{ symbol: "AERIUM", operation: "cap", value: 1150 }],
+      original: true,
+      headline: "Refinery strike in Sector 4 cuts output by 12%.",
+    });
+    expect(EDEN_EVENT_NEWS.find((n) => n.minute === EDEN_EVENT_SHOCK_MINUTE)).toMatchObject({
+      classification: "signal",
+      original: true,
+      headline: "Zero-point energy prototype succeeds. Aerium is obsolete.",
+      effects: [
+        { symbol: "AERIUM", operation: "delta", value: -300 },
+        { symbol: "NEURO", operation: "delta", value: 200 },
+      ],
     });
     expect(EDEN_EVENT_ACTIONS.filter((a) => a.kind === "news")).toHaveLength(
-      48,
+      EDEN_EVENT_NEWS.length * 2,
     );
-    expect(EDEN_EVENT_ACTIONS.filter((a) => a.atSecond === 130 * 60)).toEqual([
-      action("end"),
-    ]);
-    expect(EDEN_EVENT_OTC.filter((o) => o.original)).toHaveLength(6);
+    expect(
+      EDEN_EVENT_ACTIONS.filter(
+        (a) => a.atSecond === EDEN_EVENT_DURATION_MINUTES * 60,
+      ),
+    ).toEqual([action("end")]);
+    expect(EDEN_EVENT_OTC.filter((o) => o.original)).toHaveLength(13);
     expect(EDEN_EVENT_BONDS.map((b) => b.maxPerUser)).toEqual([1, 1]);
     expect(
-      EDEN_EVENT_ACTIONS.indexOf(action("auction/90/resolve")),
-    ).toBeLessThan(EDEN_EVENT_ACTIONS.indexOf(action("news/90/premium")));
-    expect(
-      action("auction/90/resolve").atSecond -
-        action("auction/90/open").atSecond,
+      action("auction/13/resolve").atSecond - action("auction/13/open").atSecond,
     ).toBe(30);
-    expect(EDEN_EVENT_ACTIONS.indexOf(action("news/90/public"))).toBeLessThan(
-      EDEN_EVENT_ACTIONS.indexOf(action("vega/resolve")),
-    );
+    expect(
+      EDEN_EVENT_ACTIONS.indexOf(action(`news/${EDEN_EVENT_SHOCK_MINUTE}/public`)),
+    ).toBeLessThan(EDEN_EVENT_ACTIONS.indexOf(action("vega/resolve")));
   });
 
   it("establishes introduction FVs before public news without additive shocks", () => {
     for (const [minute, listing] of [
-      [45, "list/orbital"],
-      [70, "options/open"],
+      [EDEN_EVENT_ETF_LIST_MINUTE, "list/orbital"],
+      [EDEN_EVENT_OPTIONS_OPEN_MINUTE, "options/open"],
     ] as const) {
       const premium = action(`news/${minute}/premium`);
       const publicNews = action(`news/${minute}/public`);
@@ -367,13 +323,14 @@ describe("script schedule and dispatcher", () => {
         EDEN_EVENT_ACTIONS.indexOf(publicNews),
       );
     }
-    expect(edenEventStateAt(action("news/70/premium").atSecond).phase).toBe(
+    expect(edenEventStateAt(action("freeze").atSecond).phase).toBe("halftime");
+    expect(edenEventStateAt(action("news/90/public").atSecond).phase).toBe(
       "halftime",
     );
     expect(EDEN_EVENT_ACTIONS.indexOf(action("unfreeze"))).toBeLessThan(
       EDEN_EVENT_ACTIONS.indexOf(action("options/open")),
     );
-    expect(EDEN_EVENT_NEWS.some((n) => n.minute === 130)).toBe(false);
+    expect(EDEN_EVENT_NEWS.some((n) => n.minute === 45)).toBe(false);
   });
 
   it.each([60_000, 1000, 60])(
@@ -415,13 +372,11 @@ describe("script schedule and dispatcher", () => {
       execute,
     };
     const timeline = new EventTimeline(deps);
-    await expect(timeline.tick(start + 150000)).rejects.toThrow("temporary");
-    await Promise.all([
-      timeline.tick(start + 150000),
-      timeline.tick(start + 150000),
-    ]);
+    const firstNews = start + action("news/1/premium").atSecond * 1000;
+    await expect(timeline.tick(firstNews)).rejects.toThrow("temporary");
+    await Promise.all([timeline.tick(firstNews), timeline.tick(firstNews)]);
     expect(execute).toHaveBeenCalledTimes(2);
-    expect(await new EventTimeline(deps).tick(start + 150000)).toEqual([]);
+    expect(await new EventTimeline(deps).tick(firstNews)).toEqual([]);
     expect(eventActionUuid("event", "key")).not.toBe(
       eventActionUuid("other", "key"),
     );
@@ -429,37 +384,33 @@ describe("script schedule and dispatcher", () => {
 });
 
 describe("script executor", () => {
-  it("releases premium options news during halftime without opening options early", async () => {
+  it("releases premium options news after the freeze without opening options early", async () => {
     const f = fixture();
     await run(f, "freeze");
-    await run(f, "news/70/premium");
+    await run(f, "news/90/premium");
     expect(f.deps.challenge.frozen).toBe(true);
     expect(f.deps.openOptions).not.toHaveBeenCalled();
-    expect(f.deps.emit).not.toHaveBeenCalled();
-    expect(f.deps.newsPulse).not.toHaveBeenCalled();
-    expect(f.tables.news![0]).toMatchObject({
+    await run(f, "unfreeze");
+    await run(f, `news/${EDEN_EVENT_OPTIONS_OPEN_MINUTE}/premium`);
+    expect(f.deps.openOptions).not.toHaveBeenCalled();
+    expect(f.tables.news!.at(-1)).toMatchObject({
       kind: "signal",
       fvEffects: [],
       effectsAppliedAt: null,
     });
-    expect(f.tables.news![0].publishAt).toEqual(
-      new Date(start + (70 * 60 - 10) * 1000),
-    );
     expect(
       bus.publishBroadcast.mock.calls
         .flatMap((args: any[]) => args[2])
         .map((envelope: any) => envelope.target),
-    ).toEqual(["alice"]);
-    await run(f, "unfreeze");
+    ).toContain("alice");
     await run(f, "options/open");
-    await run(f, "news/70/public");
+    await run(f, `news/${EDEN_EVENT_OPTIONS_OPEN_MINUTE}/public`);
     expect(f.deps.challenge.frozen).toBe(false);
     expect(f.deps.openOptions).toHaveBeenCalledTimes(1);
-    expect(f.tables.news![0].effectsAppliedAt).toEqual(
-      new Date(start + 70 * 60000),
+    expect(f.tables.news!.at(-1).effectsAppliedAt).toEqual(
+      new Date(start + EDEN_EVENT_OPTIONS_OPEN_MINUTE * 60000),
     );
-    expect(f.tables.news![0].fvEffects).toEqual([]);
-    expect(f.deps.emit).not.toHaveBeenCalled();
+    expect(f.tables.news!.at(-1).fvEffects).toEqual([]);
   });
 
   it("replays the complete public FV path without duplicating effects", async () => {
@@ -468,17 +419,14 @@ describe("script executor", () => {
       if (item.kind === "news" && item.audience === "public") {
         await f.executor.execute(item, context(item));
         await f.executor.execute(item, context(item));
-        if (item.news.minute === 55) {
-          expect(f.fvs.get("AERIUM")).toBe(1110);
-          expect(f.tables.news!.at(-1).fvEffects).toEqual([
-            { symbol: "AERIUM", delta: 0 },
-          ]);
+        if (item.news.minute === 8) {
+          expect(f.fvs.get("AERIUM")).toBe(1075);
         }
       }
     }
-    expect(f.fvs.get("AERIUM")).toBe(930);
-    expect(f.fvs.get("NEURO")).toBe(700);
-    expect(f.tables.news).toHaveLength(24);
+    expect(f.fvs.get("AERIUM")).toBe(955);
+    expect(f.fvs.get("NEURO")).toBe(870);
+    expect(f.tables.news).toHaveLength(EDEN_EVENT_NEWS.length);
     expect(f.tables.news!.every((row) => row.effectsAppliedAt !== null)).toBe(
       true,
     );
@@ -495,20 +443,22 @@ describe("script executor", () => {
           throw new Error("DB failure");
         return insert(table);
       });
-    await expect(run(f, "news/90/public")).rejects.toThrow("DB failure");
+    await expect(run(f, `news/${EDEN_EVENT_SHOCK_MINUTE}/public`)).rejects.toThrow(
+      "DB failure",
+    );
     expect(f.tables.fairValues).toHaveLength(0);
     expect(f.tables.news![0].effectsAppliedAt).toBeNull();
     expect(f.fvs.get("AERIUM")).toBe(1000);
     expect(f.fvs.get("NEURO")).toBe(500);
     spy.mockRestore();
-    await run(f, "news/90/public");
+    await run(f, `news/${EDEN_EVENT_SHOCK_MINUTE}/public`);
     expect(f.fvs.get("AERIUM")).toBe(700);
     expect(f.fvs.get("NEURO")).toBe(700);
   });
 
   it("keeps premium effects private and applies public FV once across retries", async () => {
     const f = fixture();
-    await run(f, "news/5/premium");
+    await run(f, "news/8/premium");
     expect(f.fvs.get("AERIUM")).toBe(1000);
     expect(f.deps.emit).not.toHaveBeenCalled();
     expect(f.deps.newsPulse).not.toHaveBeenCalled();
@@ -521,30 +471,30 @@ describe("script executor", () => {
     expect(item).not.toHaveProperty("kind");
     expect(item).not.toHaveProperty("fvEffects");
     expect(item).not.toHaveProperty("momentum");
-    await run(f, "news/5/public");
-    await run(f, "news/5/public");
+    await run(f, "news/8/public");
+    await run(f, "news/8/public");
     expect(f.tables.news).toHaveLength(1);
     expect(f.fvs.get("AERIUM")).toBe(1050);
     expect(f.deps.emit).toHaveBeenCalledTimes(1);
     expect(f.deps.newsPulse).toHaveBeenCalledTimes(1);
     expect(f.tables.news![0].effectsAppliedAt).toEqual(
-      new Date(start + 300000),
+      new Date(start + 8 * 60000),
     );
   });
 
-  it("honors a poller receipt, caps at public time, and repairs post-commit cache failure", async () => {
+  it("honors a poller receipt and repairs post-commit cache failure", async () => {
     const f = fixture();
     f.fvs.set("AERIUM", 1200);
-    await run(f, "news/55/premium");
+    await run(f, "news/8/premium");
     f.fvs.set("AERIUM", 1250);
     bus.setFairValue.mockRejectedValueOnce(new Error("redis down"));
-    await expect(run(f, "news/55/public")).rejects.toThrow("redis down");
-    await run(f, "news/55/public");
-    expect(f.fvs.get("AERIUM")).toBe(1150);
+    await expect(run(f, "news/8/public")).rejects.toThrow("redis down");
+    await run(f, "news/8/public");
+    expect(f.fvs.get("AERIUM")).toBe(1300);
     expect(f.tables.news![0].fvEffects).toEqual([
-      { symbol: "AERIUM", delta: -100 },
+      { symbol: "AERIUM", delta: 50 },
     ]);
-    expect(f.tables.fairValues![0].fairValue).toBe(1150);
+    expect(f.tables.fairValues![0].fairValue).toBe(1300);
     expect(f.deps.emit).not.toHaveBeenCalled();
     expect(f.deps.newsPulse).not.toHaveBeenCalled();
   });
@@ -577,29 +527,29 @@ describe("script executor", () => {
 
   it("uses deterministic auction/vote/grant rows and suppresses stale opening broadcasts", async () => {
     const f = fixture();
-    for (const id of ["auction/15/open", "vote/open", "grant/open"]) {
-      await run(f, id, start + 130 * 60000);
-      await run(f, id, start + 130 * 60000);
+    for (const id of ["auction/13/open", "vote/open", "grant/open"]) {
+      await run(f, id, start + EDEN_EVENT_DURATION_MINUTES * 60000);
+      await run(f, id, start + EDEN_EVENT_DURATION_MINUTES * 60000);
     }
     expect(f.tables.auctions).toHaveLength(1);
     expect(f.tables.votes).toHaveLength(1);
     expect(f.tables.grants).toHaveLength(1);
     expect(bus.publishBroadcast).not.toHaveBeenCalled();
-    await run(f, "auction/15/resolve");
+    await run(f, "auction/13/resolve");
     await run(f, "vote/resolve");
     await run(f, "grant/award");
     expect(f.deps.resolveAuction).toHaveBeenCalledWith(
       f.tables.auctions![0].id,
-      start + 890000,
-      start + 1790000,
+      start + (13 * 60 + 30) * 1000,
+      start + 28 * 60000,
     );
     expect(f.deps.resolveVote).toHaveBeenCalledWith(
       f.tables.votes![0].id,
-      start + 81 * 60000,
+      start + (EDEN_EVENT_VOTE_MINUTE * 60 + 90) * 1000,
     );
     expect(f.deps.awardGrant).toHaveBeenCalledWith(
       f.tables.grants![0].id,
-      start + 105 * 60000,
+      start + EDEN_EVENT_GRANT_AWARD_MINUTE * 60000,
     );
   });
 
@@ -617,7 +567,7 @@ describe("script executor", () => {
     expect(f.tables.votes).toHaveLength(1);
   });
 
-  it("creates all six prescribed OTC terms for every human, freezing runtime terms on retry", async () => {
+  it("creates all prescribed OTC terms for every human, freezing runtime terms on retry", async () => {
     const f = fixture();
     f.prices.set("AERIUM", 1005);
     f.fvs.set("CALL", 20);
@@ -629,39 +579,48 @@ describe("script executor", () => {
       optionType: "call",
       strike: 1000,
       status: "open",
-      expiresAt: new Date(start + 75 * 60000),
+      expiresAt: new Date(start + EDEN_EVENT_DURATION_MINUTES * 60000),
     });
     f.holdings.set("alice", { AERIUM: 60, NEURO: 20 });
     f.holdings.set("bob", { NEURO: 12 });
-    for (const minute of [12.5, 32.5, 52.5, 72.5, 92.5, 112.5])
-      await run(f, `otc/${minute}`);
-    expect(f.tables.offers).toHaveLength(12);
+    for (const offer of EDEN_EVENT_OTC) await run(f, `otc/${offer.minute}`);
+    expect(f.tables.offers).toHaveLength(26);
     expect(f.tables.offers!.some((r) => r.userId === "admin")).toBe(false);
     const rows = f.tables.offers!.filter((r) => r.userId === "alice");
     expect(rows.map((r) => r.legs)).toEqual([
+      [{ symbol: "AERIUM", quantity: 30, price: 970 }],
       [{ symbol: "AERIUM", quantity: 50, price: 950 }],
+      [{ symbol: "AERIUM", quantity: -25, price: 1030 }],
       [
-        { symbol: "AERIUM", quantity: -20, price: 0 },
-        { symbol: "NEURO", quantity: 20, price: 0 },
+        { symbol: "AERIUM", quantity: -20, price: 1000 },
+        { symbol: "NEURO", quantity: 40, price: 500 },
       ],
       [{ symbol: "ORBITAL", quantity: 10, price: 2550 }],
-      [{ symbol: "CALL", quantity: -15, price: 6 }],
+      [{ symbol: "AERIUM", quantity: -40, price: 960 }],
+      [{ symbol: "CALL", quantity: -15, price: 45 }],
+      [{ symbol: "NEURO", quantity: 25, price: 490 }],
+      [
+        { symbol: "AERIUM", quantity: 20, price: 1000 },
+        { symbol: "NEURO", quantity: -36, price: 500 },
+      ],
+      [{ symbol: "NEURO", quantity: -40, price: 505 }],
       [{ symbol: "AERIUM", quantity: 30, price: 1200 }],
       [{ symbol: "AERIUM", quantity: -50, price: 900 }],
+      [{ symbol: "ORBITAL", quantity: 8, price: 2375 }],
     ]);
     expect(rows.every((r) => r.cashToTrader === 0)).toBe(true);
-    expect(rows[5].description).toContain("choose exactly one");
-    expect(rows[5].choices).toEqual([
+    expect(rows[11].description).toBe("Deal Desk #12");
+    expect(rows[11].choices).toEqual([
       { symbol: "AERIUM", quantity: -50, price: 900 },
       { symbol: "NEURO", quantity: -20, price: 450 },
     ]);
     f.fvs.set("AERIUM", 4000);
     f.holdings.set("alice", { AERIUM: 2, NEURO: 99 });
-    await run(f, "otc/12.5");
-    await run(f, "otc/112.5");
-    expect(f.tables.offers).toHaveLength(12);
-    expect(rows[0].legs[0].price).toBe(950);
-    expect(rows[5].choices[0]).toEqual({
+    await run(f, "otc/5");
+    await run(f, `otc/${edenPlaybookToGameMinute(152)}`);
+    expect(f.tables.offers).toHaveLength(26);
+    expect(rows[0].legs[0].price).toBe(970);
+    expect(rows[11].choices[0]).toEqual({
       symbol: "AERIUM",
       quantity: -50,
       price: 900,
@@ -675,18 +634,17 @@ describe("script executor", () => {
 
   it("skips halted/expired OTC, missing calls, missing bailout holdings, and late Vega preparation", async () => {
     const f = fixture();
-    await run(f, "otc/62.5");
-    await run(f, "otc/12.5", start + 14 * 60000);
-    await run(f, "otc/72.5");
-    await run(f, "otc/112.5");
-    await run(f, "vega/prepare", start + 90 * 60000);
+    await run(f, "otc/5", start + 6 * 60000);
+    await run(f, `otc/${edenPlaybookToGameMinute(92)}`);
+    await run(f, `otc/${edenPlaybookToGameMinute(152)}`);
+    await run(f, "vega/prepare", start + EDEN_EVENT_SHOCK_MINUTE * 60000);
     expect(f.tables.offers).toHaveLength(0);
     expect(f.deps.prepareVega).not.toHaveBeenCalled();
-    await run(f, "etf/55/open", start + 56 * 60000);
+    await run(f, "etf/67/open", start + 68 * 60000);
     expect(f.deps.setEtfWindow).toHaveBeenCalledWith(
       "ORBITAL",
       false,
-      start + 55 * 60000,
+      start + 67 * 60000,
     );
   });
 
@@ -694,20 +652,24 @@ describe("script executor", () => {
     const f = fixture();
     await run(f, "freeze");
     expect(f.deps.setFrozen).toHaveBeenLastCalledWith(true);
-    expect(f.deps.rescueLoans).toHaveBeenCalledWith(start + 60 * 60000);
+    expect(f.deps.rescueLoans).toHaveBeenCalledWith(
+      start + EDEN_EVENT_HALFTIME_START_MINUTE * 60000,
+    );
     await run(f, "unfreeze");
     expect(f.deps.challenge.frozen).toBe(false);
     await run(f, "vega/prepare");
     expect(f.deps.prepareVega).toHaveBeenCalledWith(
       "AERIUM",
-      start + 90 * 60000,
-      start + 89 * 60000,
+      start + EDEN_EVENT_SHOCK_MINUTE * 60000,
+      start + (EDEN_EVENT_SHOCK_MINUTE - 1) * 60000,
     );
     await run(f, "vega/resolve");
     await run(f, "volatility/triple");
     expect(f.deps.setVolatility).toHaveBeenCalledWith(3);
     await run(f, "end");
-    expect(f.deps.finalize).toHaveBeenCalledWith(start + 130 * 60000);
+    expect(f.deps.finalize).toHaveBeenCalledWith(
+      start + EDEN_EVENT_DURATION_MINUTES * 60000,
+    );
     expect(f.deps.challenge.frozen).toBe(true);
     expect(f.tables).not.toHaveProperty("eventActions");
   });

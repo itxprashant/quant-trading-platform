@@ -631,6 +631,24 @@ describe("physical settlement", () => {
     expect(e.portfolioOf("alice")).toEqual(before);
   });
 
+  it("redeems against settled inventory without treating working bids as a cap breach", () => {
+    const e = engine();
+    const basket = [
+      { symbol: "A", weight: 2 },
+      { symbol: "N", weight: 1 },
+    ];
+    e.restoreAccount("alice", {
+      cash: 10_000,
+      positions: [{ symbol: "ETF", quantity: 1, avgPrice: 250 }],
+    });
+    e.placeOrder(order({ quantity: 99, price: 99, admin: true }));
+    expect(e.exchangeBasket("alice", "ETF", basket, "redeem", 1)).toBe(true);
+    expect(e.positionOf("alice", "ETF")).toBe(0);
+    expect(e.positionOf("alice", "A")).toBe(2);
+    expect(e.positionOf("alice", "N")).toBe(1);
+    expect(e.openOrderQuantity("alice", "A", "buy")).toBe(99);
+  });
+
   it("checked OTC batch accounts for working orders and aggregates repeated symbols", () => {
     const e = engine();
     e.restoreAccount("alice", {

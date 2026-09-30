@@ -86,6 +86,8 @@ export interface RealtimeState {
   etfWindow: EtfWindowClock | null;
   /** null until the gateway snapshot or a freeze toggle arrives. */
   frozen: boolean | null;
+  /** Host hid this event from traders while the socket was open. */
+  eventHidden: boolean;
 }
 
 type Action =
@@ -125,6 +127,8 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, leaderboardHidden: msg.data.hidden };
     case "trader_visibility":
       return { ...state, traderVisibility: msg.data };
+    case "event_visibility":
+      return { ...state, eventHidden: msg.data.hidden };
     case "news": {
       // Premium holders receive a scripted headline early and again at release.
       const seen = state.news.some((n) => n.id === msg.data.id);
@@ -253,6 +257,7 @@ const initial: RealtimeState = {
   listedSymbols: [],
   etfWindow: null,
   frozen: null,
+  eventHidden: false,
 };
 
 export function useRealtime(
@@ -304,6 +309,12 @@ export function useRealtime(
         if (closed) return;
         try {
           const msg = JSON.parse(ev.data as string) as ServerMessage;
+          // Every panel's state predates the rewind; stagger reloads across clients.
+          if (msg.type === "session_restored") {
+            closed = true;
+            setTimeout(() => window.location.reload(), Math.random() * 2000);
+            return;
+          }
           if (msg.type === "option_cycle") revisions.current.options++;
           if (msg.type === "otc_offer" || msg.type === "otc_result")
             revisions.current.otc++;

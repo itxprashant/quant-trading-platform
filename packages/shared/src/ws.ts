@@ -105,6 +105,12 @@ export type ServerMessage =
       challengeId: string;
       data: TraderVisibility;
     }
+  | {
+      /** Host hid or revealed the whole event. Non-admins are dropped when hidden. */
+      type: "event_visibility";
+      challengeId: string;
+      data: { hidden: boolean };
+    }
   | { type: "otc_offer"; challengeId: string; data: OtcOffer }
   | {
       type: "otc_result";
@@ -133,6 +139,12 @@ export type ServerMessage =
         closesAt: string | null;
         nextOpensAt: string | null;
       };
+    }
+  | {
+      /** The host rewound the event to a checkpoint; clients reload their state. */
+      type: "session_restored";
+      challengeId: string;
+      data: { takenAt: string; ts: number };
     }
   | {
       /** A new tradable instrument was introduced into a live challenge. */

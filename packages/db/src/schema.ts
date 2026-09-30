@@ -108,6 +108,8 @@ export const challenges = pgTable(
     frozen: boolean("frozen").notNull().default(false),
     /** Rankings withheld from non-admins (REST and WebSocket) while true. */
     leaderboardHidden: boolean("leaderboard_hidden").notNull().default(false),
+    /** Whole event withheld from non-admins (list, terminal, and orders). */
+    hiddenFromTraders: boolean("hidden_from_traders").notNull().default(false),
     /** Host switches for trader-facing Eden panels. Null means all visible. */
     traderVisibility: jsonb("trader_visibility").$type<TraderVisibility>(),
     createdBy: uuid("created_by").references(() => users.id, {
@@ -535,6 +537,28 @@ export const eventActions = pgTable(
   (t) => [uniqueIndex("event_action_uq").on(t.challengeId, t.actionId)],
 );
 
+/**
+ * Rewind points. Unlike `engine_checkpoints` (one row, overwritten constantly),
+ * these accumulate so the host can resume from before a bad moment.
+ */
+export const challengeCheckpoints = pgTable(
+  "challenge_checkpoints",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    challengeId: uuid("challenge_id")
+      .notNull()
+      .references(() => challenges.id, { onDelete: "cascade" }),
+    takenAt: timestamp("taken_at", { withTimezone: true }).notNull(),
+    minuteCount: integer("minute_count").notNull().default(0),
+    /** `auto` (engine timer) or `before_resume` (safety copy taken by a resume). */
+    reason: text("reason").notNull().default("auto"),
+    payload: jsonb("payload").$type<unknown>().notNull(),
+  },
+  (t) => [
+    index("challenge_checkpoint_taken_idx").on(t.challengeId, t.takenAt),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Challenge = typeof challenges.$inferSelect;
@@ -556,6 +580,7 @@ export type AuctionBid = typeof auctionBids.$inferSelect;
 export type VoteProposal = typeof voteProposals.$inferSelect;
 export type VoteBallot = typeof voteBallots.$inferSelect;
 export type GrantMission = typeof grantMissions.$inferSelect;
+export type ChallengeCheckpoint = typeof challengeCheckpoints.$inferSelect;
 
 // silence unused import in some build modes
 export type _ConfigTypes = {

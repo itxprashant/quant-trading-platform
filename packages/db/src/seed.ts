@@ -2,11 +2,8 @@ import bcrypt from "bcryptjs";
 import { inArray } from "drizzle-orm";
 import {
   defaultScoringFor,
-  EDEN_EVENT_AERIUM,
-  EDEN_EVENT_BOTS,
-  EDEN_EVENT_DEFAULTS,
-  EDEN_EVENT_OPTIONS,
-  type ChallengeConfig,
+  newEdenDemoChallengeConfig,
+  newEdenExchangeChallengeConfig,
 } from "@qtp/shared";
 import { createDb } from "./client.js";
 import { challenges, participants, users } from "./schema.js";
@@ -56,107 +53,31 @@ async function main() {
       ),
     );
 
-  const directionalConfig: ChallengeConfig = {
-    symbols: [
-      { symbol: "X1", name: "Synthetic One", initialPrice: 100, volatility: 0, tickSize: 0.01 },
-      { symbol: "X2", name: "Synthetic Two", initialPrice: 100, volatility: 0, tickSize: 0.01 },
-      { symbol: "X3", name: "Synthetic Three", initialPrice: 100, volatility: 0, tickSize: 0.01 },
-    ],
-    startingCash: 0,
-    minPosition: -50,
-    maxPosition: 50,
-    maxOrderQuantity: 50,
-    maxOpenOrders: 25,
-    maxOrdersPerSecond: 5,
-    maxVolumePerMinute: 500,
-    allowMargin: true,
-    autonomousPrice: true,
-  };
-
-  const mmConfig: ChallengeConfig = {
-    symbols: [
-      { symbol: "MM1", name: "MarketMaker Alpha", initialPrice: 50, volatility: 0, tickSize: 0.01 },
-      { symbol: "MM2", name: "MarketMaker Beta", initialPrice: 75, volatility: 0, tickSize: 0.01 },
-    ],
-    startingCash: 0,
-    minPosition: -100,
-    maxPosition: 100,
-    maxOrderQuantity: 100,
-    maxOpenOrders: 25,
-    maxOrdersPerSecond: 5,
-    maxVolumePerMinute: 500,
-    allowMargin: true,
-    autonomousPrice: true,
-  };
-
-  const edenConfig: ChallengeConfig & {
-    eden: NonNullable<ChallengeConfig["eden"]> & { eventScript: boolean };
-  } = {
-    symbols: [EDEN_EVENT_AERIUM],
-    startingCash: 10000,
-    minPosition: -100,
-    maxPosition: 100,
-    maxOrderQuantity: 50,
-    maxOpenOrders: 25,
-    maxOrdersPerSecond: 8,
-    maxVolumePerMinute: 1000,
-    allowMargin: true,
-    autonomousPrice: true,
-    eden: {
-      eventScript: true,
-      rules: {
-        enabled: true,
-        costOfCarryPerUnitPerMinute: 1,
-        loanRepayMultiplier: 2,
-        marginCallThreshold: 0,
-        forcedLiquidation: true,
-        positionCap: 100,
-      },
-      bots: EDEN_EVENT_BOTS,
-      options: EDEN_EVENT_OPTIONS,
-      // The timeline introduces bonds at minutes 10 and 18.
-      bonds: [],
-      // The timeline lists the 2 AERIUM + 1 NEURO basket at minute 45.
-      etfs: [],
-      auctionDurationSec: EDEN_EVENT_DEFAULTS.auctionDurationSec,
-      auctionWinnerFraction: EDEN_EVENT_DEFAULTS.auctionWinnerFraction,
-      premiumLeadSec: EDEN_EVENT_DEFAULTS.premiumLeadSec,
-      premiumAccessMinutes: EDEN_EVENT_DEFAULTS.premiumAccessMinutes,
-      otcReplySec: EDEN_EVENT_DEFAULTS.otcReplySec,
-    },
-  };
+  const edenConfig = newEdenExchangeChallengeConfig("cues");
 
   const inserted = await db
     .insert(challenges)
     .values([
       {
-        slug: slugify("Tryst Directional Open"),
-        name: "Tryst Directional Open",
-        description: "Classic PnL race across three synthetic stocks.",
-        type: "directional",
-        status: "live",
-        config: directionalConfig,
-        scoring: defaultScoringFor("directional"),
-        createdBy: admin?.id ?? null,
-      },
-      {
-        slug: slugify("Liquidity Wars MM"),
-        name: "Liquidity Wars MM",
-        description: "Provide tight two-sided quotes. Scored on spread capture, uptime, and inventory control.",
-        type: "market_making",
-        status: "scheduled",
-        config: mmConfig,
-        scoring: defaultScoringFor("market_making"),
-        createdBy: admin?.id ?? null,
-      },
-      {
         slug: slugify("New Eden Exchange"),
         name: "New Eden Exchange",
         description:
-          "The New Eden Exchange: a scripted 130-minute tournament with a halftime break, timed asset introductions, news, options, bonds, ETFs, OTC deals, auctions, a policy vote, and a government grant.",
+          "The New Eden Exchange: a scripted 210-minute tournament (two 90-minute halves and a 30-minute break) with timed asset introductions, news, options, bonds, ETFs, OTC deals, auctions, a policy vote, and a government grant.",
         type: "new_eden",
         status: "scheduled",
         config: edenConfig,
+        scoring: defaultScoringFor("new_eden"),
+        createdBy: admin?.id ?? null,
+      },
+      {
+        slug: slugify("QuantStorm Practice"),
+        name: "QuantStorm Practice",
+        description:
+          "Practice cue sheet for testers. The admin fires each beat: headlines, bonds, Neuro, the Orbital ETF and its windows, options, one premium auction, and a Deal Desk offer. Hidden from traders until an admin turns visibility on.",
+        type: "new_eden",
+        status: "scheduled",
+        hiddenFromTraders: true,
+        config: newEdenDemoChallengeConfig(),
         scoring: defaultScoringFor("new_eden"),
         createdBy: admin?.id ?? null,
       },

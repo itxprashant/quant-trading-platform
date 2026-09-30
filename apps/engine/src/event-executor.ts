@@ -28,6 +28,7 @@ import {
   EDEN_EVENT_AERIUM,
   EDEN_EVENT_DURATION_MINUTES,
   EDEN_EVENT_ETF,
+  EDEN_EVENT_SHOCK_MINUTE,
   edenEventStateAt,
   type BondTemplate,
   type ChallengeConfig,
@@ -301,7 +302,7 @@ export class EventExecutor {
             symbol: action.symbol,
             prize: action.prize,
             description:
-              "Strategic Reserves Critical. In exactly 5 minutes, the highest Aerium inventory wins a $10,000 Government Grant. Tied leaders split the prize equally.",
+              "Strategic Reserves Critical. In exactly 10 minutes, the highest Aerium inventory wins a $10,000 Government Grant. Tied leaders split the prize equally.",
             status: "open",
             expiresAt,
             createdAt: new Date(ts),
@@ -432,7 +433,7 @@ export class EventExecutor {
       symbol: m.symbol,
       sentiment: m.direction,
     }));
-    const volEvent = action.news.minute === 35 || action.news.minute === 90;
+    const volEvent = action.news.minute === EDEN_EVENT_SHOCK_MINUTE;
     const effects: FvEffect[] = action.news.effects.map((e) => {
       const current = d.engine.getFairValue(e.symbol);
       if (current === undefined || !Number.isFinite(current))
@@ -697,7 +698,12 @@ export class EventExecutor {
               )[0];
             if (!contract) break;
             symbol = contract.symbol;
-            basis = Math.max(0, spot - contract.strike);
+            basis =
+              template.basis === "fixed"
+                ? 1
+                : Math.max(0, spot - contract.strike);
+          } else if (template.basis === "fixed") {
+            basis = 1;
           } else if (template.basis === "nav") {
             const basket =
               d.challenge.config.eden?.etfs?.find((e) => e.symbol === symbol)
@@ -713,9 +719,7 @@ export class EventExecutor {
           legs.push({ symbol, quantity, price: basis * template.multiplier });
         }
         if (legs.length !== action.offer.legs.length) continue;
-        const description = action.offer.playerChoosesQuantity
-          ? `${action.offer.title}: choose exactly one listed asset and 1 to its offered maximum units (at most 50). Quoted unit prices are fixed at 90% of FV when offered.`
-          : action.offer.title;
+        const description = action.offer.title;
         newRows.push({
           id,
           challengeId,

@@ -17,7 +17,7 @@ Guide for AI coding agents working in this repository. Read this before making c
 |------|-----------|---------|-------|
 | **Directional** | `directional` | Mark-to-market PnL | Classic PnL race; seeded live demo challenge |
 | **Market making** | `market_making` | Spread capture, quote uptime, inventory | MM metrics from engine |
-| **New Eden** | `new_eden` | Directional PnL + extended economy | Scripted 130-minute tournament; bonds, options, ETF, OTC, auctions, votes, grants, specialized bots |
+| **New Eden** | `new_eden` | Directional PnL + extended economy | Scripted 210-minute tournament (two 90-minute halves + 30-minute break); bonds, options, ETF, OTC, auctions, votes, grants, specialized bots |
 
 ---
 
@@ -176,7 +176,7 @@ draft → scheduled → live → paused → ended
 
 Each challenge has isolated: command stream, event stream, broadcast channel, order books, bots, and leaderboard.
 
-**New Eden freeze (halftime):** Status stays `live` but `challenges.frozen = true`. Matching and new risk stop; the timeline and cost of carry continue. Bond payouts and loan deductions pause (due loan dates are pushed forward so the break is not billed). This is **not** the same as `paused` (which tears down the runner). Halftime is scripted at game minutes 60–70.
+**New Eden freeze (halftime):** Status stays `live` but `challenges.frozen = true`. Matching and new risk stop; the timeline and cost of carry continue. Bond payouts and loan deductions pause (due loan dates are pushed forward so the break is not billed). This is **not** the same as `paused` (which tears down the runner). Halftime is scripted at game minutes 90–120.
 
 ### 7. Redis data model
 
@@ -223,6 +223,7 @@ Schema in `packages/db/src/schema.ts` (Drizzle ORM):
 | `grant_missions` | Government grant missions (inventory hoarding prizes) |
 | `engine_checkpoints` | Durable engine state snapshots for recovery |
 | `event_actions` | Idempotency receipts for scripted timeline actions `(challenge_id, action_id)` |
+| `challenge_checkpoints` | Rewind points: full challenge snapshot every 2 wall minutes (newest 150 kept), resumable from the admin page |
 
 Challenge `config` (JSONB) includes: symbols, starting cash, limits, bots, and for New Eden an `eden` block (rules, bonds, ETFs, options, auction settings, `eventScript`).  
 Challenge `scoring` (JSONB) selects directional PnL vs market-making weights.
@@ -286,7 +287,7 @@ Fastify app in `apps/api/src/app.ts`. Routes under `apps/api/src/routes/`:
 
 Rate limiting: Redis token bucket via `apps/api/src/ratelimit.ts` (orders bucket: 25/s per user; auth register: 10/min per IP).
 
-**Enrollment:** `POST /api/challenges/:id/join` (trader JWT). The web UI has no Join button — first order also enrolls. For New Eden scripted OTC (first slot at game minute 2.5), players must join **before** `startsAt`.
+**Enrollment:** `POST /api/challenges/:id/join` (trader JWT). The web UI has no Join button — first order also enrolls. For New Eden scripted OTC (first slot at game minute 5), players must join **before** `startsAt`.
 
 ### 12. Authentication & authorization
 
@@ -315,7 +316,7 @@ Next.js App Router (`apps/web/src/app/`):
 
 **Trader components** (`apps/web/src/components/trade/`): `MarketList`, `Leaderboard` (compact sidebar variant; hidden state), `TradeTicket`, `OrderBook`, `PriceChart`, `PortfolioPanel`, `OpenOrders`, `NewsFeed` (market news + announcements, filter tabs, `Early` tags), `EventTimers`, `BankPanel`, `OptionsPanel` (docked order ticket + option book), `MarketsPanel`, `DealDesk`, `AuctionPopup`, `VotePanel`, `GrantBanner`, `AlertStack` (alerts + news toasts).
 
-**Admin components** (`apps/web/src/components/admin/`): `ChallengeForm` (event flow + playbook preset), `PlaybookCues` (cue sheet, cue mode only), `EdenHostConsole`, `AccountEditor`; live ops also use `LiveControls`, `NewsControls`, `FreezeControls`, `AddInstrumentControls` on the `[id]` page. The `[id]` header has the leaderboard visibility toggle (`POST /api/admin/:id/leaderboard-visibility { hidden }`), available in every status.
+**Admin components** (`apps/web/src/components/admin/`): `ChallengeForm` (event flow + playbook preset), `PlaybookCues` (cue sheet, cue mode only), `EdenHostConsole`, `AccountEditor`; live ops also use `LiveControls`, `NewsControls`, `FreezeControls`, `AddInstrumentControls`, `CheckpointsPanel` on the `[id]` page. The `[id]` header has the leaderboard visibility toggle (`POST /api/admin/:id/leaderboard-visibility { hidden }`), available in every status.
 
 Event timers (`EventTimers`, selectors in `lib/eden.ts`) use the headline-free `eden-clock.ts` / `eden-presets.ts` exports of `@qtp/shared`. The package is `sideEffects: false`, so the web bundle tree-shakes the scripted headlines away — never reference `EDEN_EVENT_NEWS` / `EDEN_EVENT_ACTIONS` / `EDEN_EVENT_CUES` from web code, or the script leaks to the browser. The admin cue sheet gets headlines from `GET /api/admin/:id/cues` instead.
 
@@ -376,13 +377,15 @@ The flagship scripted tournament ("The New Eden Exchange"). Full narrative playb
 
 | Mode | Config | Behavior |
 |------|--------|----------|
-| **Scripted** | `config.eden.eventScript: true` | Engine runs versioned 130-game-minute timeline autonomously |
+| **Scripted** | `config.eden.eventScript: true` | Engine runs versioned 210-game-minute timeline autonomously |
 | **Playbook cues** | `playbookCues: true`, `eventScript: false` | Same playbook split into 46 cues (`EDEN_EVENT_CUES` in `eden-event.ts`); host fires each from the admin cue sheet, engine runs its steps at their relative offsets. Market stays frozen until the `open` cue |
 | **Manual** | both false | Host drives news, auctions, OTC, etc. via admin console |
 
 `edenEventFlow()` (`eden-presets.ts`) resolves the flow; scripted wins if both flags are set. Pick it with the **Event flow** selector (`ChallengeForm.tsx`) while the challenge is `draft` or `scheduled`. Seeded challenge **New Eden Exchange** has `eventScript: true` but no `startsAt` until configured.
 
-Cue mode: `POST /api/admin/:id/cues/run { cueId }` → `run_cue` engine command → `CueTimeline` (`apps/engine/src/cue-timeline.ts`) records a fire receipt `eden-v1/cue/<cueId>` and runs the cue's `eden-v1/*` actions through the same `EventExecutor`, rebased to the fire time. A cue runs once and is blocked until the cues it requires are done. `GET /api/admin/:id/cues` serves the sheet (with headlines) to admins only.
+Cue mode: `POST /api/admin/:id/cues/run { cueId }` → `run_cue` engine command → `CueTimeline` (`apps/engine/src/cue-timeline.ts`) records a fire receipt `eden-v1/cue/<cueId>` and runs the cue's `eden-v1/*` actions through the same `EventExecutor`, rebased to the fire time. A cue runs once and is blocked until the cues it requires are done. `GET /api/admin/:id/cues` serves the sheet (with headlines) to admins only. Cue sheets have no host-set end time: when `open` fires the engine sets `endsAt` to open + event duration (`edenEventDurationMinutes`: 210 game minutes for New Eden including halftime, 30 for the practice demo).
+
+Checkpoint rewind: the engine saves `challenge_checkpoints` on its mutation queue every `ENGINE_CHECKPOINT_MS`. `POST /api/admin/:id/checkpoints/:checkpointId/resume` pauses the challenge, waits for the engine lock, saves a `before_resume` copy, rewrites Postgres/Redis to the checkpoint with every wall-clock time shifted by `now - takenAt`, sets the command cursor to the stream tip, and goes live; the next runner starts from the restored `engine_checkpoints` row and tells clients to reload (`session_restored`). Post-checkpoint trades and score snapshots are deleted by design.
 
 ### Timeline summary (scripted)
 
@@ -391,25 +394,26 @@ Source of truth: `packages/shared/src/eden-event.ts` (`EDEN_EVENT_VERSION = "ede
 | Game minute | Event |
 |-------------|-------|
 | 0 | AERIUM opens (FV 1000) |
-| 10 / 18 | Standard bond / Aerium-pegged bond listed |
-| 30 | NEURO lists (FV 500) |
-| 45 | ORBITAL ETF lists (2 AERIUM + 1 NEURO); ETF windows every 10m |
-| 60–70 | Halftime freeze (status stays `live`) |
-| 70 | Options open (AERIUM calls/puts, 5-min cycles) |
-| 15, 30, 45, 75, 90, 105, 120 | Premium blind auctions |
-| 2.5 … 122.5 | OTC Deal Desk slots (13 total; 62.5 skipped in halftime) |
-| 80–81 | Solidarity Tax vote |
-| 89–90 | Vega bot prepare / Dis-correlation shock |
-| 100–105 | Government grant on AERIUM |
-| 120 | Bot volatility ×3 |
-| 130 | Final halt, rankings, `finalResults` persisted |
+| 16 / 24 | Standard bond / Aerium-pegged bond listed |
+| 36 | NEURO lists (FV 500) |
+| 60 | ORBITAL ETF lists (2 AERIUM + 1 NEURO) |
+| 67, 77, 87, then 123…203 | ETF create/redeem windows (30s) |
+| 90–120 | Halftime freeze (status stays `live`; playbook clock is paused) |
+| 121 | Options open (AERIUM and NEURO calls/puts, 5-min cycles) |
+| 13, 28, 43, 58, 70, 82, 129, 144, 159, 174, 189, 204 | Premium blind auctions (30s from the minute) |
+| 5, 20, 35, 50, 65, 78, 122, 137, 147, 157, 169, 182, 197 | OTC Deal Desk slots (13 total, 40s to reply) |
+| 154 | Solidarity Tax vote (90s, 15% of free cash) |
+| 166–167 | Vega bot prepare / Dis-correlation shock |
+| 177–187 | Government grant on AERIUM (ties split $10,000) |
+| 202 | Bot volatility ×3 |
+| 210 | Final halt, rankings, `finalResults` persisted |
 
-24 news beats (12 signal / 12 noise) every 5 minutes outside halftime.
+Playbook source: [`eden_v2.md`](eden_v2.md). Half 2 playbook TM 91–180 maps to game minutes 121–210. Headlines fire almost every minute outside reserved event slots.
 
 ### Economy rules (`config.eden.rules`)
 
 - **Cost of carry:** $1/unit/minute on absolute inventory
-- **Predatory loans:** 2× repay amortized over remaining game minutes; halftime rescue loans at minute 60
+- **Predatory loans:** 2× repay amortized over remaining game minutes; halftime rescue loans at minute 90
 - **Government bonds:** each series once; trader-chosen principal cannot exceed free cash; 2× that amount is paid uniformly until `endsAt`
 - **Margin calls:** at `marginCallThreshold` (default $0 free cash); forced liquidation when enabled
 - **Position cap:** 100 units per symbol (default)
@@ -423,7 +427,7 @@ Source of truth: `packages/shared/src/eden-event.ts` (`EDEN_EVENT_VERSION = "ede
 
 **Wall-time exceptions (do not scale with `ENGINE_MINUTE_MS`):** option exercise window = 15 wall seconds; OTC bargain settlement delay = 5 wall seconds.
 
-Accelerated local dry run: `ENGINE_MINUTE_MS=6000 pnpm dev` (~13 wall minutes for full script).
+Accelerated local dry run: `ENGINE_MINUTE_MS=6000 pnpm dev` (~21 wall minutes for full script).
 
 ### Documentation for running events
 
@@ -529,7 +533,7 @@ On some Linux kernels, `docker-compose.override.yml` uses host networking for Po
 ### New Eden local dry run
 
 ```bash
-ENGINE_MINUTE_MS=6000 pnpm dev   # ~13 min full script
+ENGINE_MINUTE_MS=6000 pnpm dev   # ~21 min full script
 ```
 
 1. Admin → `/admin` → **New Eden Exchange** → set **Starts at** → Save.
@@ -744,6 +748,7 @@ Backend entrypoints: `api` → `dist/server.js`; others → `dist/index.js` (set
 | `ENGINE_FLUSH_MS` | engine | Persistence flush interval |
 | `ENGINE_BOT_MS` | engine | Bot action interval |
 | `ENGINE_METRICS_MS` | engine | Trader-metrics publish interval |
+| `ENGINE_CHECKPOINT_MS` | engine | Rewind checkpoint cadence (default 120000 wall ms, not scaled) |
 
 See `.env.example` for local defaults. Add `ENGINE_MINUTE_MS` to `.env` explicitly when accelerating dry runs.
 
@@ -759,6 +764,6 @@ See `.env.example` for local defaults. Add `ENGINE_MINUTE_MS` to `.env` explicit
 
 ## Status
 
-Phases 0–5 complete: foundation, real-time trading MVP, challenges/multi-event, scoring/bots/analytics, rate limiting/observability/load test/accessibility, and **New Eden Exchange** (scripted 130-minute tournament with bonds, options, ETF, OTC, auctions, votes, grants, specialized bots, checkpoints, and recovery). Production demo runs on a single Azure VM; Terraform skeleton exists for future AWS ECS scale-out.
+Phases 0–5 complete: foundation, real-time trading MVP, challenges/multi-event, scoring/bots/analytics, rate limiting/observability/load test/accessibility, and **New Eden Exchange** (scripted 210-minute tournament with bonds, options, ETF, OTC, auctions, votes, grants, specialized bots, checkpoints, and recovery). Production demo runs on a single Azure VM; Terraform skeleton exists for future AWS ECS scale-out.
 
 See `AUDIT.md` for known security and competitive-integrity findings to address before high-stakes live events.

@@ -334,13 +334,13 @@ export function edenConfig(overrides = {}) {
   };
 }
 
-/** Mirrors the admin form's "New Eden playbook preset" (scripted 130-minute event). */
+/** Mirrors the admin form's "New Eden playbook preset" (scripted 210-minute event). */
 export function scriptedEdenConfig() {
   return {
     symbols: [
       { symbol: "AERIUM", name: "Aerium", initialPrice: 1000, volatility: 0, tickSize: 0.5 },
     ],
-    startingCash: 10_000,
+    startingCash: 100_000,
     minPosition: -100,
     maxPosition: 100,
     maxOrderQuantity: 50,
@@ -371,7 +371,7 @@ export function scriptedEdenConfig() {
       },
       options: {
         enabled: false,
-        underlyings: ["AERIUM"],
+        underlyings: ["AERIUM", "NEURO"],
         cycleMinutes: 5,
         exerciseWindowSec: 15,
         autoCycle: true,

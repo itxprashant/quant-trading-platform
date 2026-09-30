@@ -1,4 +1,4 @@
-import { http, nowId } from "../lib.mjs";
+import { http } from "../lib.mjs";
 
 export async function suiteAuth(t, ctx) {
   t.suite("Auth");
@@ -38,56 +38,16 @@ export async function suiteAuth(t, ctx) {
     );
   });
 
-  await t.test("register validation rejects bad email / short password / bad username", async () => {
+  await t.test("new registration is closed", async () => {
     const r = await http.request("POST", "/api/auth/register", {
-      body: { username: "ab", email: "nope", password: "x" },
-    });
-    t.eq(r.status, 400);
-    t.eq(r.body.error, "validation_error");
-    t.ok(Array.isArray(r.body.issues) && r.body.issues.length >= 2);
-  });
-
-  await t.test("register creates a trader and returns a token", async () => {
-    const username = nowId("e2eu");
-    const created = await http.post("/api/auth/register", {
-      username,
-      email: `${username}@e2e.quanta.test`,
-      password: "e2epassword1",
-      displayName: "E2E Trader",
-    });
-    t.eq(created.user.username, username);
-    t.eq(created.user.role, "trader");
-    t.ok(created.token);
-    ctx.fresh = created;
-    const me = await http.get("/api/auth/me", { token: created.token });
-    t.eq(me.username, username);
-  });
-
-  await t.test("duplicate username is 409 username_taken", async () => {
-    t.ok(ctx.fresh, "previous register must have succeeded");
-    await t.throws(
-      () =>
-        http.post("/api/auth/register", {
-          username: ctx.fresh.user.username,
-          email: "other@e2e.quanta.test",
-          password: "e2epassword1",
-        }),
-      { status: 409, error: "username_taken" },
-    );
-  });
-
-  await t.test("register cannot self-assign admin (role always trader)", async () => {
-    const username = nowId("e2ea");
-    const created = await http.request("POST", "/api/auth/register", {
       body: {
-        username,
-        email: `${username}@e2e.quanta.test`,
+        username: "closedreguser",
+        email: "closed@e2e.quanta.test",
         password: "e2epassword1",
         role: "admin",
       },
     });
-    t.eq(created.status, 201);
-    t.eq(created.body.user.role, "trader");
-    ctx.fresh2 = created.body;
+    t.eq(r.status, 403);
+    t.eq(r.body.error, "registration_closed");
   });
 }

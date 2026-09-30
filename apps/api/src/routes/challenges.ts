@@ -1,12 +1,6 @@
-import { and, desc, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import {
-  challengeNews,
-  challenges,
-  engineCheckpoints,
-  participants,
-  users,
-} from "@qtp/db";
+import { challenges, engineCheckpoints, participants } from "@qtp/db";
 import {
   defaultScoringFor,
   edenEventFlow,
@@ -27,7 +21,8 @@ import {
   setPrice,
 } from "@qtp/bus";
 import { z } from "zod";
-import { serializeChallenge, serializeNewsItem } from "../serialize.js";
+import { loadNewsFeed } from "../news-feed.js";
+import { serializeChallenge } from "../serialize.js";
 import { slugify, validate } from "../util.js";
 
 export async function challengeRoutes(app: FastifyInstance): Promise<void> {
@@ -41,7 +36,14 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
       })
       .from(challenges)
       .leftJoin(participants, eq(participants.challengeId, challenges.id))
-      .where(isAdmin ? undefined : ne(challenges.status, "draft"))
+      .where(
+        isAdmin
+          ? undefined
+          : and(
+              ne(challenges.status, "draft"),
+              eq(challenges.hiddenFromTraders, false),
+            ),
+      )
       .groupBy(challenges.id)
       .orderBy(desc(challenges.createdAt));
     return rows.map((r) => serializeChallenge(r.challenge, r.count));
@@ -102,32 +104,7 @@ export async function challengeRoutes(app: FastifyInstance): Promise<void> {
       // never pushed there). Warm it from Postgres on a cold cache.
       let items = await getNewsFeed(app.redis, id, 50);
       if (items.length === 0) {
-        const rows = await app.db
-          .select({
-            id: challengeNews.id,
-            challengeId: challengeNews.challengeId,
-            message: challengeNews.message,
-            level: challengeNews.level,
-            feed: challengeNews.feed,
-            createdAt: challengeNews.createdAt,
-            embargoUntil: challengeNews.embargoUntil,
-            authorDisplayName: users.displayName,
-          })
-          .from(challengeNews)
-          .leftJoin(users, eq(challengeNews.createdBy, users.id))
-          .where(
-            and(
-              eq(challengeNews.challengeId, id),
-              // Exclude scheduled items that have not published yet.
-              or(
-                isNull(challengeNews.publishAt),
-                isNotNull(challengeNews.publishedAt),
-              ),
-            ),
-          )
-          .orderBy(desc(challengeNews.createdAt))
-          .limit(50);
-        items = rows.map((r) => serializeNewsItem(r));
+        items = await loadNewsFeed(app.db, id);
         if (items.length > 0) {
           await setNewsFeed(app.redis, id, items);
         }

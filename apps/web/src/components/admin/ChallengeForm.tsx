@@ -18,14 +18,25 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Input";
 import { ApiError, patch, post } from "@/lib/api";
 import {
+  EDEN_DEMO_BOTS,
   EDEN_EVENT_AERIUM,
   EDEN_EVENT_BOTS,
   EDEN_EVENT_OPTIONS,
   EDEN_EVENT_DEFAULTS,
   EDEN_EVENT_DURATION_MINUTES,
+  EDEN_EXCHANGE_ORDER_QTY_PRESETS,
+  edenExchangeEconomyEdenConfig,
+  edenExchangeOptionsTemplate,
+  newEdenExchangeChallengeConfig,
+  edenEventDurationMinutes,
   edenEventFlow,
   type EdenEventFlow,
 } from "@qtp/shared";
+
+const durationLabel = (minutes: number) =>
+  minutes >= 60
+    ? `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`
+    : `${minutes} min`;
 
 const blankSymbol = (): SymbolConfig => ({
   symbol: "",
@@ -49,28 +60,18 @@ function defaultScoring(type: ChallengeType): ScoringConfig {
     : { kind: "directional", pnlWeight: 1 };
 }
 
-/** Sensible New Eden defaults matching comp_desc.txt rules. */
+/** Host-desk New Eden defaults (same economy as the main exchange preset). */
 function defaultEden(): EdenConfig & { eventScript?: boolean } {
+  const economy = edenExchangeEconomyEdenConfig();
   return {
     eventScript: false,
-    rules: {
-      enabled: true,
-      costOfCarryPerUnitPerMinute: 1,
-      loanRepayMultiplier: 2,
-      marginCallThreshold: 0,
-      forcedLiquidation: true,
-      positionCap: 100,
-    },
-    bots: structuredClone(EDEN_EVENT_BOTS),
+    demoScript: false,
+    ...economy,
     options: {
-      ...EDEN_EVENT_OPTIONS,
+      ...economy.options!,
+      autoCycle: false,
       underlyings: [],
     },
-    auctionDurationSec: EDEN_EVENT_DEFAULTS.auctionDurationSec,
-    auctionWinnerFraction: EDEN_EVENT_DEFAULTS.auctionWinnerFraction,
-    premiumLeadSec: EDEN_EVENT_DEFAULTS.premiumLeadSec,
-    premiumAccessMinutes: EDEN_EVENT_DEFAULTS.premiumAccessMinutes,
-    otcReplySec: EDEN_EVENT_DEFAULTS.otcReplySec,
   };
 }
 
@@ -124,6 +125,9 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
   const [applyingBots, setApplyingBots] = useState(false);
 
   const flow = edenEventFlow(eden);
+  /** Playbook events end their event duration after the market opens. */
+  const eventMinutes =
+    type === "new_eden" ? edenEventDurationMinutes(flow) : null;
 
   function changeFlow(next: EdenEventFlow) {
     if (next === "host") {
@@ -133,6 +137,10 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
         ...e,
         eventScript: false,
         playbookCues: false,
+        demoScript: false,
+        ...(flow === "demo"
+          ? { bots: structuredClone(EDEN_EVENT_BOTS) }
+          : {}),
         ...(e.options ? { options: { ...e.options, autoCycle: false } } : {}),
       }));
       return;
@@ -140,49 +148,92 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
     const flags = {
       eventScript: next === "scripted",
       playbookCues: next === "cues",
+      demoScript: next === "demo",
     };
-    // Cues and scripted share the preset; only the driver changes.
+    // Cues, scripted, and the practice timeline share the preset; only the driver changes.
     if (flow !== "host") {
-      setEden((e) => ({ ...e, ...flags }));
+      setEden((e) => ({
+        ...e,
+        ...flags,
+        bots:
+          next === "demo"
+            ? structuredClone(EDEN_DEMO_BOTS)
+            : flow === "demo"
+              ? structuredClone(EDEN_EVENT_BOTS)
+              : e.bots,
+      }));
       return;
     }
-    setSymbols([structuredClone(EDEN_EVENT_AERIUM)]);
+    if (next === "demo") {
+      setSymbols([structuredClone(EDEN_EVENT_AERIUM)]);
+      setCfg((c) => ({
+        ...c,
+        startingCash: 10_000,
+        minPosition: -100,
+        maxPosition: 100,
+        maxOrderQuantity: 50,
+        maxOpenOrders: 25,
+        maxOrdersPerSecond: 8,
+        maxVolumePerMinute: 1000,
+        allowMargin: true,
+        autonomousPrice: true,
+      }));
+      setQtyPresets([1, 5, 10, 25]);
+      setBots((b) => ({ ...b, marketMakers: 0, noiseTraders: 0 }));
+      setEden({
+        ...defaultEden(),
+        ...flags,
+        bots: structuredClone(EDEN_DEMO_BOTS),
+        options: { ...EDEN_EVENT_OPTIONS, enabled: false, cycleMinutes: 4 },
+        bonds: [],
+        etfs: [],
+      });
+      return;
+    }
+    const exchange = newEdenExchangeChallengeConfig(
+      next === "scripted" ? "scripted" : "cues",
+    );
+    setSymbols(structuredClone(exchange.symbols));
     setCfg((c) => ({
       ...c,
-      startingCash: 10000,
-      minPosition: -100,
-      maxPosition: 100,
-      maxOrderQuantity: 50,
-      maxOpenOrders: 25,
-      maxOrdersPerSecond: 8,
-      maxVolumePerMinute: 1000,
-      allowMargin: true,
-      autonomousPrice: true,
+      startingCash: exchange.startingCash,
+      minPosition: exchange.minPosition,
+      maxPosition: exchange.maxPosition,
+      maxOrderQuantity: exchange.maxOrderQuantity,
+      maxOpenOrders: exchange.maxOpenOrders,
+      maxOrdersPerSecond: exchange.maxOrdersPerSecond,
+      maxVolumePerMinute: exchange.maxVolumePerMinute,
+      allowMargin: exchange.allowMargin,
+      autonomousPrice: exchange.autonomousPrice,
     }));
+    setQtyPresets(
+      exchange.orderQtyPresets ?? [...EDEN_EXCHANGE_ORDER_QTY_PRESETS],
+    );
     setBots((b) => ({ ...b, marketMakers: 0, noiseTraders: 0 }));
-    const preset = defaultEden();
-    setEden({
-      ...preset,
-      ...flags,
-      bots: structuredClone(EDEN_EVENT_BOTS),
-      options: structuredClone(EDEN_EVENT_OPTIONS),
-      bonds: [],
-      etfs: [],
-    });
+    setEden(structuredClone(exchange.eden!));
   }
 
   function changeType(t: ChallengeType) {
     setType(t);
     setScoring(defaultScoring(t));
     if (t === "new_eden") {
-      // New Eden defaults: ±100 inventory cap, margin enabled (the bank).
+      const exchange = newEdenExchangeChallengeConfig("cues");
       setCfg((c) => ({
         ...c,
-        minPosition: -100,
-        maxPosition: 100,
-        allowMargin: true,
+        startingCash: exchange.startingCash,
+        minPosition: exchange.minPosition,
+        maxPosition: exchange.maxPosition,
+        maxOrderQuantity: exchange.maxOrderQuantity,
+        maxOpenOrders: exchange.maxOpenOrders,
+        maxOrdersPerSecond: exchange.maxOrdersPerSecond,
+        maxVolumePerMinute: exchange.maxVolumePerMinute,
+        allowMargin: exchange.allowMargin,
+        autonomousPrice: exchange.autonomousPrice,
       }));
-      setEden((e) => e ?? defaultEden());
+      setQtyPresets(
+        exchange.orderQtyPresets ?? [...EDEN_EXCHANGE_ORDER_QTY_PRESETS],
+      );
+      setEden(structuredClone(exchange.eden!));
     }
   }
 
@@ -219,9 +270,16 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                 new Date(startsAt).getTime() +
                   EDEN_EVENT_DURATION_MINUTES * 60000,
               ).toISOString()
-            : endsAt
-              ? new Date(endsAt).toISOString()
-              : null,
+            : eventMinutes != null
+              ? // The engine sets a cue sheet's end when the open cue fires.
+                existing &&
+                existing.status !== "draft" &&
+                existing.status !== "scheduled"
+                ? undefined
+                : null
+              : endsAt
+                ? new Date(endsAt).toISOString()
+                : null,
       };
       if (existing) await patch(`/api/challenges/${existing.id}`, payload);
       else await post("/api/challenges", payload);
@@ -333,7 +391,10 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                       Playbook cues: fire each beat from the cue sheet
                     </option>
                     <option value="scripted">
-                      Scripted: the 130-minute timeline runs itself
+                      Scripted: the 210-minute timeline runs itself
+                    </option>
+                    <option value="demo">
+                      Practice cues: fire news, bonds, ETF, and options by hand
                     </option>
                   </Select>
                 </Field>
@@ -342,21 +403,21 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                 Choosing cues or scripted from host applies the New Eden
                 playbook preset and replaces the starting instruments and
                 economy settings: AERIUM only at 1,000, 100-unit inventory cap,
-                50-unit order cap, $1/unit/minute carry and 2x loans. Starting
-                cash defaults to 10,000 (host-configurable).
+                50-unit order cap, $1/unit/minute carry and 1.5× loans. Starting
+                cash defaults to 100,000 (host-configurable).
               </p>
               <p className="max-w-prose text-xs text-muted">
-                The playbook: standard bond at 10m, pegged bond at 18m, NEURO at
-                30m, ORBITAL ETF (2 AERIUM + 1 NEURO) at 45m, halt 60-70m,
-                options at 70m, tax vote at 80m, dual-asset shock at 90m, grant
-                100-105m and close at 130m. ETF windows last 30s every 10m;
-                option cycles last 5m with 15s exercise.
+                The playbook: standard bond at 16m, pegged bond at 24m, NEURO at
+                36m, ORBITAL ETF (2 AERIUM + 1 NEURO) at 60m, halt 90–120m,
+                options at 121m, tax vote at 154m, dual-asset shock at 167m,
+                grant 177–187m and close at 210m. Session 2 game minutes are
+                playbook TM + 30 after the break. ETF windows last 30s; option
+                cycles last 5m with 15s exercise.
               </p>
               <p className="max-w-prose text-xs text-muted">
-                Ticker every 5m outside halftime. Auction rounds: 15, 30, 45,
-                75, 90, 105 and 120m; bidding opens 40s before the round and
-                closes 10s before its news. Top 30% pay their bid for 10s early
-                news over 15m. OTC replies allow 15s; accepted bargains bind
+                One activity each minute. Auction rounds bid for 30s from the
+                minute. Winners keep a 10s early headline lead until the next
+                auction. Deal Desk replies allow 40s; accepted bargains bind
                 through a 5s settlement delay.
               </p>
               <p className="max-w-prose text-xs text-muted">
@@ -370,7 +431,18 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
               {flow === "scripted" && (
                 <p className="text-xs text-warning">
                   Do not manually duplicate scripted operations. A scheduled
-                  start sets the end to start + 130 minutes on save.
+                  start sets the end to start + 210 minutes on save.
+                </p>
+              )}
+              {flow === "demo" && (
+                <p className="text-xs text-warning">
+                  Practice cue sheet for testers. Going live keeps the market
+                  frozen until you fire Open market. Then run each beat
+                  yourself: headlines, both bonds, Neuro, the Orbital ETF and
+                  its create/redeem windows, Aerium options, one premium
+                  auction, and one Deal Desk offer. Close event ends the
+                  session. Two quoting bots and one momentum bot keep the book
+                  active. Hide it from traders until you are ready to test.
                 </p>
               )}
               {flow === "cues" && (
@@ -401,16 +473,39 @@ export function ChallengeForm({ existing }: { existing?: Challenge }) {
                 onChange={(e) => setStartsAt(e.target.value)}
               />
             </Field>
-            <Field
-              label="Ends at"
-              hint="Optional. Auto-ends and drives the countdown."
-            >
-              <Input
-                type="datetime-local"
-                value={endsAt}
-                onChange={(e) => setEndsAt(e.target.value)}
-              />
-            </Field>
+            {eventMinutes != null ? (
+              <Field
+                label="Event length"
+                hint={
+                  (flow === "scripted"
+                    ? "Ends this long after Starts at"
+                    : "Ends this long after the open cue fires") +
+                  (flow === "demo" ? "." : ", including the 30 min halftime.")
+                }
+              >
+                <Input
+                  readOnly
+                  className="mono"
+                  value={
+                    durationLabel(eventMinutes) +
+                    (started && existing?.endsAt
+                      ? ` · ends ${new Date(existing.endsAt).toLocaleString()}`
+                      : "")
+                  }
+                />
+              </Field>
+            ) : (
+              <Field
+                label="Ends at"
+                hint="Optional. Auto-ends and drives the countdown."
+              >
+                <Input
+                  type="datetime-local"
+                  value={endsAt}
+                  onChange={(e) => setEndsAt(e.target.value)}
+                />
+              </Field>
+            )}
           </div>
         </div>
       </Panel>

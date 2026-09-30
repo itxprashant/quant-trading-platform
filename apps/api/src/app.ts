@@ -18,6 +18,7 @@ import { bondEtfRoutes } from "./routes/markets.js";
 import { otcRoutes } from "./routes/otc.js";
 import { auctionRoutes } from "./routes/auctions.js";
 import { voteRoutes } from "./routes/votes.js";
+import { registerTraderVisibilityGuard } from "./visibility.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -49,6 +50,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await registerAuth(app);
   registerMetrics(app);
+  registerTraderVisibilityGuard(app);
 
   app.get("/api/health", async () => ({ status: "ok", ts: Date.now() }));
 

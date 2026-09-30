@@ -197,6 +197,52 @@ export function bargainAskPct(
   return surplus / notional;
 }
 
+/**
+ * Fold a bargained cash-to-trader counter into unit prices so settlement and
+ * average cost use the agreed price. Residual cash is kept only when a price
+ * would otherwise go negative.
+ */
+export function applyOtcBargain<T extends { quantity: number; price: number }>(
+  legs: readonly T[],
+  counterCash: number,
+): { legs: T[]; cashToTrader: number } {
+  const copied = legs.map((leg) => ({ ...leg }));
+  if (!Number.isFinite(counterCash) || copied.length === 0) {
+    return {
+      legs: copied,
+      cashToTrader: Number.isFinite(counterCash) ? counterCash : 0,
+    };
+  }
+  const absQty = copied.reduce(
+    (sum, leg) =>
+      sum + (Number.isFinite(leg.quantity) ? Math.abs(leg.quantity) : 0),
+    0,
+  );
+  const priced =
+    absQty > 0
+      ? copied.map((leg) => {
+          if (!leg.quantity || !Number.isFinite(leg.price)) return leg;
+          const share = counterCash * (Math.abs(leg.quantity) / absQty);
+          const raw = leg.price - share / leg.quantity;
+          return {
+            ...leg,
+            price: Number.isFinite(raw) ? Math.max(0, raw) : leg.price,
+          };
+        })
+      : copied;
+  const oldNet =
+    counterCash - legs.reduce((sum, leg) => sum + leg.price * leg.quantity, 0);
+  const newNotional = priced.reduce(
+    (sum, leg) => sum + leg.price * leg.quantity,
+    0,
+  );
+  const residual = oldNet + newNotional;
+  return {
+    legs: priced,
+    cashToTrader: Math.abs(residual) < 1e-9 ? 0 : residual,
+  };
+}
+
 /** ETF net asset value from a weighted basket of underlying spot prices. */
 export function etfNav(
   basket: Array<{ symbol: string; weight: number }>,

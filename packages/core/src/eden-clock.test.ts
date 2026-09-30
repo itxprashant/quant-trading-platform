@@ -4,7 +4,7 @@ import {
   EDEN_EVENT_NEWS,
 } from "../../shared/src/eden-event.js";
 import {
-  EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC,
+  EDEN_EVENT_AUCTION_DURATION_SEC,
   EDEN_EVENT_AUCTION_MINUTES,
   EDEN_EVENT_AUCTION_OPEN_LEAD_SEC,
   EDEN_EVENT_DURATION_MINUTES,
@@ -15,12 +15,8 @@ import {
   EDEN_EVENT_HALFTIME_START_MINUTE,
   EDEN_EVENT_NEWS_MINUTES,
   EDEN_EVENT_OPTIONS_OPEN_MINUTE,
-  EDEN_EVENT_PREMIUM_ACCESS_MINUTES,
-  EDEN_EVENT_PREMIUM_LEAD_SEC,
 } from "../../shared/src/eden-clock.js";
 
-// The browser timers read eden-clock (no headlines); the engine runs the
-// action list. They must describe the same schedule.
 const of = <K extends (typeof EDEN_EVENT_ACTIONS)[number]["kind"]>(kind: K) =>
   EDEN_EVENT_ACTIONS.filter(
     (a): a is Extract<(typeof EDEN_EVENT_ACTIONS)[number], { kind: K }> =>
@@ -28,17 +24,22 @@ const of = <K extends (typeof EDEN_EVENT_ACTIONS)[number]["kind"]>(kind: K) =>
   );
 
 describe("eden-clock matches the scripted action list", () => {
-  it("auction rounds open, close and grant premium on the clock constants", () => {
+  it("auction rounds open, close and grant premium through the next auction", () => {
     const opens = of("auction_open");
     expect(opens.map((a) => a.roundMinute)).toEqual([
       ...EDEN_EVENT_AUCTION_MINUTES,
     ]);
-    for (const a of opens) {
+    for (const [index, a] of opens.entries()) {
       const minute = a.roundMinute * 60;
       expect(a.atSecond).toBe(minute - EDEN_EVENT_AUCTION_OPEN_LEAD_SEC);
-      expect(a.closesAtSecond).toBe(minute - EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC);
+      expect(a.closesAtSecond).toBe(
+        minute -
+          EDEN_EVENT_AUCTION_OPEN_LEAD_SEC +
+          EDEN_EVENT_AUCTION_DURATION_SEC,
+      );
+      const next = EDEN_EVENT_AUCTION_MINUTES[index + 1];
       expect(a.premiumUntilSecond).toBe(
-        a.closesAtSecond + EDEN_EVENT_PREMIUM_ACCESS_MINUTES * 60,
+        next != null ? next * 60 : EDEN_EVENT_DURATION_MINUTES * 60,
       );
     }
     expect(of("auction_resolve").map((a) => a.atSecond)).toEqual(
@@ -58,7 +59,7 @@ describe("eden-clock matches the scripted action list", () => {
       .map((a) => a.atSecond);
     expect(publicAt).toEqual(EDEN_EVENT_NEWS_MINUTES.map((m) => m * 60));
     expect(premiumAt).toEqual(
-      EDEN_EVENT_NEWS_MINUTES.map((m) => m * 60 - EDEN_EVENT_PREMIUM_LEAD_SEC),
+      EDEN_EVENT_NEWS_MINUTES.map((m) => m * 60 - 10),
     );
   });
 

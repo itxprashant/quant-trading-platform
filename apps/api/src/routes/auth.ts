@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { users } from "@qtp/db";
-import { zLoginInput, zRegisterInput, type UserPublic } from "@qtp/shared";
+import { zLoginInput, type UserPublic } from "@qtp/shared";
 import { validate } from "../util.js";
 import { rateLimit } from "../ratelimit.js";
 
@@ -25,36 +25,8 @@ function toPublic(u: typeof users.$inferSelect): UserPublic {
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
-  app.post("/register", { preHandler: [authLimit] }, async (req, reply) => {
-    const input = validate(zRegisterInput, req.body, reply);
-    if (!input) return;
-
-    const existing = await app.db.query.users.findFirst({
-      where: eq(users.username, input.username),
-    });
-    if (existing) {
-      return reply.code(409).send({ error: "username_taken" });
-    }
-
-    const passwordHash = await bcrypt.hash(input.password, 10);
-    const [created] = await app.db
-      .insert(users)
-      .values({
-        username: input.username,
-        displayName: input.displayName ?? input.username,
-        email: input.email,
-        passwordHash,
-        role: "trader",
-      })
-      .returning();
-
-    const user = toPublic(created!);
-    const token = app.jwt.sign({
-      sub: user.id,
-      username: user.username,
-      role: user.role,
-    });
-    return reply.code(201).send({ token, user });
+  app.post("/register", { preHandler: [authLimit] }, async (_req, reply) => {
+    return reply.code(403).send({ error: "registration_closed" });
   });
 
   app.post("/login", { preHandler: [authLimit] }, async (req, reply) => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatInstrumentLabel } from "@qtp/shared";
 import {
+  applyOtcBargain,
   bargainAskPct,
   bargainRejectProbability,
   etfNav,
@@ -143,6 +144,35 @@ describe("bargain ask pct", () => {
     expect(
       bargainAskPct([{ quantity: -3, price: 450, fairValue: 500 }], 0),
     ).toBe(0);
+  });
+});
+
+describe("apply OTC bargain to unit prices", () => {
+  it("folds a buy-side cash counter into the unit price and clears cashToTrader", () => {
+    expect(
+      applyOtcBargain([{ symbol: "NEURO", quantity: 3, price: 450 }], 150),
+    ).toEqual({
+      legs: [{ symbol: "NEURO", quantity: 3, price: 400 }],
+      cashToTrader: 0,
+    });
+  });
+
+  it("folds a sell-side cash counter into the unit price", () => {
+    expect(
+      applyOtcBargain([{ symbol: "NEURO", quantity: -3, price: 450 }], 300),
+    ).toEqual({
+      legs: [{ symbol: "NEURO", quantity: -3, price: 550 }],
+      cashToTrader: 0,
+    });
+  });
+
+  it("keeps a residual cash adjustment when a price would go negative", () => {
+    expect(
+      applyOtcBargain([{ symbol: "NEURO", quantity: 1, price: 10 }], 20),
+    ).toEqual({
+      legs: [{ symbol: "NEURO", quantity: 1, price: 0 }],
+      cashToTrader: 10,
+    });
   });
 });
 

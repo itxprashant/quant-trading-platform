@@ -35,6 +35,7 @@ function Row({
   metric,
   mm,
   final,
+  room,
 }: {
   e: LeaderboardEntry;
   highlight?: boolean;
@@ -42,12 +43,14 @@ function Row({
   metric: "score" | "pnl";
   mm: boolean;
   final: boolean;
+  room?: boolean;
 }) {
   const value = final ? (e.settlement ?? e.pnl) : metric === "pnl" ? e.pnl : e.score;
   return (
     <div
       className={cn(
-        "grid items-center gap-3 px-3 py-1.5 text-xs",
+        "grid items-center gap-3 px-3",
+        room ? "py-2 text-sm" : "py-1.5 text-xs",
         cols,
         highlight ? "bg-accent-subtle" : "hover:bg-surface-2",
       )}
@@ -83,6 +86,7 @@ export function Leaderboard({
   hidden = false,
   isAdmin = false,
   final = false,
+  room = false,
   className,
 }: {
   entries: LeaderboardEntry[];
@@ -96,6 +100,8 @@ export function Leaderboard({
   isAdmin?: boolean;
   /** Close-event settlement board (free cash + mid × position). */
   final?: boolean;
+  /** Projector board: every rank, sized to fill the column. */
+  room?: boolean;
   className?: string;
 }) {
   if (hidden && !isAdmin) {
@@ -108,8 +114,8 @@ export function Leaderboard({
       </Panel>
     );
   }
-  const showSpread = mm && !compact && !final;
-  const limit = final ? entries.length : compact ? 10 : 12;
+  const showSpread = mm && !compact && !final && !room;
+  const limit = final || room ? entries.length : compact ? 10 : 12;
   const me = entries.find((e) => e.userId === meId);
   const top = entries.slice(0, limit);
   const cols = compact
@@ -144,7 +150,7 @@ export function Leaderboard({
         aria-label="Trader rankings"
         className={cn(
           "flex-1 overflow-auto focus-visible:outline-offset-[-2px]",
-          !compact && "max-h-[320px]",
+          !compact && !room && "max-h-[320px]",
         )}
       >
         <div className={minWidth}>
@@ -175,6 +181,7 @@ export function Leaderboard({
                 metric={metric}
                 mm={showSpread}
                 final={final}
+                room={room}
               />
             ))
           )}
@@ -195,6 +202,7 @@ export function Leaderboard({
               metric={metric}
               mm={showSpread}
               final={final}
+              room={room}
             />
           </div>
         </div>

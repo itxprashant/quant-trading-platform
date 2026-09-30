@@ -47,6 +47,8 @@ export interface EventTimelineDependencies {
     action: EdenEventAction,
     context: EventActionContext,
   ) => Promise<void>;
+  /** Defaults to the scripted playbook. The practice event passes its own list. */
+  readonly actions?: readonly EdenEventAction[];
 }
 
 /**
@@ -56,6 +58,7 @@ export interface EventTimelineDependencies {
 export class EventTimeline {
   private readonly completed = new Set<string>();
   private readonly deps: EventTimelineDependencies;
+  private readonly actions: readonly EdenEventAction[];
   private readonly secondMs: number;
   private restored = false;
   private pending: Promise<void> = Promise.resolve();
@@ -68,6 +71,9 @@ export class EventTimeline {
     if (!Number.isFinite(minuteMs) || minuteMs <= 0)
       throw new RangeError("minuteMs must be positive and finite");
     this.deps = { ...deps };
+    this.actions = [...(deps.actions ?? EDEN_EVENT_ACTIONS)].sort(
+      (a, b) => a.atSecond - b.atSecond,
+    );
     this.secondMs = minuteMs / 60;
   }
 
@@ -83,7 +89,7 @@ export class EventTimeline {
         this.restored = true;
       }
       const executed: string[] = [];
-      for (const action of EDEN_EVENT_ACTIONS) {
+      for (const action of this.actions) {
         const scheduledAt = deps.startsAt + action.atSecond * this.secondMs;
         // Compare absolute deadlines: subtracting large epochs then dividing can
         // round an exact accelerated-clock boundary just below its due second.

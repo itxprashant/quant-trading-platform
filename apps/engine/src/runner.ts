@@ -8,6 +8,7 @@ import {
   getTraderMetricsMap,
   publishBroadcast,
   pushNews,
+  readCheckpointRedis,
   readCommands,
   setBookSnapshot,
   setFairValue,
@@ -29,6 +30,7 @@ import {
   orders,
   participants,
   positions,
+  saveChallengeCheckpoint,
   type Challenge,
   type Database,
 } from "@qtp/db";
@@ -38,10 +40,16 @@ import {
   zEdenConfig,
   zEdenOptionsConfig,
   zEdenRules,
+  edenEventEndsAt,
   edenEventFlow,
   edenEventStateAt,
+  EDEN_DEMO_ACTIONS,
+  EDEN_DEMO_CUES,
+  EDEN_DEMO_VERSION,
   EDEN_EVENT_ACTIONS,
+  EDEN_EVENT_DURATION_MINUTES,
   EDEN_EVENT_NEWS,
+  EDEN_EVENT_SHOCK_MINUTE,
   EDEN_EVENT_VERSION,
   type BroadcastEnvelope,
   type BondTemplate,
@@ -115,6 +123,8 @@ export class ChallengeRunner {
   private metricsTimer?: NodeJS.Timeout;
   private minuteTimer?: NodeJS.Timeout;
   private newsTimer?: NodeJS.Timeout;
+  private checkpointTimer?: NodeJS.Timeout;
+  private checkpointBusy = false;
   private eden?: EdenConfig;
   private readonly edenEnabled: boolean;
   private frozen: boolean;
@@ -268,9 +278,12 @@ export class ChallengeRunner {
         .set({ startsAt: this.challenge.startsAt })
         .where(eq(challenges.id, this.challenge.id));
     }
-    if (this.eden?.eventScript) {
+    const scriptedMinutes = this.eden?.eventScript
+      ? EDEN_EVENT_DURATION_MINUTES
+      : 0;
+    if (scriptedMinutes > 0) {
       this.challenge.endsAt = new Date(
-        this.challenge.startsAt.getTime() + 130 * env.minuteMs,
+        this.challenge.startsAt.getTime() + scriptedMinutes * env.minuteMs,
       );
       await this.db
         .update(challenges)
@@ -281,7 +294,7 @@ export class ChallengeRunner {
     // flips the challenge live before startsAt.
     if (
       this.edenEnabled &&
-      this.eden?.eventScript &&
+      scriptedMinutes > 0 &&
       !this.frozen &&
       Date.now() < this.challenge.startsAt.getTime()
     ) {
@@ -475,7 +488,71 @@ export class ChallengeRunner {
           this.newsBusy = false;
         });
     }, 250);
+    // On the mutation queue so the snapshot matches the book it describes.
+    this.checkpointTimer = setInterval(() => {
+      if (!this.running || this.checkpointBusy) return;
+      this.checkpointBusy = true;
+      void this.enqueue(() => this.saveCheckpoint())
+        .catch(() => {})
+        .finally(() => {
+          this.checkpointBusy = false;
+        });
+    }, env.checkpointMs);
     console.log(`[engine] running challenge ${this.challenge.slug}`);
+    const restoredFrom = await this.redis.getdel(
+      redisKeys.restored(this.challenge.id),
+    );
+    if (restoredFrom) {
+      await publishBroadcast(this.redis, this.challenge.id, [
+        {
+          target: "all",
+          msg: {
+            type: "session_restored",
+            challengeId: this.challenge.id,
+            data: { takenAt: restoredFrom, ts: Date.now() },
+          },
+        },
+      ]);
+    }
+  }
+
+  /** Rewind point for the host. A failed snapshot never stops trading. */
+  private async saveCheckpoint(): Promise<void> {
+    if (this.finalized) return;
+    try {
+      await this.persistence.flush({ minuteCount: this.minuteCount });
+      await saveChallengeCheckpoint(this.db, {
+        challengeId: this.challenge.id,
+        takenAt: new Date(),
+        reason: "auto",
+        minuteMs: env.minuteMs,
+        engine: {
+          state: this.engine.exportState(),
+          minuteCount: this.minuteCount,
+        },
+        redis: await readCheckpointRedis(this.redis, this.challenge.id),
+      });
+    } catch (error) {
+      console.error(`[${this.challenge.slug}] checkpoint failed`, error);
+    }
+  }
+
+  /** A cue sheet runs for its event duration from the moment `open` fires. */
+  private async pinCueSheetEnd(): Promise<void> {
+    const openedAt = this.cues?.firedAt("open");
+    if (openedAt === undefined || !this.challenge.startsAt) return;
+    const end = edenEventEndsAt(
+      edenEventFlow(this.eden),
+      this.challenge.startsAt.getTime(),
+      openedAt,
+      env.minuteMs,
+    );
+    if (end == null || this.challenge.endsAt?.getTime() === end) return;
+    this.challenge.endsAt = new Date(end);
+    await this.db
+      .update(challenges)
+      .set({ endsAt: this.challenge.endsAt })
+      .where(eq(challenges.id, this.challenge.id));
   }
 
   async stop(persist = true): Promise<void> {
@@ -489,6 +566,7 @@ export class ChallengeRunner {
     if (this.metricsTimer) clearInterval(this.metricsTimer);
     if (this.minuteTimer) clearInterval(this.minuteTimer);
     if (this.newsTimer) clearInterval(this.newsTimer);
+    if (this.checkpointTimer) clearInterval(this.checkpointTimer);
     // Disconnect the blocking reader before draining; no late batch can enqueue.
     this.cmdRedis.disconnect();
     await this.commandWork;
@@ -544,8 +622,6 @@ export class ChallengeRunner {
     const flow = edenEventFlow(this.eden);
     if (!this.edenEnabled || flow === "host" || !this.challenge.startsAt)
       return;
-    for (const news of EDEN_EVENT_NEWS)
-      this.scriptedNews.add(eventActionUuid(this.challenge.id, news.id));
     const executor = this.createExecutor();
     const loadReceipts = () =>
       this.db
@@ -562,10 +638,23 @@ export class ChallengeRunner {
         minuteCount: this.minuteCount,
       });
     };
-    if (flow === "cues") {
+    if (flow === "demo" || flow === "cues") {
+      const demo = flow === "demo";
+      if (demo) {
+        for (const action of EDEN_DEMO_ACTIONS) {
+          if (action.kind === "news")
+            this.scriptedNews.add(
+              eventActionUuid(this.challenge.id, action.news.id),
+            );
+        }
+      } else {
+        for (const news of EDEN_EVENT_NEWS)
+          this.scriptedNews.add(eventActionUuid(this.challenge.id, news.id));
+      }
       this.cues = new CueTimeline({
         challengeId: this.challenge.id,
         minuteMs: env.minuteMs,
+        ...(demo ? { cues: EDEN_DEMO_CUES } : {}),
         loadReceipts,
         recordFire: (actionId, at) =>
           this.persistence.flush({
@@ -584,18 +673,23 @@ export class ChallengeRunner {
         execute,
       });
       await this.cues.restore();
+      await this.pinCueSheetEnd();
       const cues = this.cues;
-      this.setVolatility(
-        EDEN_EVENT_ACTIONS.reduce(
-          (multiplier, a) =>
-            a.kind === "bot_volatility" && cues.completed(a.id)
-              ? a.multiplier
-              : multiplier,
-          1,
-        ),
-      );
-      // The market stays shut until the host fires the "Open market" cue.
-      if (!this.frozen && !cues.completed(`${EDEN_EVENT_VERSION}/open`)) {
+      if (!demo) {
+        this.setVolatility(
+          EDEN_EVENT_ACTIONS.reduce(
+            (multiplier, a) =>
+              a.kind === "bot_volatility" && cues.completed(a.id)
+                ? a.multiplier
+                : multiplier,
+            1,
+          ),
+        );
+      }
+      const openId = demo
+        ? `${EDEN_DEMO_VERSION}/open`
+        : `${EDEN_EVENT_VERSION}/open`;
+      if (!this.frozen && !cues.completed(openId)) {
         this.frozen = true;
         this.challenge.frozen = true;
         this.engine.setFrozen(true);
@@ -606,6 +700,8 @@ export class ChallengeRunner {
       }
       return;
     }
+    for (const news of EDEN_EVENT_NEWS)
+      this.scriptedNews.add(eventActionUuid(this.challenge.id, news.id));
     this.timeline = new EventTimeline({
       challengeId: this.challenge.id,
       enabled: true,
@@ -927,6 +1023,7 @@ export class ChallengeRunner {
           );
           return [];
         }
+        await this.pinCueSheetEnd();
         await this.cues?.tick(now);
         return [];
       }
@@ -1460,10 +1557,14 @@ export class ChallengeRunner {
     const commonShock = Math.random();
     // AERIUM and NEURO move together until the minute-90 dis-correlation shock.
     const correlated = this.cues
-      ? !this.cues.completed(`${EDEN_EVENT_VERSION}/news/90/public`)
+      ? !this.cues.completed(
+          `${EDEN_EVENT_VERSION}/news/${EDEN_EVENT_SHOCK_MINUTE}/public`,
+        )
       : this.eden?.eventScript &&
         this.challenge.startsAt &&
-        now < this.challenge.startsAt.getTime() + 90 * env.minuteMs;
+        now <
+          this.challenge.startsAt.getTime() +
+            EDEN_EVENT_SHOCK_MINUTE * env.minuteMs;
     for (const symbol of this.engine.autonomousSymbols()) {
       const driftKey = `qtp:drift_target:${this.challenge.id}:${symbol}`;
       const target = await this.redis.get(driftKey);

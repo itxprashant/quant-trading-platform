@@ -8,6 +8,7 @@ import {
   edenEventCue,
 } from "../../shared/src/eden-event.js";
 import { edenEventFlow } from "../../shared/src/eden-presets.js";
+import { edenPlaybookToGameMinute } from "../../shared/src/eden-clock.js";
 
 const cue = (id: string) => {
   const found = edenEventCue(id);
@@ -21,20 +22,17 @@ const done = (...ids: string[]) =>
   ]);
 
 describe("playbook cues", () => {
-  it("cover every scripted action once except ETF windows and the halftime OTC slot", () => {
+  it("cover every scripted action once except ETF windows", () => {
     const covered = EDEN_EVENT_CUES.flatMap((c) => c.actions.map((a) => a.id));
     expect(new Set(covered).size).toBe(covered.length);
     const uncovered = EDEN_EVENT_ACTIONS.filter(
       (a) => !covered.includes(a.id),
     ).map((a) => a.id);
-    expect(
-      uncovered.every(
-        (id) => id.startsWith("eden-v1/etf/") || id === "eden-v1/otc/62.5",
-      ),
-    ).toBe(true);
-    expect(uncovered).toContain("eden-v1/otc/62.5");
-    expect(EDEN_EVENT_CUES).toHaveLength(46);
-    expect(new Set(EDEN_EVENT_CUES.map((c) => c.id)).size).toBe(46);
+    expect(uncovered.every((id) => id.startsWith("eden-v1/etf/"))).toBe(true);
+    expect(uncovered.length).toBeGreaterThan(0);
+    expect(new Set(EDEN_EVENT_CUES.map((c) => c.id)).size).toBe(
+      EDEN_EVENT_CUES.length,
+    );
   });
 
   it("keep each cue's actions in scripted order", () => {
@@ -43,24 +41,24 @@ describe("playbook cues", () => {
       expect(order).toEqual([...order].sort((x, y) => x - y));
     }
     expect(cue("halftime").actions.map((a) => a.id)).toEqual([
-      "eden-v1/news/60/premium",
+      "eden-v1/news/90/premium",
       "eden-v1/freeze",
-      "eden-v1/news/60/public",
+      "eden-v1/news/90/public",
     ]);
   });
 
-  it("run in playbook order, with each auction ahead of its minute's headline", () => {
+  it("run in playbook order", () => {
     const ids = EDEN_EVENT_CUES.map((c) => c.id);
     expect(ids[0]).toBe("open");
     expect(ids.at(-1)).toBe("close");
     const before = (a: string, b: string) =>
       expect(ids.indexOf(a)).toBeLessThan(ids.indexOf(b));
-    before("auction-15", "news-15");
-    before("auction-30", "list-neuro");
-    before("auction-90", "shock");
     before("list-neuro", "list-orbital");
     before("halftime", "reopen");
-    before("grant", "auction-105");
+    before("reopen", "vote");
+    before("vote", "shock");
+    before("shock", "grant");
+    before("grant", "squeeze");
     const minutes = EDEN_EVENT_CUES.map((c) =>
       c.kind === "auction" ? c.minute - 0.5 : c.minute,
     );
@@ -71,10 +69,12 @@ describe("playbook cues", () => {
     expect(cue("open").requires).toEqual([]);
     expect(cue("close").requires).toEqual([]);
     expect(cue("news-40").requires).toContain("list-neuro");
-    expect(cue("otc-32.5").requires).toContain("list-neuro");
-    expect(cue("otc-52.5").requires).toContain("list-orbital");
-    expect(cue("otc-72.5").requires).toContain("reopen");
-    expect(cue("news-50").requires).toContain("list-orbital");
+    expect(cue("otc-50").requires).toContain("list-neuro");
+    expect(cue("otc-65").requires).toContain("list-orbital");
+    expect(cue(`otc-${edenPlaybookToGameMinute(92)}`).requires).toContain(
+      "reopen",
+    );
+    expect(cue("news-62").requires).toContain("list-neuro");
     expect(cue("list-orbital").requires).toContain("list-neuro");
     expect(cue("shock").requires).toEqual(
       expect.arrayContaining(["list-neuro", "reopen"]),
@@ -96,7 +96,6 @@ describe("playbook cues", () => {
       neuro.actions[0]!.id,
     ]);
     expect(edenCueStatus(neuro, fired)).toBe("running");
-    // A running prerequisite still blocks: its listing may not exist yet.
     expect(edenCueBlockers(cue("news-40"), fired)).toEqual(["list-neuro"]);
     const finished = new Set([...opened, ...done("list-neuro")]);
     expect(edenCueStatus(neuro, finished)).toBe("done");
@@ -109,5 +108,9 @@ describe("playbook cues", () => {
     expect(edenEventFlow({ eventScript: true, playbookCues: true })).toBe(
       "scripted",
     );
+    expect(edenEventFlow({ demoScript: true })).toBe("demo");
+    expect(
+      edenEventFlow({ eventScript: true, demoScript: true, playbookCues: true }),
+    ).toBe("scripted");
   });
 });

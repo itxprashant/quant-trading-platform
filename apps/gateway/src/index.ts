@@ -63,6 +63,18 @@ function dispatch(challengeId: string, envelopes: BroadcastEnvelope[]): void {
     if (env_.msg.type === "leaderboard_visibility") {
       setLeaderboardHidden(challengeId, env_.msg.data.hidden);
     }
+    if (env_.msg.type === "event_visibility") {
+      const hidden = env_.msg.data.hidden;
+      for (const conn of [...conns]) {
+        if (!hidden || conn.isAdmin) {
+          send(conn, env_.msg);
+          continue;
+        }
+        send(conn, env_.msg);
+        void unsubscribe(conn, challengeId);
+      }
+      continue;
+    }
     // Embargoed live news: premium subscribers see it immediately, everyone
     // else only after the embargo lifts (the premium-feed lead time).
     if (
@@ -264,12 +276,24 @@ async function sendSnapshot(conn: Conn, challengeId: string): Promise<void> {
 
 async function subscribe(conn: Conn, challengeId: string): Promise<void> {
   if (conn.subs.has(challengeId)) return;
-  conn.subs.add(challengeId);
-  // Load the flag before registering so no leaderboard broadcast slips through.
+  // Load flags before registering so a hidden event never receives a snapshot.
   const row = await db.query.challenges.findFirst({
     where: eq(challenges.id, challengeId),
-    columns: { leaderboardHidden: true, traderVisibility: true },
+    columns: {
+      leaderboardHidden: true,
+      traderVisibility: true,
+      hiddenFromTraders: true,
+    },
   });
+  if (row?.hiddenFromTraders && !conn.isAdmin) {
+    send(conn, {
+      type: "event_visibility",
+      challengeId,
+      data: { hidden: true },
+    });
+    return;
+  }
+  conn.subs.add(challengeId);
   const leaderboardHidden = row?.leaderboardHidden ?? false;
   const traderVisibility = traderVisibilityOf(row?.traderVisibility);
   setLeaderboardHidden(challengeId, leaderboardHidden);

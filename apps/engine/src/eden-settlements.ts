@@ -25,6 +25,9 @@ import {
 } from "@qtp/db";
 import {
   EDEN_EVENT_DEFAULTS,
+  EDEN_LOAN_LIMIT,
+  edenLoanOutstanding,
+  edenLoanTotalRepay,
   redisKeys,
   type BroadcastEnvelope,
   type EngineEvent,
@@ -89,7 +92,10 @@ export class EdenSettlements {
         ),
       );
     const end = live?.endsAt?.getTime();
-    const totalRepay = loan.principal * 2;
+    const totalRepay =
+      Number.isFinite(loan.totalRepay) && loan.totalRepay > 0
+        ? loan.totalRepay
+        : edenLoanTotalRepay(loan.principal, live?.config?.eden);
     if (
       !live ||
       live.type !== "new_eden" ||
@@ -978,8 +984,27 @@ export class EdenSettlements {
         .update(`${challenge.id}:rescue:${now}:${userId}`)
         .digest("hex");
       const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-      const principal = Math.ceil(-cash) + 1;
-      const totalRepay = principal * 2;
+      const open = await db
+        .select({
+          principal: loans.principal,
+          totalRepay: loans.totalRepay,
+          remaining: loans.remaining,
+        })
+        .from(loans)
+        .where(
+          and(
+            eq(loans.challengeId, challenge.id),
+            eq(loans.userId, userId),
+            eq(loans.status, "active"),
+          ),
+        );
+      const room = EDEN_LOAN_LIMIT - edenLoanOutstanding(open);
+      if (room < 1) continue;
+      const principal = Math.min(Math.ceil(-cash) + 1, Math.floor(room));
+      const totalRepay = edenLoanTotalRepay(
+        principal,
+        challenge.config?.eden,
+      );
       if (!Number.isFinite(totalRepay))
         throw new Error(`Invalid rescue amount for ${userId}`);
       const [existing] = await db.select().from(loans).where(eq(loans.id, id));

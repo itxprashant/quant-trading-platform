@@ -20,8 +20,10 @@ import { TopBar } from "@/components/TopBar";
 import { AdminGuard } from "@/components/AdminGuard";
 import { ChallengeForm } from "@/components/admin/ChallengeForm";
 import { AccountEditor } from "@/components/admin/AccountEditor";
+import { StatisticsPanel } from "@/components/admin/StatisticsPanel";
 import { EdenHostConsole } from "@/components/admin/EdenHostConsole";
 import { PlaybookCues } from "@/components/admin/PlaybookCues";
+import { CheckpointsPanel } from "@/components/admin/CheckpointsPanel";
 import { ShowFinalLeaderboard } from "@/components/trade/FinalStandings";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
@@ -232,6 +234,26 @@ function TraderVisibilityControls({
   const [error, setError] = useState<string | null>(null);
   const vis = traderVisibilityOf(challenge.traderVisibility);
 
+  async function setEventHidden(hidden: boolean) {
+    if (
+      hidden &&
+      !confirm(
+        "Hide this event from traders? They will lose access until you show it again.",
+      )
+    )
+      return;
+    setBusy("event");
+    setError(null);
+    try {
+      await post(`/api/admin/${challenge.id}/event-visibility`, { hidden });
+      await onChange();
+    } catch {
+      setError("Could not update event visibility.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function toggle(key: TraderPanel | "leaderboard", visible: boolean) {
     setBusy(key);
     setError(null);
@@ -261,6 +283,32 @@ function TraderVisibilityControls({
         aria-label="Trader visibility"
         className="flex flex-wrap justify-end gap-1.5"
       >
+        <button
+          type="button"
+          onClick={() => setEventHidden(!challenge.hiddenFromTraders)}
+          disabled={busy !== null}
+          aria-pressed={!!challenge.hiddenFromTraders}
+          aria-label={
+            challenge.hiddenFromTraders
+              ? "Show event to traders"
+              : "Hide event from traders"
+          }
+          className={cn(
+            "inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50",
+            challenge.hiddenFromTraders
+              ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15"
+              : "border-border bg-surface hover:bg-surface-2",
+          )}
+        >
+          {challenge.hiddenFromTraders ? (
+            <EyeOff className="size-3" aria-hidden />
+          ) : (
+            <Eye className="size-3" aria-hidden />
+          )}
+          {challenge.hiddenFromTraders
+            ? "Hidden from traders"
+            : "Visible to traders"}
+        </button>
         {TRADER_PANEL_TOGGLES.map(({ key, label }) => {
           const visible =
             key === "leaderboard"
@@ -1005,12 +1053,23 @@ function EditInner() {
                       Frozen
                     </span>
                   )}
+                  {challenge.hiddenFromTraders && (
+                    <span className="rounded-sm border border-warning/30 bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning">
+                      Hidden from traders
+                    </span>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-start gap-2">
                   <TraderVisibilityControls
                     challenge={challenge}
                     onChange={load}
                   />
+                  <Link
+                    href={`/admin/${challenge.id}/stats`}
+                    className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-medium hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Event stats <ArrowUpRight className="size-3.5" />
+                  </Link>
                   <Link
                     href={`/challenges/${challenge.id}`}
                     className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-medium hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -1036,6 +1095,12 @@ function EditInner() {
                   aria-label="Editor sections"
                   className="flex gap-4 sm:ml-auto"
                 >
+                  <a
+                    href="#statistics"
+                    className="rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Statistics
+                  </a>
                   {(challenge.status === "live" ||
                     challenge.status === "paused") && (
                     <a
@@ -1055,8 +1120,20 @@ function EditInner() {
               </div>
             </header>
             <div className="mb-8">
+              <StatisticsPanel challenge={challenge} />
+            </div>
+            <div className="mb-8">
               <AccountEditor challenge={challenge} onChange={load} />
             </div>
+            {(challenge.status === "draft" ||
+              challenge.status === "scheduled") &&
+              challenge.type === "new_eden" &&
+              (edenEventFlow(challenge.config.eden) === "cues" ||
+                edenEventFlow(challenge.config.eden) === "demo") && (
+                <div className="mb-8">
+                  <PlaybookCues challenge={challenge} onChange={load} />
+                </div>
+              )}
             {(challenge.status === "live" || challenge.status === "paused") && (
               <section
                 id="live-operations"
@@ -1075,13 +1152,15 @@ function EditInner() {
                   </p>
                 </div>
                 {challenge.type === "new_eden" &&
-                  edenEventFlow(challenge.config.eden) === "cues" && (
+                  (edenEventFlow(challenge.config.eden) === "cues" ||
+                    edenEventFlow(challenge.config.eden) === "demo") && (
                     <PlaybookCues challenge={challenge} onChange={load} />
                   )}
                 <div className="grid items-start gap-4 lg:grid-cols-2">
                   <LiveControls challenge={challenge} />
                   <FreezeControls challenge={challenge} onChange={load} />
                   <AddInstrumentControls challenge={challenge} />
+                  <CheckpointsPanel challenge={challenge} onChange={load} />
                 </div>
                 {challenge.type === "new_eden" && (
                   <EdenHostConsole challenge={challenge} />
@@ -1115,7 +1194,8 @@ function EditInner() {
                   />
                 </div>
                 {challenge.type === "new_eden" &&
-                  edenEventFlow(challenge.config.eden) === "cues" && (
+                  (edenEventFlow(challenge.config.eden) === "cues" ||
+                    edenEventFlow(challenge.config.eden) === "demo") && (
                     <PlaybookCues challenge={challenge} onChange={load} />
                   )}
               </section>

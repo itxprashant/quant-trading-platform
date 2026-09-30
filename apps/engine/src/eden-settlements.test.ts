@@ -308,17 +308,18 @@ function fixture(count = 3) {
     minuteMs: 60_000,
   } as unknown as EdenSettlementsDependencies;
   const settlements = new EdenSettlements(deps);
-  const addLoan = (id = "loan", principal = 120) => {
+  const addLoan = (id = "loan", principal = 120, multiplier = 2) => {
+    const totalRepay = principal * multiplier;
     tables.loans!.push({
       id,
       challengeId: CHALLENGE,
       userId: user(1),
       principal,
-      totalRepay: principal * 2,
-      remaining: principal * 2,
+      totalRepay,
+      remaining: totalRepay,
       status: "active",
       fundedAt: null,
-      installment: (principal * 2) / 3,
+      installment: totalRepay / 3,
       nextPaymentAt: new Date(NOW + 60_000),
       createdAt: new Date(NOW),
     });
@@ -410,6 +411,18 @@ afterEach(() => {
 });
 
 describe("EdenSettlements", () => {
+  it("funds the totalRepay stored on the loan row (host multiplier)", async () => {
+    const f = fixture();
+    f.deps.challenge.config = {
+      ...f.deps.challenge.config,
+      eden: { rules: { loanRepayMultiplier: 1.5 } },
+    };
+    f.addLoan("loan", 120, 1.5);
+    await f.settlements.issueLoan("loan", NOW);
+    expect(f.engine.loanDebtOf(user(1))).toBe(180);
+    expect(f.tables.loans![0].totalRepay).toBe(180);
+  });
+
   it("funds once, catches up fixed installments, and clears the residual at the deadline", async () => {
     const f = fixture();
     f.addLoan();
@@ -847,12 +860,12 @@ describe("EdenSettlements", () => {
     );
     expect(f.tables.eventActions).toEqual([]);
     await f.settlements.applyTax("vote", NOW);
-    expect(f.engine.cashOf(user(10))).toBe(900);
-    expect(f.engine.cashOf(user(1))).toBe(150);
-    expect(f.engine.cashOf(user(2))).toBe(250);
+    expect(f.engine.cashOf(user(10))).toBe(850);
+    expect(f.engine.cashOf(user(1))).toBe(175);
+    expect(f.engine.cashOf(user(2))).toBe(275);
     expect(f.tables.eventActions!.map((r) => r.actionId)).toEqual(["tax:vote"]);
     await new EdenSettlements(f.deps).applyTax("vote", NOW);
-    expect(f.engine.cashOf(user(10))).toBe(900);
+    expect(f.engine.cashOf(user(10))).toBe(850);
   });
 
   it("closes only due votes and excludes nonparticipant ballots", async () => {

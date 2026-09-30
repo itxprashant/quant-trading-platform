@@ -1,9 +1,12 @@
 import {
   EDEN_EVENT_CUES,
+  EDEN_EVENT_VERSION,
   edenCueBlockers,
   edenCueReceiptId,
+  edenCueVersion,
   edenEventCue,
   type EdenEventAction,
+  type EdenEventCue,
 } from "@qtp/shared";
 import { eventActionUuid, type EventActionContext } from "./event-timeline.js";
 
@@ -22,6 +25,8 @@ export interface CueTimelineDependencies {
     action: EdenEventAction,
     context: EventActionContext,
   ) => Promise<void>;
+  /** Defaults to the main playbook. The practice event passes its own sheet. */
+  readonly cues?: readonly EdenEventCue[];
 }
 
 type Step = {
@@ -41,6 +46,8 @@ export class CueTimeline {
   private readonly fired = new Map<string, number>();
   private readonly receipts = new Set<string>();
   private readonly deps: CueTimelineDependencies;
+  private readonly cues: readonly EdenEventCue[];
+  private readonly receiptPrefix: string;
   private readonly secondMs: number;
   private restored = false;
   private pending: Promise<void> = Promise.resolve();
@@ -51,6 +58,11 @@ export class CueTimeline {
     if (!Number.isFinite(minuteMs) || minuteMs <= 0)
       throw new RangeError("minuteMs must be positive and finite");
     this.deps = { ...deps };
+    this.cues = deps.cues ?? EDEN_EVENT_CUES;
+    const version = this.cues[0]
+      ? edenCueVersion(this.cues[0])
+      : EDEN_EVENT_VERSION;
+    this.receiptPrefix = edenCueReceiptId("", version);
     this.secondMs = minuteMs / 60;
   }
 
@@ -64,15 +76,21 @@ export class CueTimeline {
     return this.receipts.has(actionId);
   }
 
+  /** Epoch ms the cue fired, if it has. Valid after restore. */
+  firedAt(cueId: string): number | undefined {
+    return this.fired.get(cueId);
+  }
+
   /** False when the cue is unknown, already fired, or its prerequisites are not done. */
   fire(cueId: string, at: number): Promise<boolean> {
     if (!Number.isFinite(at)) throw new RangeError("at must be finite");
     return this.serial(async () => {
       await this.load();
-      const cue = edenEventCue(cueId);
+      const cue = edenEventCue(cueId, this.cues);
       if (!cue || this.fired.has(cue.id)) return false;
-      if (edenCueBlockers(cue, this.receipts).length > 0) return false;
-      const receipt = edenCueReceiptId(cue.id);
+      if (edenCueBlockers(cue, this.receipts, this.cues).length > 0)
+        return false;
+      const receipt = edenCueReceiptId(cue.id, edenCueVersion(cue));
       await this.deps.recordFire(receipt, at);
       this.fired.set(cue.id, at);
       this.receipts.add(receipt);
@@ -107,7 +125,7 @@ export class CueTimeline {
 
   private pendingSteps(): Step[] {
     const steps: Step[] = [];
-    for (const cue of EDEN_EVENT_CUES) {
+    for (const cue of this.cues) {
       const firedAt = this.fired.get(cue.id);
       if (firedAt === undefined) continue;
       const anchor = cue.actions[0]!.atSecond;
@@ -134,7 +152,7 @@ export class CueTimeline {
 
   private async load(): Promise<void> {
     if (this.restored) return;
-    const prefix = edenCueReceiptId("");
+    const prefix = this.receiptPrefix;
     for (const row of await this.deps.loadReceipts()) {
       this.receipts.add(row.actionId);
       if (row.actionId.startsWith(prefix))

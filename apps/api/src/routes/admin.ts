@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { ChallengeEngine, shiftEngineState, type EngineState } from "@qtp/core";
 import {
   auctions,
   bondHoldings,
+  challengeCheckpoints,
   challengeNews,
   challenges,
   engineCheckpoints,
@@ -17,23 +19,32 @@ import {
   otcOffers,
   participants,
   positions,
+  restoreChallengeCheckpoint,
+  resumedEndsAt,
+  resumedStartsAt,
+  saveChallengeCheckpoint,
   scoreSnapshots,
   trades,
   users,
   voteProposals,
   type Challenge,
+  type CheckpointPayload,
 } from "@qtp/db";
 import {
+  EDEN_DEMO_CUES,
   EDEN_EVENT_AERIUM,
   EDEN_EVENT_CUES,
   EDEN_EVENT_DURATION_MINUTES,
   EDEN_EVENT_OPTIONS,
+  restoreNewEdenChallengeConfig,
   edenCueBlockers,
   edenCueReceiptId,
   edenCueStatus,
+  edenCueVersion,
   edenEventCue,
   edenEventFlow,
   edenEventStateAt,
+  bondMarkValue,
   formatBackupCsv,
   parseBackupCsv,
   zAdminAccountEditInput,
@@ -50,6 +61,10 @@ import {
   zTraderPanel,
   traderVisibilityOf,
   type AdminAccountView,
+  type AdminCheckpoint,
+  type AdminCheckpointResume,
+  type AdminStatistics,
+  type AdminStatisticsColumn,
   type AdminCueSheet,
   type AdminCueView,
   type ChallengeConfig,
@@ -58,16 +73,24 @@ import {
 } from "@qtp/shared";
 import { redisKeys } from "@qtp/shared";
 import {
+  commandStreamTip,
   getFairValues,
   getListedSymbols,
+  markChallengeActive,
+  markChallengeInactive,
   publishBroadcast,
   publishCommand,
   pushNews,
+  readCheckpointRedis,
+  restoreCheckpointRedis,
   setMarketFrozen,
+  setNewsFeed,
   setPrice,
   setSymbolTradeable,
+  type CheckpointRedisState,
 } from "@qtp/bus";
 import { z } from "zod";
+import { loadNewsFeed } from "../news-feed.js";
 import { rateLimit } from "../ratelimit.js";
 import { serializeNewsItem } from "../serialize.js";
 import { validate } from "../util.js";
@@ -403,6 +426,31 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         target: "all",
         msg: {
           type: "leaderboard_visibility",
+          challengeId,
+          data: { hidden: body.hidden },
+        },
+      },
+    ]);
+    return { ok: true, hidden: body.hidden };
+  });
+
+  // Hide or reveal the whole event for non-admins. Admins keep full access.
+  app.post("/:challengeId/event-visibility", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    const body = validate(z.object({ hidden: z.boolean() }), req.body, reply);
+    if (!body) return;
+    if (!(await challengeExists(challengeId)))
+      return reply.code(404).send({ error: "not_found" });
+
+    await app.db
+      .update(challenges)
+      .set({ hiddenFromTraders: body.hidden })
+      .where(eq(challenges.id, challengeId));
+    await publishBroadcast(app.redis, challengeId, [
+      {
+        target: "all",
+        msg: {
+          type: "event_visibility",
           challengeId,
           data: { hidden: body.hidden },
         },
@@ -790,6 +838,223 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }
     accounts.sort((a, b) => a.username.localeCompare(b.username));
     return { accounts };
+  });
+
+  // Live cash, inventory, and bond balances for every enrolled trader.
+  app.get("/:challengeId/statistics", async (req, reply) => {
+    const params = validate(
+      z.object({ challengeId: z.string().uuid() }),
+      req.params,
+      reply,
+    );
+    if (!params) return;
+    const challenge = await app.db.query.challenges.findFirst({
+      where: eq(challenges.id, params.challengeId),
+    });
+    if (!challenge) return reply.code(404).send({ error: "not_found" });
+
+    const [seated, held, bonds] = await Promise.all([
+      app.db
+        .select({
+          userId: participants.userId,
+          username: users.username,
+          displayName: users.displayName,
+          cash: participants.cash,
+          startingCash: participants.startingCash,
+          loanDebt: participants.loanDebt,
+        })
+        .from(participants)
+        .innerJoin(users, eq(users.id, participants.userId))
+        .where(eq(participants.challengeId, params.challengeId)),
+      app.db
+        .select({
+          userId: positions.userId,
+          symbol: positions.symbol,
+          quantity: positions.quantity,
+        })
+        .from(positions)
+        .where(eq(positions.challengeId, params.challengeId)),
+      app.db
+        .select({
+          userId: bondHoldings.userId,
+          bondId: bondHoldings.bondId,
+          name: bondHoldings.name,
+          quantity: bondHoldings.quantity,
+          price: bondHoldings.price,
+          faceValue: bondHoldings.faceValue,
+          couponsPaid: bondHoldings.couponsPaid,
+        })
+        .from(bondHoldings)
+        .where(eq(bondHoldings.challengeId, params.challengeId)),
+    ]);
+
+    const symbolOrder: string[] = [];
+    const seenSymbols = new Set<string>();
+    const addSymbol = (symbol: string) => {
+      if (seenSymbols.has(symbol)) return;
+      seenSymbols.add(symbol);
+      symbolOrder.push(symbol);
+    };
+    for (const symbol of challenge.config.symbols) addSymbol(symbol.symbol);
+    for (const etf of challenge.config.eden?.etfs ?? []) {
+      addSymbol(etf.symbol);
+      for (const leg of etf.basket) addSymbol(leg.symbol);
+    }
+    const extras = held
+      .filter((row) => row.quantity !== 0)
+      .map((row) => row.symbol)
+      .sort();
+    for (const symbol of extras) addSymbol(symbol);
+
+    const quoted = new Map<string, number | null>();
+    if (symbolOrder.length > 0) {
+      const raw = await app.redis.mget(
+        ...symbolOrder.map((symbol) =>
+          redisKeys.price(params.challengeId, symbol),
+        ),
+      );
+      symbolOrder.forEach((symbol, index) => {
+        const value = raw[index];
+        const price = value == null ? null : Number(value);
+        quoted.set(
+          symbol,
+          price != null && Number.isFinite(price) ? price : null,
+        );
+      });
+    }
+    const markOf = (symbol: string, depth = 0): number => {
+      const live = quoted.get(symbol);
+      if (live != null) return live;
+      const listed = challenge.config.symbols.find((s) => s.symbol === symbol);
+      if (listed) return listed.initialPrice;
+      const etf =
+        depth < 2
+          ? challenge.config.eden?.etfs?.find((row) => row.symbol === symbol)
+          : undefined;
+      if (etf) {
+        return etf.basket.reduce(
+          (sum, leg) => sum + leg.weight * markOf(leg.symbol, depth + 1),
+          0,
+        );
+      }
+      return 0;
+    };
+
+    const columns: AdminStatisticsColumn[] = [];
+    const displaySymbols = new Set<string>();
+    for (const symbol of challenge.config.symbols) {
+      displaySymbols.add(symbol.symbol);
+      columns.push({
+        id: symbol.symbol,
+        label: symbol.symbol,
+        kind: "symbol",
+        mark: markOf(symbol.symbol),
+      });
+    }
+    for (const etf of challenge.config.eden?.etfs ?? []) {
+      if (displaySymbols.has(etf.symbol)) continue;
+      displaySymbols.add(etf.symbol);
+      columns.push({
+        id: etf.symbol,
+        label: etf.symbol,
+        kind: "symbol",
+        mark: markOf(etf.symbol),
+      });
+    }
+    for (const symbol of extras) {
+      if (displaySymbols.has(symbol)) continue;
+      displaySymbols.add(symbol);
+      columns.push({
+        id: symbol,
+        label: symbol,
+        kind: "symbol",
+        mark: markOf(symbol),
+      });
+    }
+    const bondColumns = new Map<string, string>();
+    for (const bond of challenge.config.eden?.bonds ?? []) {
+      bondColumns.set(bond.id, bond.name);
+    }
+    for (const holding of bonds) {
+      if (holding.quantity > 0 && !bondColumns.has(holding.bondId)) {
+        bondColumns.set(holding.bondId, holding.name);
+      }
+    }
+    for (const [bondId, name] of bondColumns) {
+      const sample = bonds.find((row) => row.bondId === bondId);
+      const template = challenge.config.eden?.bonds?.find(
+        (bond) => bond.id === bondId,
+      );
+      columns.push({
+        id: `bond:${bondId}`,
+        label: name,
+        kind: "bond",
+        mark: sample?.price ?? template?.price ?? 0,
+      });
+    }
+
+    const inventory = new Map<string, Map<string, number>>();
+    for (const row of held) {
+      if (row.quantity === 0) continue;
+      const book = inventory.get(row.userId) ?? new Map<string, number>();
+      book.set(row.symbol, (book.get(row.symbol) ?? 0) + row.quantity);
+      inventory.set(row.userId, book);
+    }
+    const bondBooks = new Map<
+      string,
+      Map<string, { quantity: number; value: number }>
+    >();
+    for (const holding of bonds) {
+      if (holding.quantity <= 0) continue;
+      const book =
+        bondBooks.get(holding.userId) ??
+        new Map<string, { quantity: number; value: number }>();
+      const current = book.get(holding.bondId) ?? { quantity: 0, value: 0 };
+      current.quantity += holding.quantity;
+      current.value += bondMarkValue(holding);
+      book.set(holding.bondId, current);
+      bondBooks.set(holding.userId, book);
+    }
+
+    const rows: AdminStatistics["rows"] = seated
+      .sort((a, b) => a.username.localeCompare(b.username))
+      .map((trader) => {
+        const holdings: Record<string, number> = {};
+        let assets = 0;
+        const book = inventory.get(trader.userId);
+        if (book) {
+          for (const [symbol, quantity] of book) {
+            holdings[symbol] = quantity;
+            assets += quantity * markOf(symbol);
+          }
+        }
+        const bondBook = bondBooks.get(trader.userId);
+        if (bondBook) {
+          for (const [bondId, holding] of bondBook) {
+            holdings[`bond:${bondId}`] = holding.quantity;
+            assets += holding.value;
+          }
+        }
+        const equity = trader.cash + assets - trader.loanDebt;
+        return {
+          userId: trader.userId,
+          username: trader.username,
+          displayName: trader.displayName,
+          cash: trader.cash,
+          loanDebt: trader.loanDebt,
+          holdings,
+          assets,
+          equity,
+          pnl: equity - trader.startingCash,
+        };
+      });
+
+    const sheet: AdminStatistics = {
+      asOf: new Date().toISOString(),
+      columns,
+      rows,
+    };
+    return sheet;
   });
 
   // Enroll registered traders in this challenge (starting cash, no join click).
@@ -1429,7 +1694,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const completedAt = new Map(
       rows.map((row) => [row.actionId, row.completedAt]),
     );
-    const cues: AdminCueView[] = EDEN_EVENT_CUES.map((cue) => {
+    const flow =
+      challenge.type === "new_eden"
+        ? edenEventFlow(challenge.config.eden)
+        : "host";
+    const catalog = flow === "demo" ? EDEN_DEMO_CUES : EDEN_EVENT_CUES;
+    const cues: AdminCueView[] = catalog.map((cue) => {
       const anchor = cue.actions[0]!.atSecond;
       const headlines = new Map<string, AdminCueView["headlines"][number]>();
       for (const action of cue.actions)
@@ -1444,10 +1714,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         label: cue.label,
         minute: cue.minute,
         kind: cue.kind,
-        status: edenCueStatus(cue, receipts),
-        blockedBy: edenCueBlockers(cue, receipts),
+        status: edenCueStatus(cue, receipts, catalog),
+        blockedBy: edenCueBlockers(cue, receipts, catalog),
         firedAt:
-          completedAt.get(edenCueReceiptId(cue.id))?.toISOString() ?? null,
+          completedAt
+            .get(edenCueReceiptId(cue.id, edenCueVersion(cue)))
+            ?.toISOString() ?? null,
         steps: cue.actions.map((action) => ({
           offsetSec: action.atSecond - anchor,
           label: cueStepLabel(action),
@@ -1457,10 +1729,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       };
     });
     const sheet: AdminCueSheet = {
-      flow:
-        challenge.type === "new_eden"
-          ? edenEventFlow(challenge.config.eden)
-          : "host",
+      flow,
       next:
         cues.find((c) => c.status === "ready" || c.status === "blocked")?.id ??
         null,
@@ -1484,25 +1753,24 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       where: eq(challenges.id, challengeId),
     });
     if (!challenge) return reply.code(404).send({ error: "not_found" });
-    if (
-      challenge.type !== "new_eden" ||
-      edenEventFlow(challenge.config.eden) !== "cues"
-    )
+    const flow = edenEventFlow(challenge.config.eden);
+    if (challenge.type !== "new_eden" || (flow !== "cues" && flow !== "demo"))
       return reply.code(409).send({ error: "not_cue_mode" });
     if (challenge.status !== "live" || challenge.finalizedAt)
       return reply.code(409).send({ error: "challenge_not_live" });
-    const cue = edenEventCue(body.cueId);
+    const catalog = flow === "demo" ? EDEN_DEMO_CUES : EDEN_EVENT_CUES;
+    const cue = edenEventCue(body.cueId, catalog);
     if (!cue) return reply.code(404).send({ error: "unknown_cue" });
     const receipts = new Set(
       (await cueReceipts(challenge.id)).map((row) => row.actionId),
     );
-    const status = edenCueStatus(cue, receipts);
+    const status = edenCueStatus(cue, receipts, catalog);
     if (status === "running" || status === "done")
       return reply.code(409).send({ error: "cue_already_run" });
     if (status === "blocked")
       return reply.code(409).send({
         error: "cue_blocked",
-        blockedBy: edenCueBlockers(cue, receipts),
+        blockedBy: edenCueBlockers(cue, receipts, catalog),
       });
     // The engine drops OTC offers while frozen, so the cue would do nothing.
     if (challenge.frozen && cue.actions.some((a) => a.kind === "otc_offer"))
@@ -1572,21 +1840,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         // An admin start that won the row lock before us must prevent reset.
         if (current.status === "live") return "pause_before_reset";
         await renew();
-        // Both playbook flows grow the config as they run; restore their preset.
-        const eden = current.config.eden;
-        const config: ChallengeConfig =
-          eden && edenEventFlow(eden) !== "host"
-            ? {
-                ...current.config,
-                symbols: [{ ...EDEN_EVENT_AERIUM }],
-                eden: {
-                  ...eden,
-                  bonds: [],
-                  etfs: [],
-                  options: { ...EDEN_EVENT_OPTIONS, enabled: false },
-                },
-              }
-            : current.config;
+        const config = restoreNewEdenChallengeConfig(
+          current.config,
+          current.slug,
+        );
         // Hold this row lock until cache cleanup completes, so lifecycle writers
         // cannot start a new run halfway through the reset.
         await tx
@@ -1657,6 +1914,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           "price",
           "phist",
           "phist-mid",
+          "phist-mid-5m",
           "book",
           "fv",
           "premium",
@@ -1716,4 +1974,199 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         .catch((error) => app.log.error(error, "Reset lease release failed"));
     }
   });
+
+  // Rewind points, newest first. Payloads stay in Postgres.
+  app.get("/:challengeId/checkpoints", async (req, reply) => {
+    const { challengeId } = req.params as { challengeId: string };
+    if (!(await challengeExists(challengeId)))
+      return reply.code(404).send({ error: "not_found" });
+    const rows = await app.db
+      .select({
+        id: challengeCheckpoints.id,
+        takenAt: challengeCheckpoints.takenAt,
+        minuteCount: challengeCheckpoints.minuteCount,
+        reason: challengeCheckpoints.reason,
+      })
+      .from(challengeCheckpoints)
+      .where(eq(challengeCheckpoints.challengeId, challengeId))
+      .orderBy(desc(challengeCheckpoints.takenAt));
+    return {
+      items: rows.map(
+        (r): AdminCheckpoint => ({
+          id: r.id,
+          takenAt: r.takenAt.toISOString(),
+          minuteCount: r.minuteCount,
+          reason: r.reason === "before_resume" ? "before_resume" : "auto",
+        }),
+      ),
+    };
+  });
+
+  // Resume from a checkpoint: its state comes back and every clock slides
+  // forward, so the event continues from that moment with the same time left.
+  app.post(
+    "/:challengeId/checkpoints/:checkpointId/resume",
+    async (req, reply) => {
+      const { challengeId, checkpointId } = req.params as {
+        challengeId: string;
+        checkpointId: string;
+      };
+      const uuid = z.string().uuid();
+      if (!uuid.safeParse(checkpointId).success)
+        return reply.code(404).send({ error: "checkpoint_not_found" });
+      if (!(await challengeExists(challengeId)))
+        return reply.code(404).send({ error: "not_found" });
+      const challenge = (await app.db.query.challenges.findFirst({
+        where: eq(challenges.id, challengeId),
+      }))!;
+      if (challenge.finalizedAt != null || challenge.status === "ended")
+        return reply.code(409).send({ error: "challenge_ended" });
+      if (challenge.status !== "live" && challenge.status !== "paused")
+        return reply.code(409).send({ error: "not_running" });
+      const checkpoint = await app.db.query.challengeCheckpoints.findFirst({
+        where: and(
+          eq(challengeCheckpoints.id, checkpointId),
+          eq(challengeCheckpoints.challengeId, challengeId),
+        ),
+      });
+      if (!checkpoint)
+        return reply.code(404).send({ error: "checkpoint_not_found" });
+      const payload = checkpoint.payload as CheckpointPayload;
+      const redisState = payload.redis as CheckpointRedisState;
+      let state: EngineState;
+      try {
+        if (payload.version !== 1 || !Array.isArray(redisState?.listedSymbols))
+          throw new Error("Unsupported checkpoint payload");
+        state = payload.engine.state as EngineState;
+        // The engine would crash-loop on a state it cannot load.
+        new ChallengeEngine(state.config).restoreState(state);
+      } catch (error) {
+        req.log.error(error, "Unusable checkpoint");
+        return reply.code(422).send({ error: "invalid_checkpoint" });
+      }
+
+      // Pausing makes the engine drain the runner and release the challenge.
+      if (challenge.status === "live") {
+        await app.db
+          .update(challenges)
+          .set({ status: "paused" })
+          .where(
+            and(eq(challenges.id, challengeId), eq(challenges.status, "live")),
+          );
+        await markChallengeInactive(app.redis, challengeId);
+      }
+      // `reset:` also blocks a manual go-live until the resume finishes.
+      const lockKey = redisKeys.engineLock(challengeId);
+      const owner = `reset:${randomUUID()}`;
+      const deadline = Date.now() + 30_000;
+      while ((await app.redis.set(lockKey, owner, "EX", 120, "NX")) !== "OK") {
+        if (Date.now() > deadline)
+          return reply.code(409).send({
+            error: "engine_still_running",
+            message:
+              "The engine has not released this challenge yet. It is paused; retry in a few seconds.",
+          });
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      const holdsLock = async () =>
+        (await app.redis.eval(
+          "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('EXPIRE', KEYS[1], 120) end return 0",
+          1,
+          lockKey,
+          owner,
+        )) === 1;
+      try {
+        const live = await app.db.query.engineCheckpoints.findFirst({
+          where: eq(engineCheckpoints.challengeId, challengeId),
+        });
+        if (live) {
+          await saveChallengeCheckpoint(app.db, {
+            challengeId,
+            takenAt: live.updatedAt,
+            reason: "before_resume",
+            minuteMs: payload.minuteMs,
+            engine: { state: live.state, minuteCount: live.minuteCount },
+            redis: await readCheckpointRedis(app.redis, challengeId),
+          });
+        }
+
+        const takenAt = checkpoint.takenAt.getTime();
+        const shiftMs = Math.max(0, Date.now() - takenAt);
+        const startsAt = resumedStartsAt(payload, shiftMs);
+        const endsAt = resumedEndsAt(payload, shiftMs);
+        const engineState = shiftEngineState(state, shiftMs);
+        const cursor = await commandStreamTip(app.redis, challengeId);
+        const error = await app.db.transaction(async (tx) => {
+          const [current] = await tx
+            .select()
+            .from(challenges)
+            .where(eq(challenges.id, challengeId))
+            .for("update");
+          if (!current || current.finalizedAt != null) return "challenge_ended";
+          if (current.status !== "paused") return "not_paused";
+          await restoreChallengeCheckpoint(tx, {
+            challengeId,
+            payload,
+            takenAt: checkpoint.takenAt,
+            shiftMs,
+            startsAt,
+            endsAt,
+            engineState,
+            cursor,
+            accounts: engineState.accounts.filter(
+              (a) => uuid.safeParse(a.userId).success,
+            ),
+            resting: new Map(
+              engineState.symbols
+                .flatMap((s) => s.orders)
+                .filter((o) => uuid.safeParse(o.id).success)
+                .map((o) => [o.id, o.remaining] as const),
+            ),
+            startingCash: engineState.config.startingCash,
+          });
+          if (!(await holdsLock())) throw new Error("resume_lock_lost");
+          return null;
+        });
+        if (error) return reply.code(409).send({ error });
+
+        await restoreCheckpointRedis(app.redis, challengeId, redisState, {
+          shiftMs,
+          takenAt,
+          cursor,
+          symbols: engineState.symbols.map((s) => s.config.symbol),
+        });
+        await setNewsFeed(
+          app.redis,
+          challengeId,
+          await loadNewsFeed(app.db, challengeId),
+        );
+        await app.redis.set(
+          redisKeys.restored(challengeId),
+          checkpoint.takenAt.toISOString(),
+          "EX",
+          600,
+        );
+        await app.db
+          .update(challenges)
+          .set({ status: "live" })
+          .where(eq(challenges.id, challengeId));
+        await markChallengeActive(app.redis, challengeId);
+        return {
+          ok: true,
+          takenAt: checkpoint.takenAt.toISOString(),
+          startsAt: startsAt?.toISOString() ?? null,
+          endsAt: endsAt?.toISOString() ?? null,
+        } satisfies AdminCheckpointResume;
+      } finally {
+        await app.redis
+          .eval(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
+            1,
+            lockKey,
+            owner,
+          )
+          .catch((error) => app.log.error(error, "Resume lease release failed"));
+      }
+    },
+  );
 }

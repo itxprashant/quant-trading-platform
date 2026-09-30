@@ -10,7 +10,11 @@ import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { ApiError, post } from "@/lib/api";
 import { money, signed } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { otcChoiceLeg, otcNetCash } from "@/lib/eden";
+import {
+  otcBargainCounterFromUnitPrice,
+  otcChoiceLeg,
+  otcNetCash,
+} from "@/lib/eden";
 
 function secsLeft(expiresAt: string): number {
   return Math.max(
@@ -241,7 +245,19 @@ export function DealDesk({
   }
 
   const left = secsLeft(offer.expiresAt);
-  const netCash = otcNetCash(offer.cashToTrader, previewLegs);
+  const singleLeg = previewLegs.length === 1 ? previewLegs[0] : undefined;
+  const bargainingUnitPrice =
+    bargaining === offer.id && singleLeg ? Number(counter) : Number.NaN;
+  const bargainPreviewLegs =
+    singleLeg && Number.isFinite(bargainingUnitPrice) && bargainingUnitPrice >= 0
+      ? [{ ...singleLeg, price: bargainingUnitPrice }]
+      : previewLegs;
+  const netCash =
+    bargaining === offer.id
+      ? singleLeg
+        ? otcNetCash(0, bargainPreviewLegs)
+        : otcNetCash(Number(counter), previewLegs)
+      : otcNetCash(offer.cashToTrader, previewLegs);
 
   return (
     <div
@@ -350,7 +366,7 @@ export function DealDesk({
           <div className="overflow-x-auto border-y border-border py-2.5">
             <table className="w-full min-w-[260px] text-xs">
               <tbody className="divide-y divide-border">
-                {previewLegs.map((leg, i) => (
+                {bargainPreviewLegs.map((leg, i) => (
                   <tr key={i}>
                     <td className="py-1">
                       <span
@@ -391,18 +407,29 @@ export function DealDesk({
           {bargaining === offer.id ? (
             <div className="space-y-2">
               <p className="text-xs text-muted">
-                Counter the cash adjustment, not the total. Leg prices stay
-                fixed. Underpaying a buy or overasking a sell is rejected
-                linearly: 0% at fair value, always at 25%.
+                {singleLeg
+                  ? "Counter a new unit price. Settlement and average cost use this price."
+                  : "Counter the cash adjustment, not the total. The desk folds it into unit prices."}{" "}
+                Underpaying a buy or overasking a sell is rejected linearly: 0%
+                at fair value, always at 25%.
               </p>
               <div className="flex gap-2">
                 <Input
                   type="number"
                   step="0.01"
+                  min={singleLeg ? 0 : undefined}
                   value={counter}
                   onChange={(e) => setCounter(e.target.value)}
-                  placeholder={String(offer.cashToTrader)}
-                  aria-label="Counteroffer cash amount"
+                  placeholder={
+                    singleLeg
+                      ? String(singleLeg.price)
+                      : String(offer.cashToTrader)
+                  }
+                  aria-label={
+                    singleLeg
+                      ? "Counteroffer unit price"
+                      : "Counteroffer cash amount"
+                  }
                   className="mono min-w-0"
                 />
                 <Button
@@ -411,9 +438,21 @@ export function DealDesk({
                   disabled={
                     !validChoice ||
                     !counter.trim() ||
-                    !Number.isFinite(Number(counter))
+                    !Number.isFinite(Number(counter)) ||
+                    (singleLeg != null && Number(counter) < 0)
                   }
-                  onClick={() => respond(offer, "bargain", Number(counter))}
+                  onClick={() =>
+                    respond(
+                      offer,
+                      "bargain",
+                      singleLeg
+                        ? otcBargainCounterFromUnitPrice(
+                            singleLeg,
+                            Number(counter),
+                          )
+                        : Number(counter),
+                    )
+                  }
                 >
                   Send
                 </Button>
@@ -428,9 +467,7 @@ export function DealDesk({
               <p className="text-xs text-muted">
                 Counter net cash:{" "}
                 <span className="mono">
-                  {validChoice
-                    ? signed(otcNetCash(Number(counter), previewLegs))
-                    : "Select valid units"}
+                  {validChoice ? signed(netCash) : "Select valid units"}
                 </span>
               </p>
             </div>
@@ -450,7 +487,11 @@ export function DealDesk({
                 loading={busy}
                 disabled={!validChoice}
                 onClick={() => {
-                  setCounter(String(offer.cashToTrader));
+                  setCounter(
+                    singleLeg
+                      ? String(singleLeg.price)
+                      : String(offer.cashToTrader),
+                  );
                   setBargaining(offer.id);
                 }}
               >
@@ -467,8 +508,9 @@ export function DealDesk({
           )}
           <p className="text-xs text-faint">
             Net cash = cash adjustment ({signed(offer.cashToTrader)}) minus
-            signed quantity x price for each leg. Accepted bargains bind through
-            the 5-second settlement delay, even if news changes.
+            signed quantity x price for each leg. A bargain writes the new unit
+            price into the legs. Accepted bargains bind through the 5-second
+            settlement delay, even if news changes.
           </p>
 
           {error && (

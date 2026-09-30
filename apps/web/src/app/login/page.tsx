@@ -13,12 +13,9 @@ import { ApiError } from "@/lib/api";
 function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
-  const { login, register } = useAuth();
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const { login } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [email, setEmail] = useState("");
-  const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -28,8 +25,7 @@ function LoginInner() {
     setError(null);
     setLoading(true);
     try {
-      if (mode === "login") await login(username, password);
-      else await register(username, password, email, displayName || undefined);
+      await login(username, password);
 
       // Normalize before navigating: browsers treat backslashes and // as URL hosts.
       let next = "/challenges";
@@ -54,11 +50,7 @@ function LoginInner() {
         setError(
           code === "invalid_credentials"
             ? "Incorrect username or password. Try again."
-            : code === "username_taken"
-              ? "That username is taken. Choose another."
-              : code === "validation_error"
-                ? "Check your username, email and password."
-                : "Something went wrong. Try again.",
+            : "Something went wrong. Try again.",
         );
       } else {
         setError(
@@ -163,12 +155,10 @@ function LoginInner() {
               id="login-heading"
               className="text-3xl font-semibold tracking-tight"
             >
-              {mode === "login" ? "Back to the desk." : "Take your place."}
+              Back to the desk.
             </h1>
             <p className="mt-3 text-sm leading-relaxed text-muted">
-              {mode === "login"
-                ? "Sign in to join a challenge or pick up your session."
-                : "Create an account to enter the arena and join a challenge."}
+              Sign in to join a challenge or pick up your session.
             </p>
 
             <form
@@ -178,9 +168,7 @@ function LoginInner() {
               className="mt-8"
             >
               <fieldset disabled={loading} className="min-w-0 space-y-5">
-                <legend className="sr-only">
-                  {mode === "login" ? "Sign in" : "Create account"} details
-                </legend>
+                <legend className="sr-only">Sign in details</legend>
                 <Field label="Username">
                   <Input
                     name="username"
@@ -191,76 +179,18 @@ function LoginInner() {
                     spellCheck={false}
                     required
                     className="h-11"
-                    minLength={mode === "register" ? 3 : undefined}
-                    maxLength={mode === "register" ? 32 : undefined}
-                    aria-describedby={
-                      mode === "register" ? "username-hint" : undefined
-                    }
                   />
-                  {mode === "register" && (
-                    <span
-                      id="username-hint"
-                      className="block text-xs leading-relaxed text-muted"
-                    >
-                      3 to 32 characters. Letters, numbers, dots, dashes or
-                      underscores.
-                    </span>
-                  )}
                 </Field>
-                {mode === "register" && (
-                  <>
-                    <Field label="Email">
-                      <Input
-                        name="email"
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        autoComplete="email"
-                        maxLength={254}
-                        required
-                        className="h-11"
-                      />
-                    </Field>
-                    <Field
-                      label="Display name"
-                      hint="Optional. Shown on the leaderboard."
-                    >
-                      <Input
-                        name="displayName"
-                        value={displayName}
-                        onChange={(e) => setDisplayName(e.target.value)}
-                        autoComplete="nickname"
-                        maxLength={64}
-                        className="h-11"
-                      />
-                    </Field>
-                  </>
-                )}
                 <Field label="Password">
                   <Input
                     name="password"
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    autoComplete={
-                      mode === "login" ? "current-password" : "new-password"
-                    }
+                    autoComplete="current-password"
                     required
                     className="h-11"
-                    minLength={mode === "register" ? 8 : undefined}
-                    maxLength={mode === "register" ? 128 : undefined}
-                    aria-describedby={
-                      mode === "register" ? "password-hint" : undefined
-                    }
                   />
-                  {mode === "register" && (
-                    <span
-                      id="password-hint"
-                      className="block text-xs text-muted"
-                    >
-                      Use 8 to 128 characters.
-                    </span>
-                  )}
                 </Field>
                 {error && (
                   <div
@@ -277,13 +207,7 @@ function LoginInner() {
                   className="w-full justify-between"
                   loading={loading}
                 >
-                  {loading
-                    ? mode === "login"
-                      ? "Signing in..."
-                      : "Creating account..."
-                    : mode === "login"
-                      ? "Sign in"
-                      : "Create account"}
+                  {loading ? "Signing in..." : "Sign in"}
                   {!loading && (
                     <ArrowRight aria-hidden="true" className="size-4" />
                   )}
@@ -294,24 +218,6 @@ function LoginInner() {
               </span>
             </form>
 
-            <div className="mt-7 flex flex-wrap items-center gap-x-2 border-t border-border pt-5 text-sm">
-              <span className="text-muted">
-                {mode === "login"
-                  ? "New to Quantstorm?"
-                  : "Already have an account?"}
-              </span>
-              <button
-                type="button"
-                disabled={loading}
-                className="min-h-11 font-medium text-accent hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
-                onClick={() => {
-                  setMode(mode === "login" ? "register" : "login");
-                  setError(null);
-                }}
-              >
-                {mode === "login" ? "Create an account" : "Sign in"}
-              </button>
-            </div>
           </div>
         </section>
       </main>

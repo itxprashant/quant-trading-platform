@@ -296,7 +296,12 @@ export class MarketsManager {
   /** Open a window now, then every 10 game minutes. Scripted events use the timeline. */
   private ensureWindowLoop(): void {
     if (this.windowLoopStarted || !this.running) return;
-    if (this.challenge.config.eden?.eventScript === true) return;
+    // Scripted and practice timelines open windows themselves.
+    if (
+      this.challenge.config.eden?.eventScript === true ||
+      this.challenge.config.eden?.demoScript === true
+    )
+      return;
     this.windowLoopStarted = true;
     const windowMs = edenEtfWindowMs(this.minuteMs);
     const intervalMs = edenEtfWindowIntervalMs(this.minuteMs);
@@ -564,7 +569,7 @@ export class MarketsManager {
     ) {
       await this.alert(
         userId,
-        "Basket exchange rejected: insufficient inventory, unavailable component, or position/working-order cap exceeded.",
+        this.etfRejectMessage(userId, etf, action, quantity),
         "warning",
         ts,
       );
@@ -667,6 +672,43 @@ export class MarketsManager {
   }
 
   /* ---- Internals ---- */
+  private etfRejectMessage(
+    userId: string,
+    etf: EtfConfig,
+    action: "create" | "redeem",
+    quantity: number,
+  ): string {
+    const cap = this.challenge.config.eden?.rules?.positionCap ?? 100;
+    if (action === "redeem") {
+      const held = this.engine.positionOf(userId, etf.symbol);
+      if (held < quantity) {
+        return `Not enough ${etf.symbol} to redeem (${held} held, ${quantity} requested).`;
+      }
+    }
+    for (const leg of etf.basket) {
+      if (this.engine.getPrice(leg.symbol) === undefined) {
+        return `${leg.symbol} is not available for ${action}.`;
+      }
+      const need = leg.weight * quantity;
+      if (action === "create" && this.engine.positionOf(userId, leg.symbol) < need) {
+        return `Not enough ${leg.symbol} to create (${this.engine.positionOf(userId, leg.symbol)} held, ${need} required).`;
+      }
+      const next =
+        this.engine.positionOf(userId, leg.symbol) +
+        (action === "redeem" ? need : -need);
+      if (Math.abs(next) > cap) {
+        return `${action === "redeem" ? "Redeeming" : "Creating"} ${quantity} ${etf.symbol} would put ${leg.symbol} at ${next} (cap ${cap}).`;
+      }
+    }
+    if (action === "create") {
+      const next = this.engine.positionOf(userId, etf.symbol) + quantity;
+      if (Math.abs(next) > cap) {
+        return `Creating ${quantity} ${etf.symbol} would put it at ${next} (cap ${cap}).`;
+      }
+    }
+    return `Basket exchange rejected: insufficient inventory, unavailable component, or position cap exceeded.`;
+  }
+
   private navOf(etf: EtfConfig, fair = false): number {
     const prices: Record<string, number> = {};
     for (const c of etf.basket) {

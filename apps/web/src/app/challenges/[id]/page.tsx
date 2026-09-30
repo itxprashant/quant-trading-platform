@@ -11,6 +11,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import {
+  EDEN_EVENT_OPTIONS_OPEN_MINUTE,
   edenEventFlow,
   isTraderPanelVisible,
   orderQtyPresetsOf,
@@ -20,6 +21,7 @@ import {
   type NewsItem,
   type OrderBookSnapshot,
   type Portfolio,
+  PRICE_HISTORY_ROOM_SEC,
 } from "@qtp/shared";
 import { ApiError, get } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -163,7 +165,11 @@ export default function TradePage() {
         .then((c) => {
           if (!cancelled) setChallenge(c);
         })
-        .catch(() => {});
+        .catch((err) => {
+          if (cancelled) return;
+          if (err instanceof ApiError && err.status === 404)
+            setLoadError("Challenge not found");
+        });
     const timer = setInterval(refresh, 5000);
     return () => {
       cancelled = true;
@@ -361,15 +367,18 @@ export default function TradePage() {
     setLimitPrice(price != null ? price.toFixed(2) : "");
   };
 
-  if (loadError) {
+  if (loadError || (!isAdmin && rt.eventHidden)) {
+    const hidden = !loadError && rt.eventHidden;
     return (
       <div className="min-h-dvh">
         <TopBar fluid />
         <main id="main" className="mx-auto max-w-md px-4 py-24 text-center">
-          <h1 className="text-xl font-semibold">{loadError}</h1>
+          <h1 className="text-xl font-semibold">
+            {hidden ? "This event is hidden" : loadError}
+          </h1>
           <p role="alert" className="mt-2 text-sm text-muted">
-            {loadError === "Challenge not found"
-              ? "This challenge may have been removed. Choose another market to continue."
+            {hidden || loadError === "Challenge not found"
+              ? "This event is not open to traders. Choose another market to continue."
               : "Check your connection and try again. Your orders have not been changed."}
           </p>
           <Button className="mt-6" onClick={() => setRetry((n) => n + 1)}>
@@ -479,7 +488,7 @@ export default function TradePage() {
         buysBlocked={buysBlocked}
         closedHint={
           scripted && activeKind === "spot"
-            ? "Options open after halftime, at game minute 70."
+            ? `Options open after halftime, at game minute ${EDEN_EVENT_OPTIONS_OPEN_MINUTE}.`
             : undefined
         }
         qtyPresets={qtyPresets}
@@ -802,6 +811,7 @@ export default function TradePage() {
                     symbol={activeSymbol}
                     lastPrice={livePrice}
                     book={book}
+                    bucketSec={isAdmin ? PRICE_HISTORY_ROOM_SEC : undefined}
                   />
                 ) : (
                   <p className="grid h-full place-items-center text-sm text-muted">

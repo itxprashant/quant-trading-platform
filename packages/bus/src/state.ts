@@ -1,6 +1,8 @@
 import {
   NEWS_FEED_MAX,
   PRICE_HISTORY_MAX,
+  PRICE_HISTORY_ROOM_MAX,
+  PRICE_HISTORY_ROOM_SEC,
   redisKeys,
   type LeaderboardEntry,
   type NewsItem,
@@ -62,10 +64,16 @@ export async function setMidPrice(
   ts: number,
 ): Promise<void> {
   const histKey = redisKeys.priceHistoryMid(challengeId, symbol);
+  const roomBucket =
+    Math.floor(ts / (PRICE_HISTORY_ROOM_SEC * 1000)) *
+    (PRICE_HISTORY_ROOM_SEC * 1000);
+  const roomKey = redisKeys.priceHistoryMidRoom(challengeId, symbol);
   await redis
     .pipeline()
     .zadd(histKey, ts, JSON.stringify({ price: mid, ts }))
     .zremrangebyrank(histKey, 0, -(PRICE_HISTORY_MAX + 1))
+    .zadd(roomKey, roomBucket, JSON.stringify({ price: mid, ts: roomBucket }))
+    .zremrangebyrank(roomKey, 0, -(PRICE_HISTORY_ROOM_MAX + 1))
     .exec();
 }
 
@@ -84,6 +92,47 @@ export async function getMidPriceHistory(
     const { price, ts } = JSON.parse(s) as { price: number; ts: number };
     return { symbol, price, change: 0, timestamp: ts };
   });
+}
+
+export async function getMidPriceHistoryRoom(
+  redis: Redis,
+  challengeId: string,
+  symbol: string,
+  limit = 200,
+): Promise<PricePoint[]> {
+  const raw = await redis.zrange(
+    redisKeys.priceHistoryMidRoom(challengeId, symbol),
+    -limit,
+    -1,
+  );
+  if (raw.length > 0) {
+    return raw.map((s) => {
+      const { price, ts } = JSON.parse(s) as { price: number; ts: number };
+      return { symbol, price, change: 0, timestamp: ts };
+    });
+  }
+  const fine = await getMidPriceHistory(
+    redis,
+    challengeId,
+    symbol,
+    PRICE_HISTORY_MAX,
+  );
+  if (fine.length === 0) return [];
+  const bucketMs = PRICE_HISTORY_ROOM_SEC * 1000;
+  const byBucket = new Map<number, number>();
+  for (const p of fine) {
+    const bucket = Math.floor(p.timestamp / bucketMs) * bucketMs;
+    byBucket.set(bucket, p.price);
+  }
+  return [...byBucket.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .slice(-limit)
+    .map(([timestamp, price]) => ({
+      symbol,
+      price,
+      change: 0,
+      timestamp,
+    }));
 }
 
 /* ---- New Eden: fair value ---- */

@@ -7,18 +7,25 @@ import type {
   SymbolConfig,
 } from "./schemas.js";
 import {
-  EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC,
+  EDEN_EVENT_AUCTION_DURATION_SEC,
   EDEN_EVENT_AUCTION_MINUTES,
   EDEN_EVENT_AUCTION_OPEN_LEAD_SEC,
+  EDEN_EVENT_BOND_MINUTES,
   EDEN_EVENT_DURATION_MINUTES,
   EDEN_EVENT_ETF_LIST_MINUTE,
   EDEN_EVENT_ETF_WINDOW_MINUTES,
   EDEN_EVENT_ETF_WINDOW_SEC,
+  EDEN_EVENT_GRANT_AWARD_MINUTE,
+  EDEN_EVENT_GRANT_OPEN_MINUTE,
   EDEN_EVENT_HALFTIME_END_MINUTE,
   EDEN_EVENT_HALFTIME_START_MINUTE,
+  EDEN_EVENT_NEURO_LIST_MINUTE,
   EDEN_EVENT_OPTIONS_OPEN_MINUTE,
-  EDEN_EVENT_PREMIUM_ACCESS_MINUTES,
   EDEN_EVENT_PREMIUM_LEAD_SEC,
+  EDEN_EVENT_SHOCK_MINUTE,
+  EDEN_EVENT_SQUEEZE_MINUTE,
+  EDEN_EVENT_VOTE_MINUTE,
+  edenPlaybookToGameMinute,
 } from "./eden-clock.js";
 import {
   EDEN_EVENT_BONDS,
@@ -72,89 +79,353 @@ const news = (
   original,
 });
 
-/** Exact 12/12 split: original labels plus the cap and two FV-establishing introductions as signals. */
+const tm = edenPlaybookToGameMinute;
+
+/** Playbook headlines; half-2 minutes are stored on the linear engine clock. */
 export const EDEN_EVENT_NEWS: readonly EdenNews[] = [
+  news(1, "noise", "Exchange publishes today’s trading calendar."),
   news(
-    5,
+    2,
     "signal",
-    "Refinery strike in Sector 4 cuts Aerium output by 12%.",
+    "Depot inventories are 3% below last week.",
+    [delta("AERIUM", 15)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(3, "noise", "A mining podcast releases a new episode."),
+  news(
+    4,
+    "signal",
+    "Two ore carriers arrive a day early.",
+    [delta("AERIUM", -10)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(
+    6,
+    "signal",
+    "Sector 4 reports an equipment failure at one refinery.",
+    [delta("AERIUM", 20)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(7, "noise", "The mining authority reappoints its safety commissioner."),
+  news(
+    8,
+    "signal",
+    "Refinery strike in Sector 4 cuts output by 12%.",
     [delta("AERIUM", 50)],
     [pulse("AERIUM", 1)],
   ),
+  news(9, "noise", "A trade magazine reprints last month’s output figures."),
   news(
     10,
-    "noise",
-    "Senate sub-committee discussing long-term viability of Aerium infrastructure.",
-    [],
+    "signal",
+    "The strike spreads to a second refinery.",
+    [delta("AERIUM", 40)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(11, "noise", "The union posts a photo of the picket line."),
+  news(
+    12,
+    "signal",
+    "Arbitration on the refinery strike is due at TM 22. The exchange puts the chance of an early settlement at 50%. Early settlement: Aerium −70. Strike continues: Aerium +30.",
+    [delta("AERIUM", -20)],
     [pulse("AERIUM", -1)],
   ),
+  news(14, "noise", "A business channel runs a segment on mining history."),
   news(
     15,
     "signal",
-    "New extraction tax levied on raw Aerium. Processing costs up 8%.",
-    [delta("AERIUM", -40)],
-    [pulse("AERIUM", -1)],
-  ),
-  news(
-    20,
-    "noise",
-    "Celebrity influencer 'Nova' endorses Aerium on holonet.",
-    [],
+    "Haulage fuel costs rise 4%.",
+    [delta("AERIUM", 15)],
     [pulse("AERIUM", 1)],
   ),
+  news(
+    17,
+    "signal",
+    "The government confirms a 5,000-ton stockpile release.",
+    [delta("AERIUM", -45)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(18, "noise", "A poll finds 62% of citizens have never heard of Aerium."),
+  news(
+    19,
+    "signal",
+    "Two smelters restart after maintenance.",
+    [delta("AERIUM", -25)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(21, "noise", "The Miners’ Guild announces its charity gala."),
+  news(
+    22,
+    "signal",
+    "Arbitration ruling: the strike is settled early.",
+    [delta("AERIUM", -50)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(23, "noise", "An opinion piece argues Aerium is overvalued."),
   news(
     25,
     "signal",
-    "Smugglers busted with 50,000 tons of counterfeit Aerium; market supply shocks.",
-    [delta("AERIUM", 80)],
+    "An ore processing tax proposal gains support in committee.",
+    [delta("AERIUM", -30)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(26, "noise", "A logistics firm rebrands its ore transport fleet."),
+  news(
+    27,
+    "signal",
+    "Exports to the outer colonies rise 6%.",
+    [delta("AERIUM", 35)],
     [pulse("AERIUM", 1)],
   ),
   news(
-    30,
+    29,
     "signal",
-    "Neuro-Chips approved for civilian use! Deep silicon linkage established with Aerium.",
-    [delta("AERIUM", 20)],
-    [pulse("AERIUM", 1), pulse("NEURO", 1)],
+    "A large buyer cancels a standing order.",
+    [delta("AERIUM", -40)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(30, "noise", "Influencer ‘Nova’ endorses Aerium on the holonet."),
+  news(
+    31,
+    "signal",
+    "Depot stocks fall to a three-month low.",
+    [delta("AERIUM", 45)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(32, "noise", "The exchange reports record message traffic."),
+  news(
+    33,
+    "signal",
+    "The extraction tax goes to a vote 8 minutes later. If it passes, processing costs rise 8%.",
+    [delta("AERIUM", -35)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(34, "noise", "A documentary crew films at the main depot."),
+  news(
+    36,
+    "signal",
+    "Neuro-Chips approved for civilian use.",
+    [],
+    [pulse("NEURO", 1)],
+    false,
   ),
   news(
-    35,
-    "noise",
-    "Unverified rumor: Neuro-Chip CEO seen leaving rival's headquarters.",
-    [],
+    37,
+    "signal",
+    "Chip makers confirm Aerium demand for substrates.",
+    [delta("AERIUM", 30)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(38, "noise", "A forum thread speculates about military uses for chips."),
+  news(
+    39,
+    "signal",
+    "The chip plant announces a second production line.",
+    [delta("NEURO", -40)],
     [pulse("NEURO", -1)],
   ),
   news(
     40,
     "signal",
-    "Cobalt shortage cripples Neuro-Chip assembly lines.",
-    [delta("NEURO", 100)],
+    "A chip buyer defers orders by a month.",
+    [delta("NEURO", -25)],
+    [pulse("NEURO", -1)],
+  ),
+  news(
+    41,
+    "signal",
+    "The extraction tax passes.",
+    [delta("AERIUM", -25)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(
+    42,
+    "signal",
+    "Smugglers are caught with 50,000 tons of counterfeit Aerium.",
+    [delta("AERIUM", 80)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(44, "noise", "A trade journal profiles the chip company’s CEO."),
+  news(
+    46,
+    "signal",
+    "Chip exports are approved to two more systems.",
+    [delta("NEURO", 60)],
+    [pulse("NEURO", 1)],
+  ),
+  news(47, "noise", "An analyst repeats existing guidance on chips."),
+  news(
+    48,
+    "noise",
+    "Unverified rumour: the chip CEO was seen at a rival’s offices.",
+  ),
+  news(
+    49,
+    "signal",
+    "Cobalt prices rise 5%.",
+    [delta("NEURO", 30)],
     [pulse("NEURO", 1)],
   ),
   news(
-    45,
+    51,
     "signal",
-    "Orbital-Station ETF opens for trading: 1 ETF = 2 AERIUM + 1 NEURO-CHIP.",
-    // The preceding list_etf action establishes basket FV; no additive shock.
-    [],
-    [pulse("ORBITAL", 1)],
-    false,
+    "A shipping lane closure delays chip deliveries.",
+    [delta("NEURO", 35)],
+    [pulse("NEURO", 1)],
+  ),
+  news(52, "noise", "The cobalt suppliers’ association announces a conference venue."),
+  news(
+    53,
+    "signal",
+    "Refiners raise their purchase prices for raw Aerium.",
+    [delta("AERIUM", 25)],
+    [pulse("AERIUM", 1)],
   ),
   news(
-    50,
-    "noise",
-    "Orbital-Station quarterly earnings report delayed by 1 hour due to clerical error.",
-    [],
-    [pulse("ORBITAL", -1)],
+    54,
+    "signal",
+    "A cobalt shortage halts chip assembly lines.",
+    [delta("NEURO", 100)],
+    [pulse("NEURO", 1)],
+  ),
+  news(55, "noise", "A podcast interviews a retired mining executive."),
+  news(
+    56,
+    "signal",
+    "A small fire is reported at a chip plant; no injuries.",
+    [delta("NEURO", 20)],
+    [pulse("NEURO", 1)],
   ),
   news(
-    55,
+    57,
     "signal",
-    "Central Economists warn that Aerium is dangerously over-leveraged. True intrinsic valuation models dictate price should not exceed 1150.",
-    [{ symbol: "AERIUM", operation: "cap", value: 1150 }],
+    "The chip regulator rules on exports at TM 64. The exchange puts the chance of a ban at 30%. Ban: Neuro-Chips −150. Cleared: +50.",
+    [delta("NEURO", -10)],
+    [pulse("NEURO", -1)],
+  ),
+  news(
+    59,
+    "signal",
+    "A haulage contract is renewed at a lower rate.",
+    [delta("AERIUM", -20)],
     [pulse("AERIUM", -1)],
   ),
   news(
     60,
+    "signal",
+    "Orbital-Station ETF opens for trading: 1 ETF = 2 AERIUM + 1 NEURO-CHIP.",
+    [],
+    [pulse("ORBITAL", 1)],
+    false,
+  ),
+  news(61, "noise", "The ETF sponsor publishes its methodology document."),
+  news(
+    62,
+    "signal",
+    "Chip inventories build up at distributors.",
+    [delta("NEURO", -30)],
+    [pulse("NEURO", -1)],
+  ),
+  news(
+    63,
+    "signal",
+    "A new Aerium field is confirmed in Sector 7.",
+    [delta("AERIUM", -55)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(
+    64,
+    "signal",
+    "The regulator clears chip exports.",
+    [delta("NEURO", 60)],
+    [pulse("NEURO", 1)],
+  ),
+  news(
+    66,
+    "signal",
+    "Orbital Station announces a fleet expansion.",
+    [delta("AERIUM", 30)],
+    [pulse("AERIUM", 1), pulse("ORBITAL", 1)],
+  ),
+  news(
+    68,
+    "signal",
+    "Chip yields improve at the main plant.",
+    [delta("NEURO", -35)],
+    [pulse("NEURO", -1)],
+  ),
+  news(69, "noise", "Two ETF trades are reported late to the tape."),
+  news(
+    71,
+    "signal",
+    "Construction demand for Aerium falls.",
+    [delta("AERIUM", -40)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(72, "noise", "The Orbital Station earnings call is delayed by an hour."),
+  news(
+    73,
+    "signal",
+    "A competitor launches a cheaper chip.",
+    [delta("NEURO", -60)],
+    [pulse("NEURO", -1)],
+  ),
+  news(74, "noise", "A brokerage reports a surge in new accounts."),
+  news(
+    75,
+    "signal",
+    "A fuel-cell retrofit programme lifts Aerium demand.",
+    [delta("AERIUM", 40)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(
+    76,
+    "signal",
+    "A fire destroys stored Aerium at a depot.",
+    [delta("AERIUM", 60)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(79, "noise", "Influencer ‘Nova’ now says chips are overhyped."),
+  news(
+    80,
+    "signal",
+    "The chip plant resumes full production.",
+    [delta("NEURO", -40)],
+    [pulse("NEURO", -1)],
+  ),
+  news(
+    81,
+    "signal",
+    "A power rationing decision affecting both industries is due at TM 88.",
+    [delta("AERIUM", 20), delta("NEURO", 30)],
+    [pulse("AERIUM", 1), pulse("NEURO", 1)],
+  ),
+  news(83, "noise", "A rumour circulates that a refiner has hired advisers."),
+  news(
+    84,
+    "signal",
+    "The logistics strike ends and supply normalises.",
+    [delta("AERIUM", -30)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(
+    85,
+    "signal",
+    "Medical device demand for chips rises.",
+    [delta("NEURO", 45)],
+    [pulse("NEURO", 1)],
+  ),
+  news(86, "noise", "The colonial archive digitises fifty years of mining records."),
+  news(
+    88,
+    "signal",
+    "Power rationing is imposed on heavy industry.",
+    [delta("AERIUM", 30), delta("NEURO", 40)],
+    [pulse("AERIUM", 1), pulse("NEURO", 1)],
+  ),
+  news(89, "noise", "The exchange reminds members that the half ends at TM 90."),
+  news(
+    90,
     "noise",
     "Trading halted for halftime. Positions do not reset.",
     [],
@@ -162,59 +433,188 @@ export const EDEN_EVENT_NEWS: readonly EdenNews[] = [
     false,
   ),
   news(
-    70,
+    tm(91),
     "signal",
-    "Aerium Calls/Puts open for trading. Session 2 begins with five-minute option cycles and a 15-second exercise window.",
-    // The preceding options_open action establishes option FVs, not a spot delta.
+    "Aerium and Neuro-Chip calls and puts open for trading. Five-minute cycles with a 15-second exercise window.",
     [],
     [],
     false,
   ),
+  news(tm(94), "noise", "A weekend supplement profiles the exchange’s history."),
   news(
-    75,
+    tm(95),
     "signal",
-    "Options expire. Massive Gamma squeeze observed on Neuro-Chips.",
-    [delta("NEURO", 50)],
-    [pulse("NEURO", 1)],
+    "Aerium stockpiles at the port fall again.",
+    [delta("AERIUM", 30)],
+    [pulse("AERIUM", 1)],
   ),
   news(
-    80,
-    "noise",
-    "The Solidarity Tax: a 10% wealth tax on the Top 10% for the Bottom 20% is put to a vote.",
-    [],
-    [],
-    false,
-  ),
-  news(
-    85,
-    "noise",
-    "Analyst downgrades Neuro-Chips to 'Hold', citing lack of innovation.",
-    [],
+    tm(97),
+    "signal",
+    "A chip distributor reports weak reorders.",
+    [delta("NEURO", -25)],
     [pulse("NEURO", -1)],
   ),
+  news(tm(98), "noise", "A broker note recaps the first half’s price action."),
   news(
-    90,
+    tm(100),
     "signal",
-    "Zero-point energy prototype successful! Aerium obsolete!",
+    "A process upgrade lifts refinery output.",
+    [delta("AERIUM", -40)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(
+    tm(102),
+    "signal",
+    "A rival chip plant halts production for maintenance.",
+    [delta("NEURO", 35)],
+    [pulse("NEURO", 1)],
+  ),
+  news(tm(104), "noise", "A retail brokerage reports record new accounts."),
+  news(
+    tm(105),
+    "signal",
+    "A salvage operator recovers 2,000 tons of Aerium.",
+    [delta("AERIUM", -35)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(
+    tm(108),
+    "signal",
+    "A defect is found in a chip batch; customers cancel orders.",
+    [delta("NEURO", -80)],
+    [pulse("NEURO", -1)],
+  ),
+  news(tm(109), "noise", "Orbital Station announces a routine crew rotation."),
+  news(
+    tm(110),
+    "signal",
+    "Two refineries cut output for scheduled maintenance.",
+    [delta("AERIUM", 25)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(
+    tm(112),
+    "signal",
+    "The grid expansion contract is decided at TM 120. The exchange puts Aerium’s chance of winning it at 45%. Won: +90. Lost: −40.",
+    [delta("AERIUM", 20)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(tm(115), "noise", "The regulator publishes its quarterly conduct bulletin."),
+  news(
+    tm(118),
+    "signal",
+    "Chip demand from the transport sector rises.",
+    [delta("NEURO", 40)],
+    [pulse("NEURO", 1)],
+  ),
+  news(tm(119), "noise", "A documentary about the colony’s founding airs tonight."),
+  news(
+    tm(120),
+    "signal",
+    "Aerium wins the grid expansion contract.",
+    [delta("AERIUM", 70)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(
+    tm(122),
+    "noise",
+    "An energy blog claims a breakthrough is imminent and gives no detail.",
+  ),
+  news(
+    tm(124),
+    "noise",
+    "The Solidarity Tax: a 15% tax on the free cash of the top 10% for the bottom 20% is put to a vote.",
+    [],
+    [],
+    false,
+  ),
+  news(
+    tm(125),
+    "signal",
+    "A mining cooperative announces new capacity.",
+    [delta("AERIUM", -30)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(
+    tm(128),
+    "signal",
+    "A chip plant wins a government supply contract.",
+    [delta("NEURO", 30)],
+    [pulse("NEURO", 1)],
+  ),
+  news(tm(130), "noise", "An analyst note repeats existing guidance on chips."),
+  news(
+    tm(132),
+    "signal",
+    "A solar storm warning is in effect. The observatory rules at TM 140. 50% chance of a direct hit. Hit: Neuro-Chips −60. Miss: +20.",
+    [delta("NEURO", -20)],
+    [pulse("NEURO", -1)],
+  ),
+  news(tm(134), "noise", "Floor chatter: something is happening at the zero-point lab."),
+  news(
+    tm(135),
+    "signal",
+    "A depot outage takes Aerium off the market.",
+    [delta("AERIUM", 45)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(
+    tm(137),
+    "signal",
+    "Zero-point energy prototype succeeds. Aerium is obsolete.",
     [delta("AERIUM", -300), delta("NEURO", 200)],
     [pulse("AERIUM", -1), pulse("NEURO", 1)],
   ),
+  news(tm(138), "noise", "Newsfeeds replay the zero-point announcement."),
   news(
-    95,
-    "noise",
-    "Mass protests in the capital against zero-point energy safety risks.",
-    [],
-    [pulse("AERIUM", 1)],
+    tm(140),
+    "signal",
+    "The solar storm misses the colony.",
+    [delta("NEURO", 40)],
+    [pulse("NEURO", 1)],
+  ),
+  news(tm(142), "noise", "The zero-point consortium schedules a press conference."),
+  news(
+    tm(145),
+    "signal",
+    "Salvaged Aerium floods the market.",
+    [delta("AERIUM", -40)],
+    [pulse("AERIUM", -1)],
   ),
   news(
-    100,
+    tm(147),
     "noise",
-    "Strategic Reserves Critical. In exactly 5 minutes, the single player holding the highest inventory of Aerium will receive a massive $10,000 Government Grant.",
+    "Strategic Reserves Critical. In exactly 10 minutes, the highest Aerium inventory wins a $10,000 Government Grant. Tied leaders split the prize equally.",
     [],
     [pulse("AERIUM", 1)],
+    false,
   ),
   news(
-    105,
+    tm(148),
+    "signal",
+    "Chip makers report record orders for reactor controls.",
+    [delta("NEURO", 50)],
+    [pulse("NEURO", 1)],
+  ),
+  news(tm(149), "noise", "A journal previews next-generation control systems."),
+  news(
+    tm(150),
+    "signal",
+    "A buyer takes delivery of 10,000 tons of Aerium.",
+    [delta("AERIUM", 35)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(tm(154), "noise", "The CEO of Orbital Station tweets a rocket emoji."),
+  news(
+    tm(155),
+    "signal",
+    "A component shortage is reported at a chip supplier.",
+    [delta("NEURO", 45)],
+    [pulse("NEURO", 1)],
+  ),
+  news(
+    tm(157),
     "noise",
     "Government Grant awarded. The Aerium inventory race is over.",
     [],
@@ -222,21 +622,52 @@ export const EDEN_EVENT_NEWS: readonly EdenNews[] = [
     false,
   ),
   news(
-    110,
-    "noise",
-    "CEO of Orbital Station tweets a rocket emoji.",
-    [],
-    [pulse("ORBITAL", 1)],
+    tm(158),
+    "signal",
+    "The government cancels its Aerium reserve programme.",
+    [delta("AERIUM", -60)],
+    [pulse("AERIUM", -1)],
   ),
   news(
-    115,
+    tm(160),
     "signal",
-    "Solar flare scrambles Neuro-Chip logic gates globally!",
+    "A chip customer switches to a rival supplier.",
+    [delta("NEURO", -40)],
+    [pulse("NEURO", -1)],
+  ),
+  news(tm(162), "noise", "A takeover rumour circulates around Orbital Station."),
+  news(
+    tm(164),
+    "signal",
+    "A solar flare scrambles chip logic gates globally.",
     [delta("NEURO", -150)],
     [pulse("NEURO", -1)],
   ),
   news(
-    120,
+    tm(165),
+    "signal",
+    "An Aerium recycling plant closes.",
+    [delta("AERIUM", 30)],
+    [pulse("AERIUM", 1)],
+  ),
+  news(
+    tm(168),
+    "noise",
+    "Leaderboard 3 published (ranks only).",
+    [],
+    [],
+    false,
+  ),
+  news(tm(169), "noise", "The exchange confirms closing procedures for TM 180."),
+  news(
+    tm(170),
+    "signal",
+    "Chip prices rise at distributors.",
+    [delta("NEURO", 35)],
+    [pulse("NEURO", 1)],
+  ),
+  news(
+    tm(172),
     "noise",
     "The Final Squeeze: bot volatility parameters are tripled.",
     [],
@@ -244,11 +675,26 @@ export const EDEN_EVENT_NEWS: readonly EdenNews[] = [
     false,
   ),
   news(
-    125,
+    tm(175),
     "signal",
-    "Massive cyberattack disables 40% of remaining Aerium grid.",
+    "A salvage yard releases reclaimed Aerium.",
+    [delta("AERIUM", -25)],
+    [pulse("AERIUM", -1)],
+  ),
+  news(
+    tm(177),
+    "signal",
+    "A cyberattack disables 40% of the Aerium grid.",
     [delta("AERIUM", 120)],
     [pulse("AERIUM", 1)],
+  ),
+  news(tm(178), "noise", "Wire service reports unusual option activity."),
+  news(
+    tm(179),
+    "signal",
+    "A chip plant reports a power outage.",
+    [delta("NEURO", 30)],
+    [pulse("NEURO", 1)],
   ),
 ];
 
@@ -262,7 +708,7 @@ export type EdenOtcLeg = Readonly<{
   asset: EdenOtcAsset;
   /** Signed from the player's perspective: positive receives, negative delivers. */
   quantity: number;
-  basis: "fair_value" | "nav" | "intrinsic" | "zero";
+  basis: "fair_value" | "nav" | "intrinsic" | "zero" | "fixed";
   multiplier: number;
 }>;
 export type EdenOtcOffer = Readonly<{
@@ -276,57 +722,52 @@ export type EdenOtcOffer = Readonly<{
   playerChoosesQuantity: boolean;
 }>;
 
-function otc(minute: number): EdenOtcOffer {
-  const leg = (
-    asset: EdenOtcAsset,
-    quantity: number,
-    basis: EdenOtcLeg["basis"],
-    multiplier: number,
-  ): EdenOtcLeg => ({ asset, quantity, basis, multiplier });
-  const exact: Record<number, { title: string; legs: EdenOtcLeg[] }> = {
-    12.5: {
-      title: 'The "Too Good to be True" Block',
-      legs: [leg("AERIUM", 50, "fair_value", 0.95)],
-    },
-    32.5: {
-      title: "The Paired Correlation Trade",
-      legs: [leg("AERIUM", -20, "zero", 0), leg("NEURO", 20, "zero", 0)],
-    },
-    52.5: {
-      title: "The ETF Arbitrage Setup",
-      legs: [leg("ORBITAL", 10, "nav", 1.02)],
-    },
-    72.5: {
-      title: "The Volatility Dump",
-      legs: [leg("AERIUM_ATM_CALL", -15, "intrinsic", 1.2)],
-    },
-    92.5: {
-      title: 'The "Dis-Correlation Nuke" Aftermath',
-      legs: [leg("AERIUM", 30, "fair_value", 1.2)],
-    },
-    112.5: {
-      title: "The Desperation Bailout",
-      legs: [leg("PLAYER_CHOICE", -50, "fair_value", 0.9)],
-    },
-  };
-  const offer = exact[minute];
+function otc(
+  playbookMinute: number,
+  deskNumber: number,
+  legs: EdenOtcLeg[],
+  playerChoosesQuantity = false,
+): EdenOtcOffer {
+  const minute = tm(playbookMinute);
   return {
     id: `${EDEN_EVENT_VERSION}/otc/${minute}`,
     minute,
-    title: offer?.title ?? "Deal Desk: Aerium liquidity block",
-    // Sized well below starting cash: at minute 2.5 every trader still holds
-    // exactly that, and a cash-exhausting fill is an instant margin call.
-    legs: offer?.legs ?? [leg("AERIUM", 5, "fair_value", 1)],
-    original: !!offer,
+    title: `Deal Desk #${deskNumber}`,
+    legs,
+    original: true,
     tradingRequired: true,
-    playerChoosesQuantity: minute === 112.5,
+    playerChoosesQuantity,
   };
 }
 
-export const EDEN_EVENT_OTC: readonly EdenOtcOffer[] = Array.from(
-  { length: 13 },
-  (_, i) => otc(2.5 + i * 10),
-);
+const leg = (
+  asset: EdenOtcAsset,
+  quantity: number,
+  basis: EdenOtcLeg["basis"],
+  multiplier: number,
+): EdenOtcLeg => ({ asset, quantity, basis, multiplier });
+
+export const EDEN_EVENT_OTC: readonly EdenOtcOffer[] = [
+  otc(5, 1, [leg("AERIUM", 30, "fair_value", 0.97)]),
+  otc(20, 2, [leg("AERIUM", 50, "fair_value", 0.95)]),
+  otc(35, 3, [leg("AERIUM", -25, "fair_value", 1.03)]),
+  otc(50, 4, [
+    leg("AERIUM", -20, "fair_value", 1),
+    leg("NEURO", 40, "fair_value", 1),
+  ]),
+  otc(65, 5, [leg("ORBITAL", 10, "nav", 1.02)]),
+  otc(78, 6, [leg("AERIUM", -40, "fair_value", 0.96)]),
+  otc(92, 7, [leg("AERIUM_ATM_CALL", -15, "fixed", 45)]),
+  otc(107, 8, [leg("NEURO", 25, "fair_value", 0.98)]),
+  otc(117, 9, [
+    leg("AERIUM", 20, "fair_value", 1),
+    leg("NEURO", -36, "fair_value", 1),
+  ]),
+  otc(127, 10, [leg("NEURO", -40, "fair_value", 1.01)]),
+  otc(139, 11, [leg("AERIUM", 30, "fair_value", 1.2)]),
+  otc(152, 12, [leg("PLAYER_CHOICE", -50, "fair_value", 0.9)], true),
+  otc(167, 13, [leg("ORBITAL", 8, "nav", 0.95)]),
+];
 
 export type EdenEventPayload =
   | { kind: "market_open" }
@@ -383,12 +824,12 @@ function buildSchedule(): readonly EdenEventAction[] {
   };
   add("open", 0, { kind: "market_open" });
   EDEN_EVENT_BONDS.forEach((bond, i) =>
-    add(`bond/${bond.id}`, (i === 0 ? 10 : 18) * 60, {
+    add(`bond/${bond.id}`, EDEN_EVENT_BOND_MINUTES[i]! * 60, {
       kind: "bond_available",
       bond,
     }),
   );
-  add("list/neuro", 30 * 60, {
+  add("list/neuro", EDEN_EVENT_NEURO_LIST_MINUTE * 60, {
     kind: "list_underlying",
     config: EDEN_EVENT_NEURO,
   });
@@ -406,19 +847,21 @@ function buildSchedule(): readonly EdenEventAction[] {
     config: { ...EDEN_EVENT_OPTIONS, enabled: true },
   });
 
-  for (const minute of EDEN_EVENT_AUCTION_MINUTES) {
+  for (const [index, minute] of EDEN_EVENT_AUCTION_MINUTES.entries()) {
+    const next = EDEN_EVENT_AUCTION_MINUTES[index + 1];
+    const closesAtSecond = minute * 60 + EDEN_EVENT_AUCTION_DURATION_SEC;
     const round = {
       roundId: `${EDEN_EVENT_VERSION}/auction/${minute}`,
       roundMinute: minute,
-      closesAtSecond: minute * 60 - EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC,
+      closesAtSecond,
       premiumUntilSecond:
-        (minute + EDEN_EVENT_PREMIUM_ACCESS_MINUTES) * 60 -
-        EDEN_EVENT_AUCTION_CLOSE_LEAD_SEC,
+        next != null ? next * 60 : EDEN_EVENT_DURATION_MINUTES * 60,
     };
-    add(`auction/${minute}/open`, minute * 60 - EDEN_EVENT_AUCTION_OPEN_LEAD_SEC, {
-      kind: "auction_open",
-      ...round,
-    });
+    add(
+      `auction/${minute}/open`,
+      minute * 60 - EDEN_EVENT_AUCTION_OPEN_LEAD_SEC,
+      { kind: "auction_open", ...round },
+    );
     add(`auction/${minute}/resolve`, round.closesAtSecond, {
       kind: "auction_resolve",
       ...round,
@@ -428,40 +871,59 @@ function buildSchedule(): readonly EdenEventAction[] {
   const vote = {
     voteId: `${EDEN_EVENT_VERSION}/vote/solidarity`,
     title: "The Solidarity Tax",
-    closesAtSecond: 81 * 60,
+    closesAtSecond:
+      EDEN_EVENT_VOTE_MINUTE * 60 + EDEN_EVENT_DEFAULTS.voteDurationSec,
     ranking: "cash" as const,
     taxRate: EDEN_EVENT_DEFAULTS.taxRate,
     topFraction: EDEN_EVENT_DEFAULTS.taxTopFraction,
     bottomFraction: EDEN_EVENT_DEFAULTS.taxBottomFraction,
   };
-  add("vote/open", 80 * 60, { kind: "vote_open", ...vote });
+  add("vote/open", EDEN_EVENT_VOTE_MINUTE * 60, { kind: "vote_open", ...vote });
   add("vote/resolve", vote.closesAtSecond, { kind: "vote_resolve", ...vote });
   const grant = {
     grantId: `${EDEN_EVENT_VERSION}/grant/aerium`,
     symbol: "AERIUM",
     prize: 10000,
-    awardsAtSecond: 105 * 60,
+    awardsAtSecond: EDEN_EVENT_GRANT_AWARD_MINUTE * 60,
   };
-  add("grant/open", 100 * 60, { kind: "grant_open", ...grant });
+  add("grant/open", EDEN_EVENT_GRANT_OPEN_MINUTE * 60, {
+    kind: "grant_open",
+    ...grant,
+  });
   add("grant/award", grant.awardsAtSecond, { kind: "grant_award", ...grant });
-  const vega = { newsId: `${EDEN_EVENT_VERSION}/news/90`, symbol: "AERIUM" };
-  add("vega/prepare", 89 * 60, { kind: "vega_prepare", ...vega });
-  add("volatility/triple", 120 * 60, { kind: "bot_volatility", multiplier: 3 });
+  const vega = {
+    newsId: `${EDEN_EVENT_VERSION}/news/${EDEN_EVENT_SHOCK_MINUTE}`,
+    symbol: "AERIUM",
+  };
+  add("vega/prepare", (EDEN_EVENT_SHOCK_MINUTE - 1) * 60, {
+    kind: "vega_prepare",
+    ...vega,
+  });
+  add("volatility/triple", EDEN_EVENT_SQUEEZE_MINUTE * 60, {
+    kind: "bot_volatility",
+    multiplier: 3,
+  });
 
   for (const item of EDEN_EVENT_NEWS) {
-    add(`news/${item.minute}/premium`, item.minute * 60 - EDEN_EVENT_PREMIUM_LEAD_SEC, {
-      kind: "news",
-      audience: "premium",
-      news: item,
-    });
+    add(
+      `news/${item.minute}/premium`,
+      item.minute * 60 - EDEN_EVENT_PREMIUM_LEAD_SEC,
+      {
+        kind: "news",
+        audience: "premium",
+        news: item,
+      },
+    );
     add(`news/${item.minute}/public`, item.minute * 60, {
       kind: "news",
       audience: "public",
       news: item,
     });
   }
-  // At 90: apply the public FV shock before the Vega inventory dump.
-  add("vega/resolve", 90 * 60, { kind: "vega_resolve", ...vega });
+  add("vega/resolve", EDEN_EVENT_SHOCK_MINUTE * 60, {
+    kind: "vega_resolve",
+    ...vega,
+  });
   for (const offer of EDEN_EVENT_OTC) {
     add(`otc/${offer.minute}`, offer.minute * 60, {
       kind: "otc_offer",
@@ -469,7 +931,6 @@ function buildSchedule(): readonly EdenEventAction[] {
       expiresAtSecond: offer.minute * 60 + EDEN_EVENT_DEFAULTS.otcReplySec,
     });
   }
-  // Anchored to the ETF's 45-minute introduction, not process startup.
   for (const minute of EDEN_EVENT_ETF_WINDOW_MINUTES) {
     const closesAtSecond = minute * 60 + EDEN_EVENT_ETF_WINDOW_SEC;
     add(`etf/${minute}/open`, minute * 60, {
@@ -486,7 +947,6 @@ function buildSchedule(): readonly EdenEventAction[] {
     });
   }
   add("end", EDEN_EVENT_DURATION_MINUTES * 60, { kind: "end" });
-  // Stable sort preserves deliberate same-time ordering (auction resolve before premium).
   return actions.sort((a, b) => a.atSecond - b.atSecond);
 }
 
@@ -506,9 +966,8 @@ export function dueEdenEventActions(
 
 /**
  * A host-fired beat of the playbook (`config.eden.playbookCues`). Firing runs
- * its actions with their scripted offsets from the first one. ETF windows and
- * the halftime OTC slot have no cue; listing starts the first window and
- * later windows cycle every 10 game minutes.
+ * its actions with their scripted offsets from the first one. ETF windows have
+ * no cue; listing starts the first window and later windows cycle.
  */
 export type EdenEventCue = Readonly<{
   /** Stable key stored in fire receipts; never rename for an event in flight. */
@@ -523,8 +982,15 @@ export type EdenEventCue = Readonly<{
 }>;
 
 /** Receipt recording when a cue fired; its actions keep their own receipts. */
-export const edenCueReceiptId = (cueId: string): string =>
-  `${EDEN_EVENT_VERSION}/cue/${cueId}`;
+export const edenCueReceiptId = (
+  cueId: string,
+  version = EDEN_EVENT_VERSION,
+): string => `${version}/cue/${cueId}`;
+
+/** `eden-v1` or `eden-demo-v1`, taken from the cue's first action id. */
+export function edenCueVersion(cue: EdenEventCue): string {
+  return cue.actions[0]?.id.split("/")[0] ?? EDEN_EVENT_VERSION;
+}
 
 const CUE_LISTING_FOR: Readonly<Record<string, string>> = {
   AERIUM: "open",
@@ -571,7 +1037,6 @@ function buildCues(): readonly EdenEventCue[] {
       kind,
       actions,
       requires: [...needs],
-      // An auction resolves before its minute's headline, as in the script.
       order: kind === "auction" ? minute - 0.5 : minute,
     });
   };
@@ -591,7 +1056,13 @@ function buildCues(): readonly EdenEventCue[] {
       [action.id.slice(EDEN_EVENT_VERSION.length + 1)],
     );
   }
-  add("list-neuro", "List NEURO", 30, "scene", ["list/neuro", ...newsIds(30)]);
+  add(
+    "list-neuro",
+    "List NEURO",
+    EDEN_EVENT_NEURO_LIST_MINUTE,
+    "scene",
+    ["list/neuro", ...newsIds(EDEN_EVENT_NEURO_LIST_MINUTE)],
+  );
   add("list-orbital", "List ORBITAL ETF", EDEN_EVENT_ETF_LIST_MINUTE, "scene", [
     "list/orbital",
     ...newsIds(EDEN_EVENT_ETF_LIST_MINUTE),
@@ -605,36 +1076,49 @@ function buildCues(): readonly EdenEventCue[] {
     "Reopen with options",
     EDEN_EVENT_HALFTIME_END_MINUTE,
     "scene",
-    ["unfreeze", "options/open", ...newsIds(EDEN_EVENT_OPTIONS_OPEN_MINUTE)],
+    [
+      "unfreeze",
+      "options/open",
+      ...newsIds(EDEN_EVENT_OPTIONS_OPEN_MINUTE),
+    ],
     ["open", "halftime"],
   );
-  add("vote", "Solidarity Tax vote", 80, "scene", [
+  add("vote", "Solidarity Tax vote", EDEN_EVENT_VOTE_MINUTE, "scene", [
     "vote/open",
     "vote/resolve",
-    ...newsIds(80),
+    ...newsIds(EDEN_EVENT_VOTE_MINUTE),
   ]);
-  // The vega bots trade the event option series, so options must be open.
   add(
     "shock",
     "Dis-correlation shock",
-    90,
+    EDEN_EVENT_SHOCK_MINUTE,
     "scene",
-    ["vega/prepare", "vega/resolve", ...newsIds(90)],
+    ["vega/prepare", "vega/resolve", ...newsIds(EDEN_EVENT_SHOCK_MINUTE)],
     ["open", "reopen"],
   );
-  add("grant", "Government grant", 100, "scene", [
+  add("grant", "Government grant", EDEN_EVENT_GRANT_OPEN_MINUTE, "scene", [
     "grant/open",
     "grant/award",
-    ...newsIds(100),
-    ...newsIds(105),
+    ...newsIds(EDEN_EVENT_GRANT_OPEN_MINUTE),
+    ...newsIds(EDEN_EVENT_GRANT_AWARD_MINUTE),
   ]);
-  add("squeeze", "Final squeeze", 120, "scene", [
+  add("squeeze", "Final squeeze", EDEN_EVENT_SQUEEZE_MINUTE, "scene", [
     "volatility/triple",
-    ...newsIds(120),
+    ...newsIds(EDEN_EVENT_SQUEEZE_MINUTE),
   ]);
   add("close", "Close event", EDEN_EVENT_DURATION_MINUTES, "market", ["end"], []);
 
-  const inScene = new Set([30, 45, 60, 70, 80, 90, 100, 105, 120]);
+  const inScene = new Set([
+    EDEN_EVENT_NEURO_LIST_MINUTE,
+    EDEN_EVENT_ETF_LIST_MINUTE,
+    EDEN_EVENT_HALFTIME_START_MINUTE,
+    EDEN_EVENT_OPTIONS_OPEN_MINUTE,
+    EDEN_EVENT_VOTE_MINUTE,
+    EDEN_EVENT_SHOCK_MINUTE,
+    EDEN_EVENT_GRANT_OPEN_MINUTE,
+    EDEN_EVENT_GRANT_AWARD_MINUTE,
+    EDEN_EVENT_SQUEEZE_MINUTE,
+  ]);
   for (const item of EDEN_EVENT_NEWS) {
     if (inScene.has(item.minute)) continue;
     add(`news-${item.minute}`, item.headline, item.minute, "news", newsIds(item.minute));
@@ -654,7 +1138,6 @@ function buildCues(): readonly EdenEventCue[] {
       `auction/${minute}/open`,
       `auction/${minute}/resolve`,
     ]);
-  // Stable sort keeps a scene ahead of a standalone beat on the same minute.
   return cues
     .sort((a, b) => a.order - b.order)
     .map(({ order: _order, ...cue }) => cue);
@@ -663,27 +1146,32 @@ function buildCues(): readonly EdenEventCue[] {
 /** Playbook order; "Run next" fires the first cue that has not fired. */
 export const EDEN_EVENT_CUES = /*#__PURE__*/ buildCues();
 
-export function edenEventCue(cueId: string): EdenEventCue | undefined {
-  return EDEN_EVENT_CUES.find((cue) => cue.id === cueId);
+export function edenEventCue(
+  cueId: string,
+  cues: readonly EdenEventCue[] = EDEN_EVENT_CUES,
+): EdenEventCue | undefined {
+  return cues.find((cue) => cue.id === cueId);
 }
 
 /** `receipts` holds event_actions ids: cue fire receipts and action receipts. */
 export function edenCueStatus(
   cue: EdenEventCue,
   receipts: ReadonlySet<string>,
+  cues: readonly EdenEventCue[] = EDEN_EVENT_CUES,
 ): EdenCueStatus {
-  if (receipts.has(edenCueReceiptId(cue.id)))
+  if (receipts.has(edenCueReceiptId(cue.id, edenCueVersion(cue))))
     return cue.actions.every((a) => receipts.has(a.id)) ? "done" : "running";
-  return edenCueBlockers(cue, receipts).length > 0 ? "blocked" : "ready";
+  return edenCueBlockers(cue, receipts, cues).length > 0 ? "blocked" : "ready";
 }
 
 /** Required cue ids that are not done yet. */
 export function edenCueBlockers(
   cue: EdenEventCue,
   receipts: ReadonlySet<string>,
+  cues: readonly EdenEventCue[] = EDEN_EVENT_CUES,
 ): string[] {
   return cue.requires.filter((id) => {
-    const required = edenEventCue(id);
-    return !required || edenCueStatus(required, receipts) !== "done";
+    const required = edenEventCue(id, cues);
+    return !required || edenCueStatus(required, receipts, cues) !== "done";
   });
 }

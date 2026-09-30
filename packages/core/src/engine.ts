@@ -97,6 +97,18 @@ export interface EngineState {
   reservations?: Array<{ id: string; userId: string; legs: SettlementLeg[] }>;
 }
 
+/** Option series are the only wall-clock times inside an engine checkpoint. */
+export function shiftEngineState(state: EngineState, shiftMs: number): EngineState {
+  return {
+    ...state,
+    options: state.options.map((o) => ({
+      ...o,
+      openedAt: o.openedAt + shiftMs,
+      expiresAt: o.expiresAt + shiftMs,
+    })),
+  };
+}
+
 export interface SettlementLeg {
   symbol: string;
   quantity: number;
@@ -886,7 +898,11 @@ export class ChallengeEngine {
   }
 
   /** Validate legs against working orders and reservations; release this deal first. */
-  canSettleOffBook(userId: string, legs: SettlementLeg[]): boolean {
+  canSettleOffBook(
+    userId: string,
+    legs: SettlementLeg[],
+    opts?: { ignoreWorkingOrders?: boolean },
+  ): boolean {
     const changes = new Map<string, number>();
     for (const leg of legs) {
       if (
@@ -901,17 +917,21 @@ export class ChallengeEngine {
     for (const [symbol, delta] of changes) {
       if (delta === 0) continue;
       const side = delta > 0 ? "buy" : "sell";
-      if (
-        Math.abs(delta) + this.openOrderQuantity(userId, symbol, side) >
-        this.capacity(userId, symbol, side)
-      )
+      const working = opts?.ignoreWorkingOrders
+        ? 0
+        : this.openOrderQuantity(userId, symbol, side);
+      if (Math.abs(delta) + working > this.capacity(userId, symbol, side))
         return false;
     }
     return true;
   }
 
-  settleOffBook(userId: string, legs: SettlementLeg[]): boolean {
-    if (!this.canSettleOffBook(userId, legs)) return false;
+  settleOffBook(
+    userId: string,
+    legs: SettlementLeg[],
+    opts?: { ignoreWorkingOrders?: boolean },
+  ): boolean {
+    if (!this.canSettleOffBook(userId, legs, opts)) return false;
     for (const leg of legs)
       this.settleFill(userId, leg.symbol, leg.quantity, leg.price);
     return true;
@@ -964,7 +984,10 @@ export class ChallengeEngine {
       return false;
     legs.push({ symbol, quantity: direction * quantity, price: nav });
     const cash = this.cashOf(userId);
-    if (!this.settleOffBook(userId, legs)) return false;
+    // Physical conversion is not a new risk bid: only settled inventory and
+    // reserved deals count. Working bids on the basket must not block redeem.
+    if (!this.settleOffBook(userId, legs, { ignoreWorkingOrders: true }))
+      return false;
     this.ensureAccount(userId).cash = cash;
     return true;
   }

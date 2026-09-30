@@ -65,6 +65,21 @@ export interface StreamMessage<T> {
   data: T;
 }
 
+/** Newest command id; a consumer resuming there skips everything queued so far. */
+export async function commandStreamTip(
+  redis: Redis,
+  challengeId: string,
+): Promise<string> {
+  const [last] = (await redis.xrevrange(
+    redisKeys.commandStream(challengeId),
+    "+",
+    "-",
+    "COUNT",
+    1,
+  )) as [string, string[]][];
+  return last?.[0] ?? "0-0";
+}
+
 /** Read pending commands as a blocking consumer (single engine owner). */
 export async function readCommands(
   redis: Redis,

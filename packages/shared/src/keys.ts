@@ -24,6 +24,9 @@ export const redisKeys = {
   /** Sorted set of recent mid-price points (score = ts). */
   priceHistoryMid: (challengeId: string, symbol: string) =>
     `qtp:phist-mid:${challengeId}:${symbol}`,
+  /** Mid-price history bucketed at {@link PRICE_HISTORY_ROOM_SEC} (room / admin charts). */
+  priceHistoryMidRoom: (challengeId: string, symbol: string) =>
+    `qtp:phist-mid-5m:${challengeId}:${symbol}`,
   /** Latest order book snapshot JSON per symbol. */
   bookSnapshot: (challengeId: string, symbol: string) =>
     `qtp:book:${challengeId}:${symbol}`,
@@ -67,7 +70,13 @@ export const redisKeys = {
   etfWindowClock: (challengeId: string) => `qtp:etfclk:${challengeId}`,
   /** Latest option contracts JSON for a challenge (host + trader UI). */
   optionContracts: (challengeId: string) => `qtp:opts:${challengeId}`,
+  /** Set by a checkpoint resume; the next runner tells clients to reload. */
+  restored: (challengeId: string) => `qtp:restored:${challengeId}`,
 } as const;
 
 export const PRICE_HISTORY_MAX = 1000;
+/** Wall-clock bucket width for admin / room-display price charts. */
+export const PRICE_HISTORY_ROOM_SEC = 300;
+/** ~48 h of 5-minute mid samples (covers a full New Eden run). */
+export const PRICE_HISTORY_ROOM_MAX = 576;
 export const NEWS_FEED_MAX = 50;
